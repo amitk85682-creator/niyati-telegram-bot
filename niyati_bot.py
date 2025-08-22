@@ -33,7 +33,7 @@ CHARACTER_PROMPT = """
 
 # --- API Keys & Flask Server (No changes needed here) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+GPT_API_KEY = os.environ.get("GPT_API_KEY")
 
 flask_app = Flask('')
 
@@ -48,9 +48,9 @@ def run_flask():
 # --- Telegram Bot Logic ---
 def setup_bot():
     print("Niyati Bot is starting with her new personality...")
-    genai.configure(api_key=GOOGLE_API_KEY)
+    genai.configure(api_key=GPT_API_KEY)
     model = genai.GenerativeModel(
-        model_name='gemini-1.5-flash',
+        model_name='Chat Gpt',
         system_instruction=CHARACTER_PROMPT
     )
     chat = model.start_chat(history=[])
@@ -63,7 +63,7 @@ def setup_bot():
         user_message = update.message.text
         print(f"User: {user_message}")
         try:
-            # Send message to Gemini and wait for the response
+            # Send message to GPT and wait for the response
             response = await chat.send_message_async(user_message)
             
             ai_response = response.text
