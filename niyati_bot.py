@@ -1,7 +1,7 @@
 import os
 import threading
 from flask import Flask
-from openai import OpenAI
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -33,19 +33,25 @@ CHARACTER_PROMPT = """
 
 # --- API Keys & Flask Server ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-# अब हम OpenAI की Key इस्तेमाल करेंगे
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 flask_app = Flask('')
+
 @flask_app.route('/')
 def home():
     return "Niyati Bot is alive and moody! 😉"
+
 def run_flask():
     port = int(os.environ.get('PORT', 8080))
     flask_app.run(host='0.0.0.0', port=port)
 
-# --- OpenAI Client ---
-client = OpenAI(api_key=OPENAI_API_KEY)
+# --- ग्लोबल वेरिएबल्स, ताकि फंक्शन्स उन्हें इस्तेमाल कर सकें ---
+genai.configure(api_key=GOOGLE_API_KEY)
+model = genai.GenerativeModel(
+    model_name='gemini-1.5-flash',
+    system_instruction=CHARACTER_PROMPT
+)
+chat = model.start_chat(history=[])
 
 # --- Telegram Bot के Functions ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -58,16 +64,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     print(f"User: {user_message}")
     try:
-        # GPT से जवाब पाएं
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo", # आप gpt-4o का भी इस्तेमाल कर सकते हैं
-            messages=[
-                {"role": "system", "content": CHARACTER_PROMPT},
-                {"role": "user", "content": user_message}
-            ]
-        )
-        ai_response = response.choices[0].message.content
-        print(f"Niyati (GPT): {ai_response}")
+        response = await chat.send_message_async(user_message)
+        ai_response = response.text
+        print(f"Niyati: {ai_response}")
         await update.message.reply_text(ai_response)
     except Exception as e:
         print(f"An error occurred: {e}")
@@ -75,9 +74,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Bot को चलाने का मेन फंक्शन ---
 def main():
-    print("Niyati Bot is starting with GPT personality...")
+    print("Niyati Bot is starting with her new personality...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # Handlers जोड़ें
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
@@ -88,4 +88,5 @@ def main():
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
-    main()
+    
+    main() # main फंक्शन को कॉल करें
