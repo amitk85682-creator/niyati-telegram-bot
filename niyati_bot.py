@@ -60,24 +60,20 @@ def setup_bot():
         await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
 
     async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # --- यह नई जांच है ---
+    # --- यह नई जांच है, सही इंडेंटेशन के साथ ---
     if not update.message or not update.message.text:
-        return  # अगर मैसेज में टेक्स्ट नहीं है, तो कुछ मत करो
-    # --- जांच समाप्त ---
+        return
 
     user_message = update.message.text
-    print(f"Received message: {user_message}")
-    # ... बाकी का कोड वैसा ही रहेगा ...
-        try:
-            # Send message to Gemini and wait for the response
-            response = await chat.send_message_async(user_message)
-            
-            ai_response = response.text
-            print(f"Niyati: {ai_response}")
-            await update.message.reply_text(ai_response)
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            await update.message.reply_text("Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.")
+    print(f"User: {user_message}")
+    try:
+        response = await chat.send_message_async(user_message)
+        ai_response = response.text
+        print(f"Niyati: {ai_response}")
+        await update.message.reply_text(ai_response)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        await update.message.reply_text("Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.")
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
