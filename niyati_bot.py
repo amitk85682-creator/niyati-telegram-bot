@@ -73,7 +73,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.")
 
 # --- Bot को चलाने का मेन फंक्शन ---
-def main():
+async def main():
     print("Niyati Bot is starting with her new personality...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
@@ -82,11 +82,16 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("Niyati Bot is running and waiting for your messages...")
-    app.run_polling()
+    
+    # बॉट को शुरू करने का सही तरीका
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
 
 # Flask और Bot को एक साथ चलाएं
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
     
-    main() # main फंक्शन को कॉल करें
+    import asyncio
+    asyncio.run(main())
