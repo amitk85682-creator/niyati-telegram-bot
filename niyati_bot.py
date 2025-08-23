@@ -60,8 +60,14 @@ def setup_bot():
         await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
 
     async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_message = update.message.text
-        print(f"User: {user_message}")
+    # --- यह नई जांच है ---
+    if not update.message or not update.message.text:
+        return  # अगर मैसेज में टेक्स्ट नहीं है, तो कुछ मत करो
+    # --- जांच समाप्त ---
+
+    user_message = update.message.text
+    print(f"Received message: {user_message}")
+    # ... बाकी का कोड वैसा ही रहेगा ...
         try:
             # Send message to Gemini and wait for the response
             response = await chat.send_message_async(user_message)
