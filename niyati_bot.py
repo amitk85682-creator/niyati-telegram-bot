@@ -3,7 +3,8 @@ import threading
 from flask import Flask
 import google.generativeai as genai
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationBuilder
+import asyncio
 
 # --- NAYI PERSONALITY PROMPT YAHAN HAI ---
 CHARACTER_PROMPT = """
@@ -37,14 +38,6 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 flask_app = Flask('')
 
-@flask_app.route('/')
-def home():
-    return "Niyati Bot is alive and moody! 😉"
-
-def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    flask_app.run(host='0.0.0.0', port=port)
-
 # --- ग्लोबल वेरिएबल्स, ताकि फंक्शन्स उन्हें इस्तेमाल कर सकें ---
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel(
@@ -72,26 +65,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"An error occurred: {e}")
         await update.message.reply_text("Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.")
 
-# --- Bot को चलाने का मेन फंक्शन ---
-async def main():
-    print("Niyati Bot is starting with her new personality...")
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Handlers जोड़ें
+# --- नीचे का पूरा हिस्सा बदल दिया गया है ---
+
+# Keep-alive + polling loop in one coroutine
+async def run_bot():
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .build()
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("Niyati Bot is running and waiting for your messages...")
-    
-    # बॉट को शुरू करने का सही तरीका
+
+    # बॉट को शुरू करें
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
+    print("Niyati is polling…")
 
-# Flask और Bot को एक साथ चलाएं
+    # सर्वर को जगाए रखें
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+# Flask को अलग थ्रेड में चलाएं
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port)
+
+# कोड को शुरू करें
 if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.start()
-    
-    import asyncio
-    asyncio.run(main())
+    threading.Thread(target=run_flask, daemon=True).start()
+    asyncio.run(run_bot())
