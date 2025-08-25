@@ -52,11 +52,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # --- यह नया लॉजिक है ---
+    bot_username = context.bot.username
+    is_reply_to_me = update.message.reply_to_message and update.message.reply_to_message.from_user.username == bot_username
+    is_mention = update.message.text and bot_username in update.message.text
+
+    if not is_reply_to_me and not is_mention:
+        return # अगर बॉट को मेन्शन नहीं किया गया या उसे रिप्लाई नहीं किया गया, तो कुछ मत करो
+    # --- लॉजिक समाप्त ---
+    
     if not update.message or not update.message.text:
         return
 
-    user_message = update.message.text
-    print(f"User: {user_message}")
+    user_message = update.message.text.replace(f"@{bot_username}", "").strip() # मैसेज से बॉट का नाम हटा दें
+    print(f"User to Niyati: {user_message}")
     try:
         response = await chat.send_message_async(user_message)
         ai_response = response.text
