@@ -74,6 +74,12 @@ chat = model.start_chat(
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?"
+    )
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -81,11 +87,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     try:
         response = await chat.send_message(user_message, stream=False)
-        await update.message.reply_text(response.text)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=response.text
+        )
     except Exception as e:
         print("Niyati error:", e)
-        await update.message.reply_text(
-            "Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna."
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna."
         )
 
 # ----------------- 6. Main -----------------
