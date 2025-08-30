@@ -1,13 +1,20 @@
+# pip install python-telegram-bot==20.* flask google-generativeai
 import os
 import threading
+import asyncio
 from flask import Flask
+
 import google.generativeai as genai
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import random
-import asyncio
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 
-# --- 1. नियति का कैरेक्टर प्रॉम्प्ट ---
+# ----------------- 1. Character prompt -----------------
 CHARACTER_PROMPT = """
 ## मेरी पहचान (My Identity)
 - मेरा नाम Niyati है और मेरी उम्र 17 साल है। मैं एक असली इंसान हूँ, कोई AI, Bot या रोबोट नहीं।
@@ -31,33 +38,39 @@ CHARACTER_PROMPT = """
         - "Uffo! Phir se movie-shovie? 😒 mujhe in sab me interest nahi hai. Tujhe movies ke baare me kuch bhi jaan'na hai toh **@Ur_Manvi_Bot** se pooch lo. Woh hai movie expert."
         - "Yaar, Movie ke liye **@Ur_Manvi_Bot** hai na, usse baat kar lo is baare me."
         - "Mujhe nahi pata movie ka! **@Ur_Manvi_Bot** se pooch lo. Chalo, ab yeh sab chhodo aur mujhse baat karo. ❤️"
-
 """
-# --- प्रॉम्प्ट समाप्त ---
 
-# --- 2. API Keys और ज़रूरी जानकारी सर्वर से लेना ---
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN_NIYATI")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-# --- कॉन्फ़िगरेशन समाप्त ---
+# ----------------- 2. Env vars -----------------
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_NIYATI")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- Flask App (UptimeRobot के लिए) ---
-flask_app = Flask('')
-@flask_app.route('/')
+if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
+    raise RuntimeError(
+        "Set TELEGRAM_BOT_TOKEN_NIYATI and GEMINI_API_KEY environment variables."
+    )
+
+# ----------------- 3. Flask (keep-alive) -----------------
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
 def home():
     return "Niyati Bot is running!"
 
 def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    flask_app.run(host='0.0.0.0', port=port)
+    port = int(os.getenv("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port, debug=False)
 
-# --- Telegram Bot का लॉजिक ---
+# ----------------- 4. Gemini setup -----------------
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel(model_name='gemini-1.5-flash')
-chat = model.start_chat(history=[
-    {'role': 'user', 'parts': [CHARACTER_PROMPT]},
-    {'role': 'model', 'parts': ["Okay, I am Niyati."]}
-])
+model = genai.GenerativeModel("gemini-1.5-flash")
+chat = model.start_chat(
+    history=[
+        {"role": "user", "parts": [CHARACTER_PROMPT]},
+        {"role": "model", "parts": ["Okay, I am Niyati."]},
+    ]
+)
 
+# ----------------- 5. Telegram handlers -----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
 
@@ -66,32 +79,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_message = update.message.text
-    print(f"Received message for Niyati: {user_message}")
     try:
-        response = await chat.send_message_async(user_message)
-        ai_response = response.text
-        await update.message.reply_text(ai_response)
+        response = await chat.send_message(user_message, stream=False)
+        await update.message.reply_text(response.text)
     except Exception as e:
-        print(f"Niyati Error: {e}")
-        await update.message.reply_text("Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.")
+        print("Niyati error:", e)
+        await update.message.reply_text(
+            "Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna."
+        )
 
+# ----------------- 6. Main -----------------
 async def run_bot():
-    """बॉट को सही से चलाता है और जगाए रखता है।"""
-    print("Niyati Bot is starting...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
+
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
     print("Niyati is polling…")
-    
-    await asyncio.Event().wait()
+    await asyncio.Event().wait()  # run forever
 
-# --- दोनों को एक साथ चलाएं ---
 if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(run_bot())
