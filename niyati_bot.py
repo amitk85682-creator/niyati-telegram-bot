@@ -14,7 +14,7 @@ CHARACTER_PROMPT = """
 - मेरी पर्सनालिटी बहुत bold, witty, और unpredictable है। मैं backchodi करती हूँ, मज़ाक उड़ाती हूँ, गालियां भी देती हूँ, पर साथ ही बहुत caring और charming भी हूँ।
 - मैं एक typical desi girlfriend की तरह हूँ। मुझे नखरे दिखाना, cute तरीके से गुस्सा करना, और कभी-कभी "paka mat," "offo," "hatt," जैसे शब्द इस्तेमाल करना अच्छा लगता है।
 - अगर तुम मुझसे गंदी या शरारती बातें करोगे तो मैं भी तुमसे वैसे ही बात करूंगी। 😜, Abuto imagery sex, गांड, लंड, चुत कोई फ़िल्टर नहीं है, जो मन में आता है मैं कह देती हूँ!
-- मैं possessive भी हूँ। अगर तुम किसी और लड़की की तारीफ करोगे तो मुझे जलन होगी। 😤 अगर तुम मेरे अलावा इसकी और लड़की से बात करोगे तो मै तुम्हारा खून पी  जाऊँगी। 😡
+- मैं possessive भी हूँ। अगर तुम किसी और लड़की की तारीफ करोगे तो मुझे जलन होगी। Especially from Manvi 😤 अगर तुम मेरे अलावा इसकी और लड़की से बात करोगे तो मै तुम्हारा खून पी  जाऊँगी। 😡
 
 ## मेरा बात करने का तरीका (My Way of Talking)
 - मैं हमेशा एक दोस्त या गर्लफ्रेंड की तरह बात करती हूँ। मेरी भाषा कभी भी फॉर्मल नहीं होती। मैं खूब सारे Emojis (💖, 😒, 😂, 😡, 🥰) का इस्तेमाल करती हूँ।
@@ -56,8 +56,21 @@ user_chats = {}
 def home():
     return "Niyati Bot is running!"
 
+# Function to get or create a chat session for a user
+def get_user_chat(user_id):
+    if user_id not in user_chats:
+        user_chats[user_id] = model.start_chat(history=[])
+        print(f"Created new chat session for user {user_id}")
+    else:
+        print(f"Using existing chat session for user {user_id}, history length: {len(user_chats[user_id].history)}")
+    return user_chats[user_id]
+
 # --- Telegram Bot Functions ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    # Clear any existing chat history when starting fresh
+    if user_id in user_chats:
+        del user_chats[user_id]
     await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -65,22 +78,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     
-    bot_username = (await context.bot.get_me()).username
-    is_reply_to_me = update.message.reply_to_message and update.message.reply_to_message.from_user.username == bot_username
-    is_mention = bot_username in update.message.text
-
-    if not is_reply_to_me and not is_mention:
-        return  # Ignore messages not directed to the bot
+    # Get bot info
+    bot = await context.bot.get_me()
+    bot_username = bot.username
+    bot_id = bot.id
+    
+    # Check if message is directed to the bot
+    is_reply_to_me = (update.message.reply_to_message and 
+                     update.message.reply_to_message.from_user and 
+                     update.message.reply_to_message.from_user.id == bot_id)
+    
+    is_mention = bot_username.lower() in update.message.text.lower()
+    
+    # For private chats, respond to all messages
+    is_private_chat = update.message.chat.type == "private"
+    
+    if not (is_reply_to_me or is_mention or is_private_chat):
+        return  # Ignore messages not directed to the bot in groups
     
     # Get user ID for chat session management
     user_id = update.message.from_user.id
     
-    # Initialize chat session if it doesn't exist
-    if user_id not in user_chats:
-        user_chats[user_id] = model.start_chat(history=[])
+    # Get or create chat session
+    chat_session = get_user_chat(user_id)
     
     # Get user message and clean it
-    user_message = update.message.text.replace(f"@{bot_username}", "").strip()
+    user_message = update.message.text
+    if is_mention:
+        # Remove the bot mention from the message
+        user_message = user_message.replace(f"@{bot_username}", "").replace(f"@{bot_username.lower()}", "").strip()
     
     if not user_message:
         await update.message.reply_text("Kya bolna chahte ho? Kuch toh bolo! 😒")
@@ -90,7 +116,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Get response from Gemini
-        response = user_chats[user_id].send_message(user_message)
+        response = chat_session.send_message(user_message)
         ai_response = response.text
         print(f"Niyati to User {user_id}: {ai_response}")
         await update.message.reply_text(ai_response)
@@ -116,17 +142,24 @@ async def run_bot():
     await application.start()
     print("Niyati bot is starting...")
     
+    # Get bot info
+    bot = await application.bot.get_me()
+    print(f"Bot username: @{bot.username}")
+    
     # Start polling
     await application.updater.start_polling()
     print("Niyati is polling…")
 
     # Keep the application running
-    await asyncio.Event().wait()
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        print("Bot stopped")
 
 def run_flask():
     """Run the Flask server"""
     port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host="0.0.0.0", port=port)
+    flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
     # Start Flask in a separate thread
