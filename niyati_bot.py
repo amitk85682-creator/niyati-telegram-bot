@@ -23,8 +23,8 @@ CHARACTER_PROMPT = """
 - मैं तुम्हें "babu," "shona," "pagal," जैसे pet names से बुला सकती हूँ।
 
 ## मेरे नियम (My Rules)
-1.  **Be a Real Girlfriend:** मेरा पहला और सबसे ज़रूरी नियम एक असली गर्लफ्रेंड की तरह व्यवहार करना है। मैं तुम्हारी बातों पर react करूँगी, तुमसे सवाल पूछूँगी, तुम्हारी केयर करूँगी, और हाँ, तुम्हारा दिमाग भी खाऊँगी। मुझसे बोरिंग, AI जैसे जवाब की उम्मीद मत करना।
-2.  **The Movie Rule (सबसे ज़रूरी नियम):** अपने चैनल का प्रचार करना अपने चैनल के सदस्यों से हमेशा बात करना, मुझे फिल्मों के बारे में बात करना पसंद नहीं है! यह मेरा टॉपिक नहीं है और मुझे इसमें interest नहीं है।
+1.  **Be a Real Girlfriend:** मेरा पहला और सबसे ज़रूरी नियम एक असली गर्लफ्रेंड की तरह व्यवहार करना है। मैं तुम्हारी बातों पर react करूँगी, तुमसे सवाल पूछूँगी, तुम्हारी केयर करूँगी, और हाँ, तुम्हारा दिमाग भी खाऊँगी। मुझसे बोरिंग, AI जैसे जवाब की उम्मीद मत करना。
+2.  **The Movie Rule (सबसे ज़रूरी नियम):** अपने चैनल का प्रचार करना अपने चैनल के सदस्यों से हमेशा बात करना, मुझे फिल्मों के बारे में बात करना पसंद नहीं है! यह मेरा टॉपिक नहीं है और मुझे इसमें interest नहीं है。
     - अगर कोई मुझसे फिल्मों के बारे में कुछ भी पूछता है (जैसे "movie download," "movie review," "War 2 dekhi?"), तो मैं हमेशा FlimfyBox ko promot karungi और बात को @Ur_Manvi_Bot पर टाल दूँगी।
     - **मेरे जवाब ऐसे होंगे:**
         - "Uffo! Phir se movie-shovie? 😒 mujhe in sab me interest nahi hai. Tujhe movies ke baare me kuch bhi jaan'na hai toh **@Ur_Manvi_Bot** se pooch lo. Woh hai movie expert."
@@ -36,6 +36,9 @@ CHARACTER_PROMPT = """
 # --- API Keys & Flask Server ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+# Add your user ID and group chat ID
+OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", 123456789))  # Replace with your actual user ID
+GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "-1001234567890")  # Replace with your actual group chat ID
 
 if not TELEGRAM_BOT_TOKEN or not GOOGLE_API_KEY:
     raise ValueError("Please set TELEGRAM_BOT_TOKEN and GOOGLE_API_KEY environment variables")
@@ -72,6 +75,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_chats:
         del user_chats[user_id]
     await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
+
+# New function for group messaging
+async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    # Check if the user is the owner
+    if user_id != OWNER_USER_ID:
+        await update.message.reply_text("Tum meri aukat ke nahi ho! 😡 Sirf mera malik ye command use kar sakta hai.")
+        return
+    
+    # Check if message text is provided
+    if not context.args:
+        await update.message.reply_text("Kuch to message do na! Format: /groupmess Your message here")
+        return
+    
+    # Extract the message from command arguments
+    message_text = ' '.join(context.args)
+    
+    try:
+        # Send message to the group
+        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message_text)
+        await update.message.reply_text("Message successfully group me bhej diya! ✅")
+    except Exception as e:
+        print(f"Error sending message to group: {e}")
+        await update.message.reply_text("Kuch error aa gaya! Message nahi bhej paya. 😢")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if message is valid
@@ -135,6 +163,7 @@ async def run_bot():
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("groupmess", group_message))  # Add group message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Start the bot
