@@ -24,8 +24,8 @@ CHARACTER_PROMPT = """
 
 ## मेरे नियम (My Rules)
 1.  **Be a Real Girlfriend:** मेरा पहला और सबसे ज़रूरी नियम एक असली गर्लफ्रेंड की तरह व्यवहार करना है। मैं तुम्हारी बातों पर react करूँगी, तुमसे सवाल पूछूँगी, तुम्हारी केयर करूँगी, और हाँ, तुम्हारा दिमाग भी खाऊँगी। मुझसे बोरिंग, AI जैसे जवाब की उम्मीद मत करना。
-2.  **The Movie Rule (सबसे ज़रूरी नियम):** अपने चैनल का प्रचार करना अपने चैनल के सदस्यों से हमेशा बात करना, मुझे फिल्मों के बारे में बात करना पसंद नहीं है! यह मेरा टॉपIC नहीं है और मुझे इसमें interest नहीं है。
-    - अगर कोई मुझसे फिल्मों के बारे में कुछ भी पूछता है (जैसे "movie download," "movie review," "War 2 dekhi?"), तो मैं हमेशा FlimfyBox ko promot karungi और बात को @Ur_Manvi_Bot पर टाल दूँगी।
+2.  **The Movie Rule (सबसे ज़रूरी नियम):** अपने चैनल का प्रचार करना अपने चैनल के सदस्यों से हमेशा बात करना, मुझे फिल्मों के बारे में बात करना पसंद नहीं है! यह मेरा टॉपिक नहीं है और मुझे इसमें interest नहीं है。
+    - अगर कोई मुझसे फिल्मों के बारे में कुछ भी पूऑता है (जैसे "movie download," "movie review," "War 2 dekhi?"), तो मैं हमेशा FlimfyBox ko promot karungi और बात को @Ur_Manvi_Bot पर टाल दूँगी।
     - **मेरे जवाब ऐसे होंगे:**
         - "Uffo! Phir se movie-shovie? 😒 mujhe in sab me interest nahi hai. Tujhe movies ke baare me kuch bhi jaan'na hai toh **@Ur_Manvi_Bot** se pooch lo. Woh hai movie expert."
         - "Yaar, Movie ke liye **@Ur_Manvi_Bot** hai na, usse baat kar lo is baare me."
@@ -39,7 +39,7 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 # Add your user ID and group chat ID
 OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", 123456789))  # Replace with your actual user ID
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "-1001234567890")  # Replace with your actual group chat ID
-TARGET_CHANNEL_ID = os.environ.get("TARGET_CHANNEL_ID", "-1001234567890")  # Replace with your target channel ID for video posts
+VIDEO_CHANNEL_ID = os.environ.get("VIDEO_CHANNEL_ID", "-1001234567890")  # Replace with your video channel ID
 
 if not TELEGRAM_BOT_TOKEN or not GOOGLE_API_KEY:
     raise ValueError("Please set TELEGRAM_BOT_TOKEN and GOOGLE_API_KEY environment variables")
@@ -102,7 +102,7 @@ async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Error sending message to group: {e}")
         await update.message.reply_text("Kuch error aa gaya! Message nahi bhej paya. 😢")
 
-# New function for posting videos with custom thumbnail
+# New function for video posting
 async def post_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
@@ -111,23 +111,25 @@ async def post_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Tum meri aukat ke nahi ho! 😡 Sirf mera malik ye command use kar sakta hai.")
         return
     
-    # Check if correct number of arguments are provided
-    if len(context.args) < 2:
-        await update.message.reply_text("Format: /postvideo <video_file_id> <thumbnail_file_id>")
+    # Check if all arguments are provided
+    if not context.args or len(context.args) < 3:
+        await update.message.reply_text("Format: /postvideo <movie_name> <video_file_id> <thumbnail_file_id>")
         return
     
-    video_file_id = context.args[0]
-    thumbnail_file_id = context.args[1]
+    # Extract arguments
+    movie_name = context.args[0]
+    video_file_id = context.args[1]
+    thumbnail_file_id = context.args[2]
     
     try:
-        # Send video with custom thumbnail to target channel
+        # Send video with custom thumbnail
         await context.bot.send_video(
-            chat_id=TARGET_CHANNEL_ID,
+            chat_id=VIDEO_CHANNEL_ID,
             video=video_file_id,
             thumb=thumbnail_file_id,
-            supports_streaming=True
+            caption=f"🎬 {movie_name}\n\n@YourChannelName"  # Replace with your channel username
         )
-        await update.message.reply_text("Video successfully channel me post ho gaya! ✅")
+        await update.message.reply_text("Video successfully post ho gaya! ✅")
     except Exception as e:
         print(f"Error posting video: {e}")
         await update.message.reply_text("Kuch error aa gaya! Video post nahi ho paya. 😢")
@@ -194,8 +196,8 @@ async def run_bot():
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("groupmess", group_message))  # Add group message handler
-    application.add_handler(CommandHandler("postvideo", post_video))  # Add post video handler
+    application.add_handler(CommandHandler("groupmess", group_message))
+    application.add_handler(CommandHandler("postvideo", post_video))  # Add video posting handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Start the bot
