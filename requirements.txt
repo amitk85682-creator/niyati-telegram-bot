@@ -1,6 +1,7 @@
-python-telegram-bot==13.15
+python-telegram-bot==20.7
 flask==2.3.3
-google-generativeai==0.3.2
+google-generativeai>=0.3.2
 requests==2.31.0
-urllib3==1.26.16
+urllib3<2
 protobuf==4.25.3
+standard-imghdr==3.13.0
