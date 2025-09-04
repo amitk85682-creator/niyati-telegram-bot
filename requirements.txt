@@ -1,3 +1,8 @@
-python-telegram-bot
-google-generativeai
-Flask
+python-telegram-bot[ext]==20.7
+flask==3.0.0
+asyncpg==0.29.0
+google-api-python-client==2.137.0
+google-generativeai==0.8.3
+pydantic-settings==2.3.4
+python-dotenv==1.0.1
+uvloop
