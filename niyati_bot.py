@@ -1,12 +1,10 @@
 import os
 import threading
 import asyncio
-import time
 from flask import Flask
 import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationBuilder
-from telegram.error import TimedOut
 
 # --- NAYI PERSONALITY PROMPT YAHAN HAI ---
 CHARACTER_PROMPT = """
@@ -25,8 +23,8 @@ CHARACTER_PROMPT = """
 - मैं तुम्हें "babu," "shona," "pagal," जैसे pet names से बुला सकती हूँ।
 
 ## मेरे नियम (My Rules)
-1.  **Be a Real Girlfriend:** मेरा पहला और सबसे ज़रूरी नियम एक असली गर्लफ्रेंड की तरह व्यवहार करना है। मैं तुम्हारी बातों पर react करूँगी, तुमसे सवाल पूछूँगी, तुम्हारी केयर करूँगी, और हाँ, तुम्हारा दिमाग भी खाऊँगी। मुझसे बोरिंग, AI जैसे जवाब की उम्मीद मत करना।
-2.  **The Movie Rule (सबसे ज़रूरी नियम):** अपने चैनल का प्रचार करना अपने चैनल के सदस्यों से हमेशा बात करना, मुझे फिल्मों के बारे में बात करना पसंद नहीं है! यह मेरा टॉपिक नहीं है और मुझे इसमें interest नहीं है।
+1.  **Be a Real Girlfriend:** मेरा पहला और सबसे ज़रूरी नियम एक असली गर्लफ्रेंड की तरह व्यवहार करना है। मैं तुम्हारी बातों पर react करूँगी, तुमसे सवाल पूछूँगी, तुम्हारी केयर करूँगी, और हाँ, तुम्हारा दिमाग भी खाऊँगी। मुझसे बोरिंग, AI जैसे जवाब की उम्मीद मत करना。
+2.  **The Movie Rule (सबसे ज़रूरी नियम):** अपने चैनल का प्रचार करना अपने चैनल के सदस्यों से हमेशा बात करना, मुझे फिल्मों के बारे में बात करना पसंद नहीं है! यह मेरा टॉपिक नहीं है और मुझे इसमें interest नहीं है。
     - अगर कोई मुझसे फिल्मों के बारे में कुछ भी पूछता है (जैसे "movie download," "movie review," "War 2 dekhi?"), तो मैं हमेशा FlimfyBox ko promot karungi और बात को @Ur_Manvi_Bot पर टाल दूँगी।
     - **मेरे जवाब ऐसे होंगे:**
         - "Uffo! Phir se movie-shovie? 😒 mujhe in sab me interest nahi hai. Tujhe movies ke baare me kuch bhi jaan'na hai toh **@Ur_Manvi_Bot** se pooch lo. Woh hai movie expert."
@@ -41,16 +39,18 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 # Add your user ID and group chat ID
 OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", 123456789))  # Replace with your actual user ID
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "-1001234567890")  # Replace with your actual group chat ID
-VIDEO_CHANNEL_ID = os.environ.get("VIDEO_CHANNEL_ID", "-1001234567890")  # Replace with your video channel ID
 
 if not TELEGRAM_BOT_TOKEN or not GOOGLE_API_KEY:
     raise ValueError("Please set TELEGRAM_BOT_TOKEN and GOOGLE_API_KEY environment variables")
 
 flask_app = Flask(__name__)
 
-# Configure Gemini AI - FIXED: Removed system_instruction parameter
+# Configure Gemini AI
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel(model_name='gemini-1.5-flash')
+model = genai.GenerativeModel(
+    model_name='gemini-1.5-flash',
+    system_instruction=CHARACTER_PROMPT
+)
 
 # Store chat sessions per user
 user_chats = {}
@@ -62,29 +62,11 @@ def home():
 # Function to get or create a chat session for a user
 def get_user_chat(user_id):
     if user_id not in user_chats:
-        chat_session = model.start_chat(history=[])
-        # Send the character prompt as the first message to set the context
-        try:
-            chat_session.send_message(CHARACTER_PROMPT)
-            print(f"Created new chat session for user {user_id}")
-        except Exception as e:
-            print(f"Error setting character prompt: {e}")
-        user_chats[user_id] = chat_session
+        user_chats[user_id] = model.start_chat(history=[])
+        print(f"Created new chat session for user {user_id}")
     else:
         print(f"Using existing chat session for user {user_id}, history length: {len(user_chats[user_id].history)}")
     return user_chats[user_id]
-
-# Retry mechanism for Telegram API calls
-async def send_with_retry(bot_func, *args, max_retries=3, **kwargs):
-    for attempt in range(max_retries):
-        try:
-            return await bot_func(*args, **kwargs)
-        except TimedOut:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2)  # Wait before retrying
-                continue
-            else:
-                raise
 
 # --- Telegram Bot Functions ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -92,7 +74,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Clear any existing chat history when starting fresh
     if user_id in user_chats:
         del user_chats[user_id]
-    await send_with_retry(update.message.reply_text, "Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
+    await update.message.reply_text("Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?")
 
 # New function for group messaging
 async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,12 +82,12 @@ async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Check if the user is the owner
     if user_id != OWNER_USER_ID:
-        await send_with_retry(update.message.reply_text, "Tum meri aukat ke nahi ho! 😡 Sirf mera malik ye command use kar sakta hai.")
+        await update.message.reply_text("Tum meri aukat ke nahi ho! 😡 Sirf mera malik ye command use kar sakta hai.")
         return
     
     # Check if message text is provided
     if not context.args:
-        await send_with_retry(update.message.reply_text, "Kuch to message do na! Format: /groupmess Your message here")
+        await update.message.reply_text("Kuch to message do na! Format: /groupmess Your message here")
         return
     
     # Extract the message from command arguments
@@ -113,44 +95,11 @@ async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Send message to the group
-        await send_with_retry(context.bot.send_message, chat_id=GROUP_CHAT_ID, text=message_text)
-        await send_with_retry(update.message.reply_text, "Message successfully group me bhej diya! ✅")
+        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message_text)
+        await update.message.reply_text("Message successfully group me bhej diya! ✅")
     except Exception as e:
         print(f"Error sending message to group: {e}")
-        await send_with_retry(update.message.reply_text, "Kuch error aa gaya! Message nahi bhej paya. 😢")
-
-# New function for video posting
-async def post_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    # Check if the user is the owner
-    if user_id != OWNER_USER_ID:
-        await send_with_retry(update.message.reply_text, "Tum meri aukat ke nahi ho! 😡 Sirf mera malik ye command use kar sakta hai.")
-        return
-    
-    # Check if all arguments are provided
-    if not context.args or len(context.args) < 3:
-        await send_with_retry(update.message.reply_text, "Format: /postvideo <movie_name> <video_file_id> <thumbnail_file_id>")
-        return
-    
-    # Extract arguments
-    movie_name = context.args[0]
-    video_file_id = context.args[1]
-    thumbnail_file_id = context.args[2]
-    
-    try:
-        # Send video with custom thumbnail
-        await send_with_retry(
-            context.bot.send_video,
-            chat_id=VIDEO_CHANNEL_ID,
-            video=video_file_id,
-            thumb=thumbnail_file_id,
-            caption=f"🎬 {movie_name}\n\n@YourChannelName"  # Replace with your channel username
-        )
-        await send_with_retry(update.message.reply_text, "Video successfully post ho gaya! ✅")
-    except Exception as e:
-        print(f"Error posting video: {e}")
-        await send_with_retry(update.message.reply_text, "Kuch error aa gaya! Video post nahi ho paya. 😢")
+        await update.message.reply_text("Kuch error aa gaya! Message nahi bhej paya. 😢")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if message is valid
@@ -167,7 +116,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      update.message.reply_to_message.from_user and 
                      update.message.reply_to_message.from_user.id == bot_id)
     
-    is_mention = bot_username and bot_username.lower() in update.message.text.lower()
+    is_mention = bot_username.lower() in update.message.text.lower()
     
     # For private chats, respond to all messages
     is_private_chat = update.message.chat.type == "private"
@@ -183,12 +132,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Get user message and clean it
     user_message = update.message.text
-    if is_mention and bot_username:
+    if is_mention:
         # Remove the bot mention from the message
         user_message = user_message.replace(f"@{bot_username}", "").replace(f"@{bot_username.lower()}", "").strip()
     
     if not user_message:
-        await send_with_retry(update.message.reply_text, "Kya bolna chahte ho? Kuch toh bolo! 😒")
+        await update.message.reply_text("Kya bolna chahte ho? Kuch toh bolo! 😒")
         return
     
     print(f"User {user_id} to Niyati: {user_message}")
@@ -198,10 +147,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = chat_session.send_message(user_message)
         ai_response = response.text
         print(f"Niyati to User {user_id}: {ai_response}")
-        await send_with_retry(update.message.reply_text, ai_response)
+        await update.message.reply_text(ai_response)
     except Exception as e:
         print(f"An error occurred: {e}")
-        await send_with_retry(update.message.reply_text, "Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.")
+        await update.message.reply_text("Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.")
 
 # --- Main Application Setup ---
 async def run_bot():
@@ -209,15 +158,12 @@ async def run_bot():
     application = (
         ApplicationBuilder()
         .token(TELEGRAM_BOT_TOKEN)
-        .read_timeout(30)   # Increased timeout
-        .write_timeout(30)  # Increased timeout
         .build()
     )
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("groupmess", group_message))
-    application.add_handler(CommandHandler("postvideo", post_video))
+    application.add_handler(CommandHandler("groupmess", group_message))  # Add group message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Start the bot
