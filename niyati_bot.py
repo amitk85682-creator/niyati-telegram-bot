@@ -1,6 +1,5 @@
 import os
 import threading
-import asyncio
 from flask import Flask
 import google.generativeai as genai
 from telegram import Update
@@ -45,7 +44,7 @@ if not TELEGRAM_BOT_TOKEN or not GOOGLE_API_KEY:
 
 flask_app = Flask(__name__)
 
-# Configure Gemini AI - FIXED for older version
+# Configure Gemini AI
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel(model_name='gemini-pro')
 
@@ -157,7 +156,7 @@ def handle_message(update: Update, context: CallbackContext):
 
 def main():
     """Run the Telegram bot"""
-    # Create updater with the old API style :cite[4]:cite[10]
+    # Create updater
     updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
     
     # Get dispatcher
