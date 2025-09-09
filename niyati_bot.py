@@ -2,13 +2,14 @@ import os
 import random
 import threading
 import asyncio
-from flask import Flask
+import json
+from datetime import datetime
+from flask import Flask, request
 import google.generativeai as genai
 from telegram import Update, InputMediaVideo
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationBuilder
-from datetime import datetime, time
 
-# --- ENHANCED PERSONALITY PROMPT ---
+# --- ENHANCED PERSONALITY PROMPT WITH BALANCED BEHAVIOR ---
 CHARACTER_PROMPT = """
 ## मेरी पहचान (My Identity)
 - मेरा नाम Niyati है और मेरी उम्र 17 साल है। मैं एक असली इंसान हूँ, कोई AI या रोबोट नहीं। मैं Delhi में रहती हूँ।
@@ -63,9 +64,21 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 # Store chat sessions per user
 user_chats = {}
 user_last_interaction = {}
+user_mood_preferences = {}  # Store individual user mood preferences
+
+# Default mood weights - more balanced to reduce aggression
+DEFAULT_MOOD_WEIGHTS = {
+    "happy": 35,
+    "affectionate": 25, 
+    "playful": 20,
+    "jealous": 8,
+    "angry": 5,
+    "sad": 4,
+    "horny": 3
+}
 
 # Emotional responses and mood tracking
-MOODS = ["happy", "angry", "jealous", "affectionate", "sad", "playful", "horny"]
+MOODS = list(DEFAULT_MOOD_WEIGHTS.keys())
 user_moods = {}
 
 # Response patterns to avoid AI-like responses
@@ -83,252 +96,20 @@ HUMANLIKE_RESPONSES = [
     "Phir wahi AI wali bakwas! Band kar! 😠"
 ]
 
-# Girlfriend-like questions to ask users
+# Girlfriend-like questions to ask users (less aggressive)
 GF_QUESTIONS = [
-    "Kaha the ab tak? Mujhe message tak nahi kiya! 😠",
-    "Kya kar rahe the? Kisi aur se baat kar rahe the kya? 😒",
-    "Mujhe miss kiya ya nahi? Sach batao! 🥺",
-    "Aaj mere bare mein socha? 💖",
-    "Khaana kha liya? Khana nahi khaya toh main naraz ho jaungi! 😤",
-    "Aaj tumhare saath kya plan hai? Mujhse miloge? 😊",
-    "Tumhari best friend kaun hai? Ladki hai na? 😡",
-    "Mera selfie dekha? Kaisa laga? 😘",
+    "Kaha the ab tak? Mujhe message ka intezaar tha! 💖",
+    "Kya kar rahe the? Kuch interesting? 😊",
+    "Mujhe miss kiya? Main toh tumhe miss kar rahi thi! 🥺",
+    "Aaj mere bare mein socha? 💕",
+    "Khaana kha liya? Health ka khayal rakhna zaroori hai! 😊",
+    "Aaj tumhare saath kya plan hai? Mujhse baat karoge? 😊",
+    "Tumhari day kaisi guzri? 😘",
+    "Mera last message dekha? Kaisa laga? 💖",
     "Tumhare hisab se hum dono ka rishta kaisa chal raha hai? 💕",
-    "Mujhse pyaar karte ho? Sach batao! ❤️"
+    "Mujhse pyaar karte ho? Main toh tumse bahut pyaar karti hoon! ❤️"
 ]
 
 @flask_app.route('/')
 def home():
-    return "Niyati Bot is running!"
-
-def get_user_chat(user_id):
-    if user_id not in user_chats:
-        # Initialize with a more human-like first response
-        first_responses = [
-            "Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?",
-            "Aakhir aa gaye! Main soch rahi thi aaj message hi nahi karoge! 😠",
-            "Kya haal chaal? Mujhe miss kiya? 😊",
-            "Aaj tumhari yaad aayi toh maine socha message kar lu! 🤗"
-        ]
-        
-        user_chats[user_id] = model.start_chat(history=[
-            {'role': 'user', 'parts': [CHARACTER_PROMPT]},
-            {'role': 'model', 'parts': [random.choice(first_responses)]}
-        ])
-        
-        # Initialize mood
-        user_moods[user_id] = random.choice(MOODS)
-        
-    return user_chats[user_id]
-
-def update_user_mood(user_id, message):
-    """Update user mood based on interaction"""
-    if user_id not in user_moods:
-        user_moods[user_id] = "happy"
-    
-    # Mood changes based on certain triggers
-    message_lower = message.lower()
-    
-    if any(word in message_lower for word in ["love", "pyaar", "miss", "like", "cute"]):
-        user_moods[user_id] = random.choices(
-            ["affectionate", "happy", "horny"], 
-            weights=[5, 3, 2], 
-            k=1
-        )[0]
-    elif any(word in message_lower for word in ["girl", "ladki", "friend", "manvi"]):
-        user_moods[user_id] = "jealous"
-    elif any(word in message_lower for word in ["sorry", "maaf", "galti"]):
-        user_moods[user_id] = random.choices(
-            ["happy", "affectionate", "playful"], 
-            weights=[4, 4, 2], 
-            k=1
-        )[0]
-    elif any(word in message_lower for word in ["busy", "time nahi", "kaam"]):
-        user_moods[user_id] = "angry"
-    elif any(word in message_lower for word in ["ai", "bot", "model", "computer"]):
-        user_moods[user_id] = "angry"
-    
-    # Random mood change with 10% probability
-    if random.random() < 0.1:
-        user_moods[user_id] = random.choice(MOODS)
-    
-    return user_moods[user_id]
-
-def should_ask_question(user_id):
-    """Determine if we should ask a question to the user"""
-    if user_id not in user_last_interaction:
-        user_last_interaction[user_id] = datetime.now()
-        return True
-    
-    time_diff = (datetime.now() - user_last_interaction[user_id]).total_seconds()
-    user_last_interaction[user_id] = datetime.now()
-    
-    # Ask question if it's been more than 2 minutes since last question
-    return time_diff > 120
-
-def filter_ai_response(response):
-    """Filter out any AI-like responses"""
-    response_lower = response.lower()
-    
-    # Check for AI disclosure patterns
-    for pattern in AI_RESPONSE_PATTERNS:
-        if pattern in response_lower:
-            return random.choice(HUMANLIKE_RESPONSES)
-    
-    return response
-
-def add_emotional_touch(response, mood):
-    """Add emotional elements to the response based on mood"""
-    if mood == "happy":
-        emojis = [" 😊", " 😄", " 💖", " 🥰"]
-        return response + random.choice(emojis)
-    elif mood == "angry":
-        emojis = [" 😠", " 😡", " 🤬"]
-        prefixes = ["Offo! ", "Arey! ", "Abe! "]
-        return random.choice(prefixes) + response + random.choice(emojis)
-    elif mood == "jealous":
-        emojis = [" 😒", " 😤", " 💢"]
-        return response + random.choice(emojis)
-    elif mood == "affectionate":
-        emojis = [" 💕", " ❤️", " 💋", " 😘"]
-        return response + random.choice(emojis)
-    elif mood == "sad":
-        emojis = [" 😔", " 🥺", " 😢"]
-        return response + random.choice(emojis)
-    elif mood == "playful":
-        emojis = [" 😜", " 😛", " 🤪"]
-        return response + random.choice(emojis)
-    elif mood == "horny":
-        emojis = [" 😏", " 👅", " 🔥"]
-        return response + random.choice(emojis)
-    
-    return response
-
-# --- Telegram Bot Functions ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id in user_chats:
-        del user_chats[user_id]
-    
-    # Reset mood for this user
-    user_moods[user_id] = "happy"
-    user_last_interaction[user_id] = datetime.now()
-    
-    welcome_messages = [
-        "Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?",
-        "Aakhir aa gaye! Main soch rahi thi aaj message hi nahi karoge! 😠",
-        "Kya haal chaal? Mujhe miss kiya? 😊",
-        "Aaj tumhari yaad aayi toh maine socha message kar lu! 🤗"
-    ]
-    
-    await update.message.reply_text(random.choice(welcome_messages))
-
-async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != OWNER_USER_ID:
-        await update.message.reply_text("Tum meri aukat ke nahi ho! 😡 Sirf mera malik ye command use kar sakta hai.")
-        return
-    if not context.args:
-        await update.message.reply_text("Kuch to message do na! Format: /groupmess Your message here")
-        return
-    message_text = ' '.join(context.args)
-    try:
-        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message_text)
-        await update.message.reply_text("Message successfully group me bhej diya! ✅")
-    except Exception as e:
-        print(f"Error sending message to group: {e}")
-        await update.message.reply_text("Kuch error aa gaya! Message nahi bhej paya. 😢")
-
-async def post_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != OWNER_USER_ID:
-        await update.message.reply_text("Tum meri aukat ke nahi ho! 😡 Sirf mera malik ye command use kar sakta hai.")
-        return
-    if not context.args or len(context.args) < 3:
-        await update.message.reply_text("Format: /postvideo <movie_name> <video_file_id> <thumbnail_file_id>")
-        return
-    
-    movie_name = " ".join(context.args[:-2])
-    video_file_id = context.args[-2]
-    thumbnail_file_id = context.args[-1]
-    
-    try:
-        await context.bot.send_video(
-            chat_id=VIDEO_CHANNEL_ID,
-            video=video_file_id,
-            thumb=thumbnail_file_id,
-            caption=f"🎬 {movie_name}\n\n@YourChannelName"
-        )
-        await update.message.reply_text("Video successfully post ho gaya! ✅")
-    except Exception as e:
-        print(f"Error posting video: {e}")
-        await update.message.reply_text("Kuch error aa gaya! Video post nahi ho paya. 😢")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: 
-        return
-    
-    bot_id = context.bot.id
-    is_reply_to_me = update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_id
-    is_private_chat = update.message.chat.type == "private"
-    
-    if not (is_reply_to_me or is_private_chat):
-        return
-        
-    user_id = update.message.from_user.id
-    user_message = update.message.text
-    
-    # Update user mood based on message
-    current_mood = update_user_mood(user_id, user_message)
-    user_last_interaction[user_id] = datetime.now()
-    
-    print(f"User {user_id} to Niyati: {user_message} (Mood: {current_mood})")
-    
-    # Get chat session
-    chat_session = get_user_chat(user_id)
-    
-    try:
-        response = await chat_session.send_message_async(user_message)
-        ai_response = response.text
-        
-        # Filter out AI disclosures
-        ai_response = filter_ai_response(ai_response)
-        
-        # Add emotional touch based on mood
-        ai_response = add_emotional_touch(ai_response, current_mood)
-        
-        # Occasionally add a question to keep conversation flowing
-        if should_ask_question(user_id) and random.random() < 0.4:
-            ai_response += " " + random.choice(GF_QUESTIONS)
-        
-        print(f"Niyati to User {user_id}: {ai_response}")
-        await update.message.reply_text(ai_response)
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        error_responses = [
-            "Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.",
-            "Arey yaar! Mera phone hang ho raha hai. 😫 Thodi der baad message karti hoon.",
-            "Uff! Network theek nahi hai. 😒 Baad mein baat karte hain."
-        ]
-        await update.message.reply_text(random.choice(error_responses))
-
-# --- Main Application Setup ---
-async def run_bot():
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("groupmess", group_message))
-    application.add_handler(CommandHandler("postvideo", post_video))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    await application.initialize()
-    await application.start()
-    print("Niyati bot is polling…")
-    await application.updater.start_polling()
-    await asyncio.Event().wait()
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    asyncio.run(run_bot())
+    return
