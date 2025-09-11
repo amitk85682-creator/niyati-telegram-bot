@@ -2,3 +2,4 @@ python-telegram-bot
 google-generativeai
 Flask
 waitress
+apscheduler
