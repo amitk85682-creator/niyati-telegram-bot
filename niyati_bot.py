@@ -309,27 +309,37 @@ class ProactiveMessenger:
     def __init__(self, application):
         self.application = application
         self.scheduler = AsyncIOScheduler()
+        self.sent_today = set()  # Track users who have received messages today
         
     def start(self):
-        # Schedule morning message (9-11 AM random time)
+        # Schedule morning message (9:30 AM only once)
         self.scheduler.add_job(
             self.send_morning_message,
             'cron',
-            hour='9-11',
-            minute='0,30',
+            hour='9',
+            minute='30',
             args=[None]
         )
         
-        # Schedule evening check-in (6-9 PM random time)
+        # Schedule evening check-in (7:00 PM only once)
         self.scheduler.add_job(
             self.send_evening_checkin,
             'cron',
-            hour='18-21',
-            minute='0,30',
+            hour='19',
+            minute='0',
             args=[None]
         )
         
-        # Schedule wake-up responses (10 AM)
+        # Schedule daily reset (midnight)
+        self.scheduler.add_job(
+            self.daily_reset,
+            'cron',
+            hour='0',
+            minute='0',
+            args=[None]
+        )
+        
+        # Schedule wake-up responses (10:00 AM)
         self.scheduler.add_job(
             self.send_wakeup_responses,
             'cron',
@@ -340,10 +350,17 @@ class ProactiveMessenger:
         
         self.scheduler.start()
     
+    async def daily_reset(self, context):
+        """Reset daily tracking at midnight"""
+        self.sent_today = set()
+        print("Daily reset: Cleared sent messages tracking")
+    
     async def send_morning_message(self, context):
         # Only send if it's actually morning in IST and not sleeping time
         if get_time_of_day() != "morning" or is_sleeping_time():
             return
+            
+        print("Sending morning messages...")
             
         # Get all users who interacted in last 48 hours
         memory_files = os.listdir(memory_system.memory_dir)
@@ -351,11 +368,16 @@ class ProactiveMessenger:
             if memory_file.endswith('.json'):
                 try:
                     user_id = int(memory_file.split('_')[1].split('.')[0])
+                    
+                    # Skip if already sent today
+                    if user_id in self.sent_today:
+                        continue
+                        
                     memories = memory_system.load_memories(user_id)
                     
-                    # Check if user is active
+                    # Check if user is active (interacted in last 7 days)
                     last_interaction = datetime.fromisoformat(memories["last_interaction"])
-                    if datetime.now() - last_interaction < timedelta(hours=48):
+                    if datetime.now() - last_interaction < timedelta(days=7):
                         try:
                             messages = [
                                 "Good Morning! ☀️ Uth gaye kya?",
@@ -368,9 +390,15 @@ class ProactiveMessenger:
                                 chat_id=user_id,
                                 text=random.choice(messages)
                             )
+                            
+                            # Mark as sent today
+                            self.sent_today.add(user_id)
+                            print(f"Morning message sent to user {user_id}")
+                            
                         except Exception as e:
                             print(f"Failed to send message to {user_id}: {e}")
-                except:
+                except Exception as e:
+                    print(f"Error processing {memory_file}: {e}")
                     continue
     
     async def send_evening_checkin(self, context):
@@ -378,16 +406,23 @@ class ProactiveMessenger:
         if get_time_of_day() != "evening":
             return
             
+        print("Sending evening messages...")
+            
         memory_files = os.listdir(memory_system.memory_dir)
         for memory_file in memory_files:
             if memory_file.endswith('.json'):
                 try:
                     user_id = int(memory_file.split('_')[1].split('.')[0])
+                    
+                    # Skip if already sent today
+                    if user_id in self.sent_today:
+                        continue
+                        
                     memories = memory_system.load_memories(user_id)
                     
-                    # Check if user is active
+                    # Check if user is active (interacted in last 7 days)
                     last_interaction = datetime.fromisoformat(memories["last_interaction"])
-                    if datetime.now() - last_interaction < timedelta(hours=48):
+                    if datetime.now() - last_interaction < timedelta(days=7):
                         try:
                             messages = [
                                 "Hey! Din kaisa gaya? 😊",
@@ -400,9 +435,15 @@ class ProactiveMessenger:
                                 chat_id=user_id,
                                 text=random.choice(messages)
                             )
+                            
+                            # Mark as sent today
+                            self.sent_today.add(user_id)
+                            print(f"Evening message sent to user {user_id}")
+                            
                         except Exception as e:
                             print(f"Failed to send message to {user_id}: {e}")
-                except:
+                except Exception as e:
+                    print(f"Error processing {memory_file}: {e}")
                     continue
     
     async def send_wakeup_responses(self, context):
@@ -411,6 +452,8 @@ class ProactiveMessenger:
         if is_sleeping_time():
             return
             
+        print("Sending wakeup responses...")
+            
         # Get all users who sent messages during sleep time
         queue_files = os.listdir(message_queue.queue_dir)
         for queue_file in queue_files:
@@ -418,7 +461,8 @@ class ProactiveMessenger:
                 try:
                     user_id = int(queue_file.split('_')[1].split('.')[0])
                     await self.handle_wakeup_messages(user_id, context)
-                except:
+                except Exception as e:
+                    print(f"Error processing {queue_file}: {e}")
                     continue
     
     async def handle_wakeup_messages(self, user_id, context):
@@ -427,16 +471,20 @@ class ProactiveMessenger:
         
         if messages:
             response_text = "Subah ho gayi! Main uth gayi hoon. 😊\n\n"
-            response_text += "Tumne raat mein ye messages bheje the:\n"
             
-            for i, msg in enumerate(messages, 1):
+            # Only show the first 3 messages to avoid spam
+            for i, msg in enumerate(messages[:3], 1):
                 response_text += f"{i}. {msg['text']}\n"
+            
+            if len(messages) > 3:
+                response_text += f"\n... aur {len(messages) - 3} more messages\n"
             
             response_text += "\nAb batao, kaise ho? 💖"
             
             try:
                 await context.bot.send_message(chat_id=user_id, text=response_text)
                 message_queue.clear_messages(user_id)
+                print(f"Wakeup response sent to user {user_id}")
             except Exception as e:
                 print(f"Error sending wakeup message: {e}")
 
