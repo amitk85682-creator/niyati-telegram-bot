@@ -3,8 +3,9 @@ import random
 import json
 import threading
 import asyncio
-import sqlite3
+import pickle
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from flask import Flask, request
 import google.generativeai as genai
 from telegram import Update
@@ -12,6 +13,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.constants import ChatAction
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+import pytz
 
 # --- Enhanced Personality Prompt ---
 BASE_CHARACTER_PROMPT = """
@@ -56,6 +58,35 @@ flask_app = Flask(__name__)
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
+# Timezone setup
+IST = pytz.timezone('Asia/Kolkata')
+
+def get_ist_time():
+    """Get current time in Indian Standard Time"""
+    utc_now = datetime.now(pytz.utc)
+    return utc_now.astimezone(IST)
+
+def is_sleeping_time():
+    """Check if it's sleeping time in IST"""
+    now_ist = get_ist_time().time()
+    sleep_start = time(1, 0)  # 1:00 AM IST
+    sleep_end = time(10, 0)   # 10:00 AM IST
+    
+    return sleep_start <= now_ist <= sleep_end
+
+def get_time_of_day():
+    """Get current time of day for appropriate greetings"""
+    now_ist = get_ist_time().time()
+    
+    if time(5, 0) <= now_ist < time(12, 0):
+        return "morning"
+    elif time(12, 0) <= now_ist < time(17, 0):
+        return "afternoon"
+    elif time(17, 0) <= now_ist < time(21, 0):
+        return "evening"
+    else:
+        return "night"
+
 # --- Memory System ---
 class NiyatiMemorySystem:
     def __init__(self):
@@ -92,22 +123,33 @@ class NiyatiMemorySystem:
             json.dump(memory_data, f, ensure_ascii=False, indent=2)
     
     def extract_important_facts(self, user_message, ai_response):
-        """Use Gemini to extract important facts from conversation"""
-        fact_extraction_prompt = f"""
-        User: {user_message}
-        AI: {ai_response}
+        """Extract important facts from conversation"""
+        # Simple keyword-based fact extraction
+        facts = []
+        message_lower = user_message.lower()
         
-        Extract any important personal facts about the user from this exchange.
-        Return as JSON list of facts or empty list if nothing important.
-        Examples: ["User likes blue color", "User has exam tomorrow"]
-        """
+        # Check for common personal information patterns
+        if any(word in message_lower for word in ["my name is", "i'm called", "मेरा नाम"]):
+            if "my name is" in message_lower:
+                facts.append(f"User's name is {user_message.split('my name is')[-1].strip()}")
+            elif "i'm called" in message_lower:
+                facts.append(f"User's name is {user_message.split('i\'m called')[-1].strip()}")
         
-        try:
-            response = model.generate_content(fact_extraction_prompt)
-            facts = json.loads(response.text)
-            return facts if isinstance(facts, list) else []
-        except:
-            return []
+        # Check for location information
+        if any(word in message_lower for word in ["i live in", "i'm from", "मैं रहता हूँ"]):
+            if "i live in" in message_lower:
+                facts.append(f"User lives in {user_message.split('i live in')[-1].strip()}")
+            elif "i'm from" in message_lower:
+                facts.append(f"User is from {user_message.split('i\'m from')[-1].strip()}")
+        
+        # Check for preferences
+        if any(word in message_lower for word in ["i like", "i love", "मुझे पसंद है"]):
+            if "i like" in message_lower:
+                facts.append(f"User likes {user_message.split('i like')[-1].strip()}")
+            elif "i love" in message_lower:
+                facts.append(f"User loves {user_message.split('i love')[-1].strip()}")
+        
+        return facts
     
     def get_context_for_prompt(self, user_id):
         memories = self.load_memories(user_id)
@@ -134,6 +176,59 @@ class NiyatiMemorySystem:
 
 # Initialize memory system
 memory_system = NiyatiMemorySystem()
+
+# --- Sleep Message Queue ---
+class SleepMessageQueue:
+    def __init__(self):
+        self.queue_dir = "sleep_messages"
+        os.makedirs(self.queue_dir, exist_ok=True)
+    
+    def add_message(self, user_id, message_text, timestamp):
+        """Store message received during sleep hours"""
+        queue_path = Path(self.queue_dir) / f"user_{user_id}_queue.pkl"
+        
+        try:
+            if queue_path.exists():
+                with open(queue_path, 'rb') as f:
+                    messages = pickle.load(f)
+            else:
+                messages = []
+            
+            messages.append({
+                "text": message_text,
+                "timestamp": timestamp,
+                "responded": False
+            })
+            
+            with open(queue_path, 'wb') as f:
+                pickle.dump(messages, f)
+                
+        except Exception as e:
+            print(f"Error storing sleep message: {e}")
+    
+    def get_messages(self, user_id):
+        """Retrieve queued messages for a user"""
+        queue_path = Path(self.queue_dir) / f"user_{user_id}_queue.pkl"
+        
+        if queue_path.exists():
+            try:
+                with open(queue_path, 'rb') as f:
+                    return pickle.load(f)
+            except:
+                return []
+        return []
+    
+    def clear_messages(self, user_id):
+        """Clear queued messages after responding"""
+        queue_path = Path(self.queue_dir) / f"user_{user_id}_queue.pkl"
+        if queue_path.exists():
+            try:
+                os.remove(queue_path)
+            except:
+                pass
+
+# Initialize message queue
+message_queue = SleepMessageQueue()
 
 # --- Emotional Engine with Intensity ---
 class EmotionalEngine:
@@ -221,7 +316,7 @@ class ProactiveMessenger:
             self.send_morning_message,
             'cron',
             hour='9-11',
-            minute='*',
+            minute='0,30',
             args=[None]
         )
         
@@ -230,73 +325,122 @@ class ProactiveMessenger:
             self.send_evening_checkin,
             'cron',
             hour='18-21',
-            minute='*',
+            minute='0,30',
+            args=[None]
+        )
+        
+        # Schedule wake-up responses (10 AM)
+        self.scheduler.add_job(
+            self.send_wakeup_responses,
+            'cron',
+            hour='10',
+            minute='0',
             args=[None]
         )
         
         self.scheduler.start()
     
     async def send_morning_message(self, context):
+        # Only send if it's actually morning in IST and not sleeping time
+        if get_time_of_day() != "morning" or is_sleeping_time():
+            return
+            
         # Get all users who interacted in last 48 hours
-        for user_file in os.listdir(memory_system.memory_dir):
-            if user_file.endswith('.json'):
-                user_id = int(user_file.split('_')[1])
-                memories = memory_system.load_memories(user_id)
-                
-                # Check if user is active
-                last_interaction = datetime.fromisoformat(memories["last_interaction"])
-                if datetime.now() - last_interaction < timedelta(hours=48):
-                    try:
-                        messages = [
-                            "Good Morning! ☀️ Uth gaye kya?",
-                            "Subah subah yaad aayi main tumhe! 😊",
-                            "Morning babu! Aaj kya plan hai?",
-                            "Hey! So jaao ya uth gaye? Good Morning! 💖"
-                        ]
-                        
-                        await self.application.bot.send_message(
-                            chat_id=user_id,
-                            text=random.choice(messages)
-                        )
-                    except Exception as e:
-                        print(f"Failed to send message to {user_id}: {e}")
+        memory_files = os.listdir(memory_system.memory_dir)
+        for memory_file in memory_files:
+            if memory_file.endswith('.json'):
+                try:
+                    user_id = int(memory_file.split('_')[1].split('.')[0])
+                    memories = memory_system.load_memories(user_id)
+                    
+                    # Check if user is active
+                    last_interaction = datetime.fromisoformat(memories["last_interaction"])
+                    if datetime.now() - last_interaction < timedelta(hours=48):
+                        try:
+                            messages = [
+                                "Good Morning! ☀️ Uth gaye kya?",
+                                "Subah subah yaad aayi main tumhe! 😊",
+                                "Morning babu! Aaj kya plan hai?",
+                                "Hey! So jaao ya uth gaye? Good Morning! 💖"
+                            ]
+                            
+                            await self.application.bot.send_message(
+                                chat_id=user_id,
+                                text=random.choice(messages)
+                            )
+                        except Exception as e:
+                            print(f"Failed to send message to {user_id}: {e}")
+                except:
+                    continue
     
     async def send_evening_checkin(self, context):
-        # Similar implementation for evening messages
-        for user_file in os.listdir(memory_system.memory_dir):
-            if user_file.endswith('.json'):
-                user_id = int(user_file.split('_')[1])
-                memories = memory_system.load_memories(user_id)
-                
-                # Check if user is active
-                last_interaction = datetime.fromisoformat(memories["last_interaction"])
-                if datetime.now() - last_interaction < timedelta(hours=48):
-                    try:
-                        messages = [
-                            "Hey! Din kaisa gaya? 😊",
-                            "Sham ho gayi... Kya kar rahe ho? 🌆",
-                            "Evening check-in! Aaj kuch interesting hua?",
-                            "Yahan boring ho raha hai... Tum batao kya kar rahe ho? 😴"
-                        ]
-                        
-                        await self.application.bot.send_message(
-                            chat_id=user_id,
-                            text=random.choice(messages)
-                        )
-                    except Exception as e:
-                        print(f"Failed to send message to {user_id}: {e}")
+        # Only send if it's actually evening in IST
+        if get_time_of_day() != "evening":
+            return
+            
+        memory_files = os.listdir(memory_system.memory_dir)
+        for memory_file in memory_files:
+            if memory_file.endswith('.json'):
+                try:
+                    user_id = int(memory_file.split('_')[1].split('.')[0])
+                    memories = memory_system.load_memories(user_id)
+                    
+                    # Check if user is active
+                    last_interaction = datetime.fromisoformat(memories["last_interaction"])
+                    if datetime.now() - last_interaction < timedelta(hours=48):
+                        try:
+                            messages = [
+                                "Hey! Din kaisa gaya? 😊",
+                                "Sham ho gayi... Kya kar rahe ho? 🌆",
+                                "Evening check-in! Aaj kuch interesting hua?",
+                                "Yahan boring ho raha hai... Tum batao kya kar rahe ho? 😴"
+                            ]
+                            
+                            await self.application.bot.send_message(
+                                chat_id=user_id,
+                                text=random.choice(messages)
+                            )
+                        except Exception as e:
+                            print(f"Failed to send message to {user_id}: {e}")
+                except:
+                    continue
+    
+    async def send_wakeup_responses(self, context):
+        """Send responses to messages received during sleep hours"""
+        # Only send if it's not sleeping time anymore
+        if is_sleeping_time():
+            return
+            
+        # Get all users who sent messages during sleep time
+        queue_files = os.listdir(message_queue.queue_dir)
+        for queue_file in queue_files:
+            if queue_file.endswith('.pkl'):
+                try:
+                    user_id = int(queue_file.split('_')[1].split('.')[0])
+                    await self.handle_wakeup_messages(user_id, context)
+                except:
+                    continue
+    
+    async def handle_wakeup_messages(self, user_id, context):
+        """Process messages received during sleep hours"""
+        messages = message_queue.get_messages(user_id)
+        
+        if messages:
+            response_text = "Subah ho gayi! Main uth gayi hoon. 😊\n\n"
+            response_text += "Tumne raat mein ye messages bheje the:\n"
+            
+            for i, msg in enumerate(messages, 1):
+                response_text += f"{i}. {msg['text']}\n"
+            
+            response_text += "\nAb batao, kaise ho? 💖"
+            
+            try:
+                await context.bot.send_message(chat_id=user_id, text=response_text)
+                message_queue.clear_messages(user_id)
+            except Exception as e:
+                print(f"Error sending wakeup message: {e}")
 
 # --- Utility Functions ---
-def is_sleeping_time():
-    now = datetime.now().time()
-    sleep_start = time(1, 0)  # 1:00 AM
-    sleep_end = time(10, 0)   # 10:00 AM
-    
-    if sleep_start <= sleep_end:
-        return sleep_start <= now <= sleep_end
-    else:
-        return now >= sleep_start or now <= sleep_end
-
 def add_emotional_touch(response, mood):
     """Add emotional elements to the response based on mood"""
     if mood == "happy":
@@ -362,10 +506,35 @@ GF_QUESTIONS = [
     "Mujhse pyaar karte ho? Main toh tumse bahut pyaar karti hoon! ❤️"
 ]
 
+# Store chat sessions per user
+user_chats = {}
+
 # --- Telegram Bot Functions ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
+    # Check if it's sleeping time
+    if is_sleeping_time():
+        # Store the start command as a message
+        message_queue.add_message(
+            user_id, 
+            "/start command during sleep", 
+            datetime.now().isoformat()
+        )
+        
+        current_hour = get_ist_time().hour
+        
+        if current_hour < 6:  # Late night
+            await update.message.reply_text(
+                "Shhh... Main so rahi hoon. 😴 Subah 10 baje tak message karna, tab tak sone do na! 🌙"
+            )
+        else:  # Morning but before wake-up time
+            await update.message.reply_text(
+                "Uff... subah ke 10 baje tak soti hoon main. 😴 Thodi der baad message karna, abhi neend aa rahi hai! 🌅"
+            )
+        return
+    
+    # Normal start command processing
     # Initialize user memories
     memories = memory_system.load_memories(user_id)
     memory_system.save_memories(user_id, memories)
@@ -373,12 +542,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Initialize mood
     emotional_engine.update_mood_intensity(user_id, 0)
     
-    welcome_messages = [
-        "Hii... Kaha the ab tak? 😒 Miss nahi kiya mujhe?",
-        "Aakhir aa gaye! Main soch rahi thi aaj message hi nahi karoge! 😠",
-        "Kya haal chaal? Mujhe miss kiya? 😊",
-        "Aaj tumhari yaad aayi toh maine socha message kar lu! 🤗"
-    ]
+    # Time-appropriate greetings
+    time_of_day = get_time_of_day()
+    
+    if time_of_day == "morning":
+        welcome_messages = [
+            "Good Morning! ☀️ Kaise ho?",
+            "Subah subah message! 😊 Uth gaye kya?",
+            "Morning babu! Aaj kya plan hai? 💖"
+        ]
+    elif time_of_day == "afternoon":
+        welcome_messages = [
+            "Hello! 😊 Dopahar kaisi guzr rahi hai?",
+            "Hey! Lunch ho gaya? 🍲",
+            "Afternoon mein bhi yaad aaye tum! 💕"
+        ]
+    elif time_of_day == "evening":
+        welcome_messages = [
+            "Good Evening! 🌆 Chai pi li?",
+            "Sham ho gayi... Kya kar rahe ho? 😊",
+            "Evening check-in! Aaj kuch interesting hua? 💖"
+        ]
+    else:  # night
+        welcome_messages = [
+            "Hello! 🌙 Raat ko bhi yaad aaye?",
+            "Hey! So nahi gaye abhi tak? 😊",
+            "Good Night! Par so jaao, der ho gayi hai! 💤"
+        ]
     
     await update.message.reply_text(random.choice(welcome_messages))
 
@@ -399,6 +589,8 @@ async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         memory_text += "🌟 Important Facts:\n"
         for fact in memories["important_facts"][-5:]:
             memory_text += f"• {fact}\n"
+    else:
+        memory_text += "Abhi tak kuch khaas yaad nahi hai tumhare baare mein. 😔\nThoda aur baat karo, yaad rakhungi! 💖"
     
     await update.message.reply_text(memory_text)
 
@@ -476,13 +668,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not (is_reply_to_me or is_private_chat):
         return
         
-    # Check if it's sleeping time
+    # Check if it's sleeping time in IST
     if is_sleeping_time():
-        sleep_responses = [
-            "Zzz... 😴 Main so rahi hoon. Subah baat karte hain.",
-            "Shhh... Neend aa rahi hai. Kal baat karna? 🌙",
-            "Sone ka time hai... Good night! 💤"
-        ]
+        user_id = update.message.from_user.id
+        user_message = update.message.text
+        
+        # Store message for later response
+        message_queue.add_message(
+            user_id, 
+            user_message, 
+            datetime.now().isoformat()
+        )
+        
+        # Different responses based on time of day
+        current_hour = get_ist_time().hour
+        
+        if current_hour < 6:  # Late night
+            sleep_responses = [
+                "Zzz... 😴 Bahut der ho gayi hai, so jaao na.",
+                "Shhh... Neend aa rahi hai. Kal subah baat karte hain. 🌙",
+                "Sone ka time hai... Good night! 💤"
+            ]
+        else:  # Morning but before wake-up time
+            sleep_responses = [
+                "Uff... subah ke 10 baje tak soti hoon main. 😴",
+                "Abhi neend aa rahi hai... Thodi der baad message karna. 🌅",
+                "Good morning! Par main abhi so rahi hoon. 10 baje tak message karna. 😊"
+            ]
         
         await update.message.reply_text(random.choice(sleep_responses))
         return
@@ -594,9 +806,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await update.message.reply_text(random.choice(error_responses))
 
-# Store chat sessions per user
-user_chats = {}
-
 # --- Flask Routes ---
 @flask_app.route('/')
 def home():
@@ -605,14 +814,17 @@ def home():
 @flask_app.route('/set_mood_preferences', methods=['POST'])
 def set_mood_preferences():
     """API endpoint to set mood preferences for a user"""
-    user_id = request.json.get('user_id')
-    preferences = request.json.get('preferences', {})
-    
-    if user_id:
-        # This would need to be integrated with the emotional engine
-        return json.dumps({"status": "success", "message": "Mood preferences updated"})
-    
-    return json.dumps({"status": "error", "message": "User ID required"})
+    try:
+        user_id = request.json.get('user_id')
+        preferences = request.json.get('preferences', {})
+        
+        if user_id:
+            # This would need to be integrated with the emotional engine
+            return json.dumps({"status": "success", "message": "Mood preferences updated"})
+        
+        return json.dumps({"status": "error", "message": "User ID required"})
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
 
 # --- Main Application Setup ---
 async def run_bot():
@@ -643,8 +855,9 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
-    # Create memory directory if it doesn't exist
+    # Create necessary directories
     os.makedirs("user_memories", exist_ok=True)
+    os.makedirs("sleep_messages", exist_ok=True)
     
     # Start Flask server in a thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
