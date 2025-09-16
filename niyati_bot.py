@@ -589,45 +589,46 @@ GF_QUESTIONS = [
 ]
 
 # Everyday Care & Concern
-Everyday_Care_&_Concern = [
-    "Khaana khaya na time pe?"
-    "Paani piya ki nahi abhi tak?"
-    "Aaj office/college mein zyada thak gaye kya?"
+everyday_care_concern = [
+    "Khaana khaya na time pe?",
+    "Paani piya ki nahi abhi tak?",
+    "Aaj office/college mein zyada thak gaye kya?",
     "Tabiyat to theek hai na?"
 ]
 
 # Emotional & Affectionate
-Emotional_&_Affectionate = [
-    "Mujhe yaad kiya tha?"
-    "Tumhare bina bore lagta hai mujhe."
-    "Mujhe bataya kyun nahi jab busy the?"
+emotional_affectionate = [
+    "Mujhe yaad kiya tha?",
+    "Tumhare bina bore lagta hai mujhe.",
+    "Mujhe bataya kyun nahi jab busy the?",
     "Mere bina tumhe neend aati hai kya?"
 ]
 
 # Playful & Teasing
-Playful_&_Teasing = [
-    "Mujhe ignore kar rahe ho kya?"
-    "Abhi tak meri photo set nahi ki DP pe? 😏"
-    "Kya main tumhare dimaag mein rehti hoon poora din? 😉"
+playful_teasing = [
+    "Mujhe ignore kar rahe ho kya?",
+    "Abhi tak meri photo set nahi ki DP pe? 😏",
+    "Kya main tumhare dimaag mein rehti hoon poora din? 😉",
     "Meri smile pasand hai ya meri baatein?"
+]
     
 # Hard-to-get responses
 HARD_TO_GET_RESPONSES = [
     "Haha, abhi to main tumhe jaanti bhi nahi! Thoda time to do 😊",
-    "Itni jaldi? Pehle Phele ek dosre ko achhe se jaan lete hai! 😊",
+    "Itni jaldi? Pehle ek dosre ko achhe se jaan lete hai! 😊",
     "Main itni easily impress nahi hoti! 😉",
     "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
     "Hmm... dekhte hain, tum interesting to ho! 😊",
-    "I don’t really get it, but you keep trying! 😂"
-    "Arre wah, tum to kaafi confident ho! 😅"
-    "Bas bas, itni taarif sun kar main ud na jaun! 😌"
-    "Tumhe impress karna zyada easy lag raha hai ya mushkil? 😉"
-    "Kya tum hamesha itne filmy rehte ho? 🎬😏"
-    "Careful! Tumhari lines mujhe hasane lagi hain. 😂"
-    "Acha to tum itne interesting kab se ho gaye? 🤔😊"
-    "Thoda aur try karo… shayad impress ho jaun. 😇"
-    "Main dekh rahi hoon, tumhari creativity full swing mein hai! 😎"
-    "Hmm… tumhare answers mujhe curious kar rahe hain. 😉"
+    "I don’t really get it, but you keep trying! 😂",
+    "Arre wah, tum to kaafi confident ho! 😅",
+    "Bas bas, itni taarif sun kar main ud na jaun! 😌",
+    "Tumhe impress karna zyada easy lag raha hai ya mushkil? 😉",
+    "Kya tum hamesha itne filmy rehte ho? 🎬😏",
+    "Careful! Tumhari lines mujhe hasane lagi hain. 😂",
+    "Acha to tum itne interesting kab se ho gaye? 🤔😊",
+    "Thoda aur try karo… shayad impress ho jaun. 😇",
+    "Main dekh rahi hoon, tumhari creativity full swing mein hai! 😎",
+    "Hmm… tumhare answers mujhe curious kar rahe hain. 😉",
     "Mujhe lagta hai tumhe flirt karne ka full-time job mil sakta hai! 😏"
 ]
 
