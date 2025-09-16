@@ -7,7 +7,7 @@ import pickle
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from flask import Flask, request
-import openai
+from openai import OpenAI  # Updated import
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationBuilder
 from telegram.constants import ChatAction
@@ -52,8 +52,8 @@ OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", 0))
 
 flask_app = Flask(__name__)
 
-# Configure OpenAI
-openai.api_key = OPENAI_API_KEY
+# Configure OpenAI - Updated initialization
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # Timezone setup
 IST = pytz.timezone('Asia/Kolkata')
@@ -264,21 +264,21 @@ class EmotionalEngine:
                     "mood": "reserved",
                     "response": random.choice([
                         "Haha, abhi to main tumhe jaanti bhi nahi! Thoda time to do 😊",
-    "Itni jaldi? Pehle Phele ek dosre ko achhe se jaan lete hai! 😊",
-    "Main itni easily impress nahi hoti! 😉",
-    "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
-    "Hmm... dekhte hain, tum interesting to ho! 😊",
-    "I don’t really get it, but you keep trying! 😂"
-    "Arre wah, tum to kaafi confident ho! 😅"
-    "Bas bas, itni taarif sun kar main ud na jaun! 😌"
-    "Tumhe impress karna zyada easy lag raha hai ya mushkil? 😉"
-    "Kya tum hamesha itne filmy rehte ho? 🎬😏"
-    "Careful! Tumhari lines mujhe hasane lagi hain. 😂"
-    "Acha to tum itne interesting kab se ho gaye? 🤔😊"
-    "Thoda aur try karo… shayad impress ho jaun. 😇"
-    "Main dekh rahi hoon, tumhari creativity full swing mein hai! 😎"
-    "Hmm… tumhare answers mujhe curious kar rahe hain. 😉"
-    "Mujhe lagta hai tumhe flirt karne ka full-time job mil sakta hai! 😏"
+                        "Itni jaldi? Pehle Phele ek dosre ko achhe se jaan lete hai! 😊",
+                        "Main itni easily impress nahi hoti! 😉",
+                        "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
+                        "Hmm... dekhte hain, tum interesting to ho! 😊",
+                        "I don't really get it, but you keep trying! 😂",
+                        "Arre wah, tum to kaafi confident ho! 😅",
+                        "Bas bas, itni taarif sun kar main ud na jaun! 😌",
+                        "Tumhe impress karna zyada easy lag raha hai ya mushkil? 😉",
+                        "Kya tum hamesha itne filmy rehte ho? 🎬😏",
+                        "Careful! Tumhari lines mujhe hasane lagi hain. 😂",
+                        "Acha to tum itne interesting kab se ho gaye? 🤔😊",
+                        "Thoda aur try karo… shayad impress ho jaun. 😇",
+                        "Main dekh rahi hoon, tumhari creativity full swing mein hai! 😎",
+                        "Hmm… tumhare answers mujhe curious kar rahe hain. 😉",
+                        "Mujhe lagta hai tumhe flirt karne ka full-time job mil sakta hai! 😏"
                     ]),
                     "mood_change": 0
                 }
@@ -291,7 +291,7 @@ class EmotionalEngine:
                     "response": random.choice([
                         "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
                         "Hmm... dekhte hain, tum interesting to ho! 😊",
-                        "I don’t really get it, but you keep trying! 😂"
+                        "I don't really get it, but you keep trying! 😂"
                     ]),
                     "mood_change": 1
                 }
@@ -400,7 +400,7 @@ class ProactiveMessenger:
                             if stage == "initial":
                                 messages = [
                                     f"Good Morning {greeting_name}! ☀️ Aaj college ja rahe ho?",
-                                    f"Subah subah uth gaye {greeting_name}? Main to abhi uthi hoon! 😊 Ab Collage ke liye ready hone jaa rahi hoon 😕",
+                                    f"Subah subah uth gaye {greeting_name}? Main to abhi uthi hoon! 😊 Ab College ke liye ready hone jaa rahi hoon 😕",
                                     f"Morning {greeting_name}! Aaj ka plan kya hai?"
                                 ]
                             elif stage == "middle":
@@ -619,7 +619,7 @@ HARD_TO_GET_RESPONSES = [
     "Main itni easily impress nahi hoti! 😉",
     "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
     "Hmm... dekhte hain, tum interesting to ho! 😊",
-    "I don’t really get it, but you keep trying! 😂",
+    "I don't really get it, but you keep trying! 😂",
     "Arre wah, tum to kaafi confident ho! 😅",
     "Bas bas, itni taarif sun kar main ud na jaun! 😌",
     "Tumhe impress karna zyada easy lag raha hai ya mushkil? 😉",
@@ -685,28 +685,32 @@ async def generate_chatgpt_response(prompt, user_message):
         # Check if API key is available
         if not OPENAI_API_KEY:
             return None
+        
+        # Use the new OpenAI client
+        client = OpenAI(api_key=OPENAI_API_KEY)
             
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": user_message}
             ],
             max_tokens=150,
-            temperature=0.8,
-            timeout=10  # Add timeout to prevent hanging
+            temperature=0.8
         )
         return response.choices[0].message.content.strip()
-    except openai.error.AuthenticationError:
+    
+    # Updated exception handling
+    except openai.AuthenticationError:
         print("OpenAI Authentication Error: Invalid API key")
         return None
-    except openai.error.RateLimitError:
+    except openai.RateLimitError:
         print("OpenAI Rate Limit Error: Too many requests")
         return None
-    except openai.error.APIConnectionError:
+    except openai.APIConnectionError:
         print("OpenAI API Connection Error: Network issue")
         return None
-    except openai.error.Timeout:
+    except openai.APITimeoutError:
         print("OpenAI Timeout Error: Request timed out")
         return None
     except Exception as e:
