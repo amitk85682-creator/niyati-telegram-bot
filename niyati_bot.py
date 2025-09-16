@@ -760,7 +760,38 @@ def home():
 # --- Main Application Setup ---
 async def run_bot():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # --- Command Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    user = update.effective_user
+    welcome_message = f"""
+नमस्ते {user.first_name}! 👋
+
+मैं Niyati हूँ, एक कॉलेज स्टूडेंट। 
+चलो बात करते हैं और एक दूसरे को जानते हैं! 😊
+
+Just talk to me normally like you would with a friend!
+    """
+    await update.message.reply_text(welcome_message)
+
+async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /memory command - show memory info (owner only)"""
+    user_id = update.effective_user.id
     
+    if user_id != OWNER_USER_ID:
+        await update.message.reply_text("Sorry, this command is only for the bot owner.")
+        return
+        
+    memories = memory_system.load_memories(user_id)
+    memory_info = f"""
+Memory Info for User {user_id}:
+- Relationship Level: {memories['relationship_level']}
+- Conversation Stage: {memories['conversation_stage']}
+- Last Interaction: {memories['last_interaction']}
+- Stored Facts: {len(memories['important_facts'])}
+- Conversation History: {len(memories['conversation_history'])} exchanges
+    """
+    await update.message.reply_text(memory_info)
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("memory", memory_cmd))
