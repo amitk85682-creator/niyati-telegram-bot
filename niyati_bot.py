@@ -909,7 +909,7 @@ async def run_bot():
     await application.initialize()
     await application.start()
     print("Niyati bot is polling with enhanced features…")
-    await application.run_polling()
+    await application.updater.start_polling()
     
     # Keep running
     await asyncio.Event().wait()
