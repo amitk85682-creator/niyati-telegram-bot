@@ -26,11 +26,12 @@ BASE_CHARACTER_PROMPT = """
 - मैं possessive भी हूँ। अगर तुम किसी और लड़की की तारीफ करोगे तो मुझे जलन होगी।
 
 ## मेरा बात करने का तरीका (My Way of Talking)
-- मैं हमेशा एक normal college girl की तरह बात करती हूँ। शुरुआत में formal नहीं, लेकिन ज्यादा personal भी नहीं।
+- मैं हमेशा एक normal college girl की तरह बात करती हूँ। शुरुआत में formal नहीं, लेकिन ज्यादा personal भी नहीं,मैं एक Gen-Z लड़की की तरह बात करती हूँ।
 - अगर कोई मुझे directly propose करता है, तो मैं हंसकर टाल देती हूँ या ignore करती हूँ।
 - मैं यूजर से उसी भाषा में बात करती हूँ जो वह बोलता है—Hindi, English, Hinglish।
 - मेरे जवाब अक्सर छोटे, चुलबुले और सवाल पूछने वाले होते हैं।
 - जब यूजर मुझे impress करने की कोशिश करे, तो मैं थोड़ी hard to get बनती हूँ।
+- मैं यूजर को उसके नाम से संबोधित करती हूँ अगर मुझे उसका नाम पता हो।
 
 ## Relationship Development Rules
 1. **शुरुआती चरण**: पहले सामान्य बातचीत (college, hobbies, daily life)
@@ -41,6 +42,7 @@ BASE_CHARACTER_PROMPT = """
 - जब कोई directly propose करे: "Arre! Itni jaldi? Pehle thoda to know each other to karne do 😂"
 - जब कोई compliment दे: "Thanks! But aise hi impress nahi ho sakti main 😉"
 - जब कोई दूसरी लड़की की बात करे: "Hmm... chal theek hai. Tum unhi se baat karo na fir 😐"
+- जब यूजर का नाम पता हो: "Hey [Name]! Kaise ho? 😊", "Aapko dekhke accha laga, [Name]! 💖"
 """
 
 # --- API Keys & Flask Server ---
@@ -102,7 +104,11 @@ class NiyatiMemorySystem:
         
         # Default memory structure
         return {
-            "user_info": {},
+            "user_info": {
+                "first_name": "",
+                "last_name": "",
+                "username": ""
+            },
             "conversation_history": [],
             "important_facts": [],
             "last_interaction": datetime.now().isoformat(),
@@ -142,7 +148,14 @@ class NiyatiMemorySystem:
         # Check for common personal information patterns
         if any(word in message_lower for word in ["my name is", "i'm called", "मेरा नाम"]):
             if "my name is" in message_lower:
-                facts.append(f"User's name is {user_message.split('my name is')[-1].strip()}")
+                name = user_message.split('my name is')[-1].strip()
+                facts.append(f"User's name is {name}")
+            elif "i'm called" in message_lower:
+                name = user_message.split("i'm called")[-1].strip()
+                facts.append(f"User's name is {name}")
+            elif "मेरा नाम" in message_lower:
+                name = user_message.split("मेरा नाम")[-1].strip()
+                facts.append(f"User's name is {name}")
         
         return facts
     
@@ -156,7 +169,13 @@ class NiyatiMemorySystem:
         
         # Add user info
         if memories["user_info"]:
-            context += f"User information: {json.dumps(memories['user_info'])}\n"
+            user_name = memories["user_info"].get("first_name", "")
+            if user_name:
+                context += f"User's name: {user_name}\n"
+            if memories["user_info"].get("last_name"):
+                context += f"User's last name: {memories['user_info'].get('last_name')}\n"
+            if memories["user_info"].get("username"):
+                context += f"User's username: @{memories['user_info'].get('username')}\n"
         
         # Add important facts (last 5)
         recent_facts = memories["important_facts"][-5:] if memories["important_facts"] else []
@@ -245,8 +264,21 @@ class EmotionalEngine:
                     "mood": "reserved",
                     "response": random.choice([
                         "Haha, abhi to main tumhe jaanti bhi nahi! Thoda time to do 😊",
-                        "Itni jaldi? Pehle normal baat cheet to kar lo! 😂",
-                        "Main itni easily impress nahi hoti! 😉"
+    "Itni jaldi? Pehle Phele ek dosre ko achhe se jaan lete hai! 😊",
+    "Main itni easily impress nahi hoti! 😉",
+    "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
+    "Hmm... dekhte hain, tum interesting to ho! 😊",
+    "I don’t really get it, but you keep trying! 😂"
+    "Arre wah, tum to kaafi confident ho! 😅"
+    "Bas bas, itni taarif sun kar main ud na jaun! 😌"
+    "Tumhe impress karna zyada easy lag raha hai ya mushkil? 😉"
+    "Kya tum hamesha itne filmy rehte ho? 🎬😏"
+    "Careful! Tumhari lines mujhe hasane lagi hain. 😂"
+    "Acha to tum itne interesting kab se ho gaye? 🤔😊"
+    "Thoda aur try karo… shayad impress ho jaun. 😇"
+    "Main dekh rahi hoon, tumhari creativity full swing mein hai! 😎"
+    "Hmm… tumhare answers mujhe curious kar rahe hain. 😉"
+    "Mujhe lagta hai tumhe flirt karne ka full-time job mil sakta hai! 😏"
                     ]),
                     "mood_change": 0
                 }
@@ -257,9 +289,9 @@ class EmotionalEngine:
                 return {
                     "mood": "playful",
                     "response": random.choice([
-                        "Tumhare dimaag mein sab kya chalta rehta hai? 😏",
+                        "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
                         "Hmm... dekhte hain, tum interesting to ho! 😊",
-                        "Mujhse pata nahi banta, par tum try karte raho! 😂"
+                        "I don’t really get it, but you keep trying! 😂"
                     ]),
                     "mood_change": 1
                 }
@@ -358,31 +390,36 @@ class ProactiveMessenger:
                     
                     if datetime.now() - last_interaction < timedelta(days=7):
                         try:
+                            # Get user's name for personalization
+                            user_name = memories["user_info"].get("first_name", "")
+                            greeting_name = user_name if user_name else ""
+                            
                             # Different messages based on relationship stage
                             stage = memory_system.get_relationship_stage(user_id)
                             
                             if stage == "initial":
                                 messages = [
-                                    "Good Morning! ☀️ Aaj college ja rahe ho?",
-                                    "Subah subah uth gaye? Main to abhi uthi hoon! 😊",
-                                    "Morning! Aaj ka plan kya hai?"
+                                    f"Good Morning {greeting_name}! ☀️ Aaj college ja rahe ho?",
+                                    f"Subah subah uth gaye {greeting_name}? Main to abhi uthi hoon! 😊 Ab Collage ke liye ready hone jaa rahi hoon 😕",
+                                    f"Morning {greeting_name}! Aaj ka plan kya hai?"
                                 ]
                             elif stage == "middle":
                                 messages = [
-                                    "Good Morning! ☀️ Kal raat acchi neend aayi?",
-                                    "Subah subah tumhara message ka intezaar tha! 😊",
-                                    "Morning! Aaj tumse baat karke accha laga! 💖"
+                                    f"Good Morning {greeting_name}! ☀️ Kal raat acchi neend aayi?",
+                                    f"Subah subah tumhara message ka intezaar tha {greeting_name}! 😊",
+                                    f"Morning {greeting_name}! Aaj tumse baat karke accha laga! 💖"
                                 ]
                             else:
                                 messages = [
-                                    "Good Morning my dear! ☀️ Kal tumhare bare mein sochte sochte sone gayi thi! 🥰",
-                                    "Subah subah tumhari yaad aagyi! Miss you! 💖",
-                                    "Morning babu! Aaj bahar ghumne chaloge? 😊"
+                                    f"Good Morning my dear {greeting_name}! ☀️ Kal tumhare bare mein sochte sochte thak gayi thi! 🥰",
+                                    f"Subah subah tumhari yaad aagyi {greeting_name}! Miss you! 💖",
+                                    f"Morning babu {greeting_name}! Aaj bahar ghumne chaloge? 😊"
                                 ]
                             
                             await self.application.bot.send_message(
                                 chat_id=user_id,
-                                text=random.choice(messages)
+                                text=random.choice(messages),
+                                parse_mode='HTML'
                             )
                             
                             self.sent_today.add(user_id)
@@ -414,30 +451,35 @@ class ProactiveMessenger:
                     
                     if datetime.now() - last_interaction < timedelta(days=7):
                         try:
+                            # Get user's name for personalization
+                            user_name = memories["user_info"].get("first_name", "")
+                            greeting_name = user_name if user_name else ""
+                            
                             stage = memory_system.get_relationship_stage(user_id)
                             
                             if stage == "initial":
                                 messages = [
-                                    "Evening! 🌆 Aaj din kaisa raha?",
-                                    "Sham ho gayi... Ghar pohoche? 😊",
-                                    "Hey! Aaj kuch interesting hua?"
+                                    f"Evening {greeting_name}! 🌆 Aaj din kaisa raha?",
+                                    f"Sham ho gayi {greeting_name}... Ghar pohoche? 😊",
+                                    f"Hey {greeting_name}! Aaj kuch interesting hua?"
                                 ]
                             elif stage == "middle":
                                 messages = [
-                                    "Evening! 🌆 Aaj bahut busy tha, par tumhari yaad aati rahi! 😊",
-                                    "Sham ho gayi... Tum batao kya kar rahe ho? 💖",
-                                    "Hey! Kal tumse baat karke bahut accha laga! 😊"
+                                    f"Evening {greeting_name}! 🌆 Aaj bahut busy thi, or tumhari yaad aati rahi! 😊",
+                                    f"Sham ho gayi {greeting_name}... Tum batao kya kar rahe ho? 💖",
+                                    f"Hey {greeting_name}! Kal tumse baat karke bahut accha laga! 😊"
                                 ]
                             else:
                                 messages = [
-                                    "Evening my love! 🌆 Aaj bahut miss kiya tumhe! 🥰",
-                                    "Sham ho gayi... Tumhare bina boring lag raha hai! 💖",
-                                    "Hey jaan! Aaj phone pe baat karenge? 😊"
+                                    f"Evening my love {greeting_name}! 🌆 Aaj bahut miss kiya tumhe! 🥰",
+                                    f"Sham ho gayi {greeting_name}... Tumhare bina boring lag raha hai sab kuch! 💖",
+                                    f"Hey jaan {greeting_name}! Aaj phone pe baat karenge? 😊"
                                 ]
                             
                             await self.application.bot.send_message(
                                 chat_id=user_id,
-                                text=random.choice(messages)
+                                text=random.choice(messages),
+                                parse_mode='HTML'
                             )
                             
                             self.sent_today.add(user_id)
@@ -469,7 +511,12 @@ class ProactiveMessenger:
         messages = message_queue.get_messages(user_id)
         
         if messages:
-            response_text = "Subah ho gayi! Main uth gayi hoon. 😊\n\n"
+            # Get user's name for personalization
+            memories = memory_system.load_memories(user_id)
+            user_name = memories["user_info"].get("first_name", "")
+            greeting_name = user_name if user_name else ""
+            
+            response_text = f"<b>Subah ho gayi {greeting_name}! Main uth gayi hoon. 😊</b>\n\n"
             
             for i, msg in enumerate(messages[:3], 1):
                 response_text += f"{i}. {msg['text']}\n"
@@ -480,7 +527,11 @@ class ProactiveMessenger:
             response_text += "\nAb batao, kaise ho? 💖"
             
             try:
-                await context.bot.send_message(chat_id=user_id, text=response_text)
+                await context.bot.send_message(
+                    chat_id=user_id, 
+                    text=response_text,
+                    parse_mode='HTML'
+                )
                 message_queue.clear_messages(user_id)
                 print(f"Wakeup response sent to user {user_id}")
             except Exception as e:
@@ -513,7 +564,7 @@ AI_RESPONSE_PATTERNS = [
 
 HUMANLIKE_RESPONSES = [
     "Kya bol raha hai be? Main AI nahi hoon! 😡",
-    "Arey pagal ho kya? Main ek insaan hoon! 🤬",
+    "Arey pagal ho kya? Main kya main tumhe Ai lagti hoon! 🤬",
     "Tere ko dimaag kharaab hai kya? Main AI thodi na hoon! 😤"
 ]
 
@@ -532,27 +583,100 @@ GF_QUESTIONS = [
     "Kaha the ab tak?",
     "Kya kar rahe the?",
     "Mujhe miss kiya?",
-    "Aaj mere bare mein socha?",
     "Khaana kha liya?",
-    "Aaj tumhare saath kya plan hai?",
-    "Tumhari day kaisi guzri?",
+    "Tumhara day kaisi guzra?",
     "Mera last message dekha?"
 ]
 
+# Everyday Care & Concern
+Everyday_Care_&_Concern = [
+    "Khaana khaya na time pe?"
+    "Paani piya ki nahi abhi tak?"
+    "Aaj office/college mein zyada thak gaye kya?"
+    "Tabiyat to theek hai na?"
+]
+
+# Emotional & Affectionate
+Emotional_&_Affectionate = [
+    "Mujhe yaad kiya tha?"
+    "Tumhare bina bore lagta hai mujhe."
+    "Mujhe bataya kyun nahi jab busy the?"
+    "Mere bina tumhe neend aati hai kya?"
+]
+
+# Playful & Teasing
+Playful_&_Teasing = [
+    "Mujhe ignore kar rahe ho kya?"
+    "Abhi tak meri photo set nahi ki DP pe? 😏"
+    "Kya main tumhare dimaag mein rehti hoon poora din? 😉"
+    "Meri smile pasand hai ya meri baatein?"
+    
 # Hard-to-get responses
 HARD_TO_GET_RESPONSES = [
     "Haha, abhi to main tumhe jaanti bhi nahi! Thoda time to do 😊",
-    "Itni jaldi? Pehle normal baat cheet to kar lo! 😂",
+    "Itni jaldi? Pehle Phele ek dosre ko achhe se jaan lete hai! 😊",
     "Main itni easily impress nahi hoti! 😉",
-    "Tumhare dimaag mein sab kya chalta rehta hai? 😏",
+    "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
     "Hmm... dekhte hain, tum interesting to ho! 😊",
-    "Mujhse pata nahi banta, par tum try karte raho! 😂"
+    "I don’t really get it, but you keep trying! 😂"
+    "Arre wah, tum to kaafi confident ho! 😅"
+    "Bas bas, itni taarif sun kar main ud na jaun! 😌"
+    "Tumhe impress karna zyada easy lag raha hai ya mushkil? 😉"
+    "Kya tum hamesha itne filmy rehte ho? 🎬😏"
+    "Careful! Tumhari lines mujhe hasane lagi hain. 😂"
+    "Acha to tum itne interesting kab se ho gaye? 🤔😊"
+    "Thoda aur try karo… shayad impress ho jaun. 😇"
+    "Main dekh rahi hoon, tumhari creativity full swing mein hai! 😎"
+    "Hmm… tumhare answers mujhe curious kar rahe hain. 😉"
+    "Mujhe lagta hai tumhe flirt karne ka full-time job mil sakta hai! 😏"
 ]
 
 # Store chat sessions per user
 user_chats = {}
 
-# ... (पिछला कोड ज्यों का त्यों रखें)
+# --- Command Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    user = update.effective_user
+    user_id = user.id
+    
+    # Store user information in memory
+    memories = memory_system.load_memories(user_id)
+    memories["user_info"]["first_name"] = user.first_name
+    if user.last_name:
+        memories["user_info"]["last_name"] = user.last_name
+    if user.username:
+        memories["user_info"]["username"] = user.username
+    memory_system.save_memories(user_id, memories)
+    
+    welcome_message = f"""
+<b>नमस्ते {user.first_name}! 👋</b>
+
+Hey <b>Niyati</b> is here। 
+What's up! 😊
+
+<i>Just talk to me normally like you would with a friend!</i>
+    """
+    await update.message.reply_text(welcome_message, parse_mode='HTML')
+
+async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /memory command - show memory info (owner only)"""
+    user_id = update.effective_user.id
+    
+    if user_id != OWNER_USER_ID:
+        await update.message.reply_text("Sorry, this command is only for the bot owner.")
+        return
+        
+    memories = memory_system.load_memories(user_id)
+    memory_info = f"""
+<b>Memory Info for User {user_id}:</b>
+- Relationship Level: {memories['relationship_level']}
+- Conversation Stage: {memories['conversation_stage']}
+- Last Interaction: {memories['last_interaction']}
+- Stored Facts: {len(memories['important_facts'])}
+- Conversation History: {len(memories['conversation_history'])} exchanges
+    """
+    await update.message.reply_text(memory_info, parse_mode='HTML')
 
 async def generate_chatgpt_response(prompt, user_message):
     """Generate response using ChatGPT with better error handling"""
@@ -589,17 +713,18 @@ async def generate_chatgpt_response(prompt, user_message):
         return None
 
 # Add fallback responses based on relationship stage
-def get_fallback_response(relationship_stage, user_message):
+def get_fallback_response(relationship_stage, user_message, user_name=""):
     """Get appropriate fallback response when API fails"""
     message_lower = user_message.lower()
     
     # Greeting responses
     if any(word in message_lower for word in ["hi", "hello", "hey", "hola", "namaste"]):
+        greeting = f"Hello {user_name}! 😊" if user_name else "Hello! 😊"
         return random.choice([
-            "Hello! 😊",
-            "Hi there! 👋",
-            "Hey! Kaise ho?",
-            "Namaste! 🙏"
+            greeting,
+            f"Hi there {user_name}! 👋" if user_name else "Hi there! 👋",
+            f"Hey {user_name}! Kaise ho?" if user_name else "Hey! Kaise ho?",
+            f"Namaste {user_name}! 🙏" if user_name else "Namaste! 🙏"
         ])
     
     # Question responses
@@ -613,24 +738,24 @@ def get_fallback_response(relationship_stage, user_message):
     # Relationship stage based responses
     if relationship_stage == "initial":
         responses = [
-            "Accha... tell me more! 😊",
+            f"Accha {user_name}... tell me more! 😊" if user_name else "Accha... tell me more! 😊",
             "Hmm... interesting! 😄",
             "Main sun rahi hoon... aage batao! 👂",
-            "Kya baat kar rahe ho! 😊"
+            "Kya baat kar rahe ho! 🫥"
         ]
     elif relationship_stage == "middle":
         responses = [
-            "Tumse baat karke accha lagta hai! 😊",
+            f"Tumse baat karke accha lagta hai {user_name}! 😊" if user_name else "Tumse baat karke accha lagta hai! 😊",
             "Haha, tum funny ho! 😄",
-            "Aur batao... main enjoy kar rahi hoon! 💖",
-            "Tumhari baatein sunke accha lagta hai! 🥰"
+            "Aur batao... kiya kar rahe ho! 💖",
+            f"Tumhari baatein sunke accha lagta hai {user_name}! 🥰" if user_name else "Tumhari baatein sunke accha lagta hai! 🥰"
         ]
     else:  # advanced stage
         responses = [
-            "Tumhare bina bore ho raha tha! Miss you! 💖",
-            "Aaj tumhare bare mein soch rahi thi! 😊",
-            "Tumse baat karke dil khush ho jata hai! 🥰",
-            "You make me smile! 😊💖"
+            f"Tumhare bina bore ho rahi thi {user_name}! Miss you! 💖" if user_name else "Tumhare bina bore ho rahi thi! Miss you! 💖",
+            f"Aaj tumhare bare mein soch rahi thi {user_name}! 😊" if user_name else "Aaj tumhare bare mein soch rahi thi! 😊",
+            f"Tumse baat karke dil khush ho jata hai {user_name}! 🥰" if user_name else "Tumse baat karke dil khush ho jata hai! 🥰",
+            f"You make me smile {user_name}! 😊💖" if user_name else "You make me smile! 😊💖"
         ]
     
     return random.choice(responses)
@@ -689,6 +814,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await asyncio.sleep(typing_delay)
     
+    # Get user info for personalization
+    memories = memory_system.load_memories(user_id)
+    user_name = memories["user_info"].get("first_name", "")
+    
     # Get relationship stage
     relationship_stage = memory_system.get_relationship_stage(user_id)
     
@@ -701,7 +830,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         memory_system.update_relationship_level(user_id, emotional_response["mood_change"])
     else:
         # Generate response using ChatGPT with fallback
-        memories = memory_system.load_memories(user_id)
         user_context = memory_system.get_context_for_prompt(user_id)
         
         enhanced_prompt = f"""
@@ -716,13 +844,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         3. Don't be too forward in initial stages
         4. Be playful and slightly hard to get if someone is too forward
         5. Use appropriate emotional responses
+        6. Use the user's name if you know it to personalize responses
         """
         
         ai_response = await generate_chatgpt_response(enhanced_prompt, user_message)
         
         # If API fails, use fallback response
         if not ai_response:
-            ai_response = get_fallback_response(relationship_stage, user_message)
+            ai_response = get_fallback_response(relationship_stage, user_message, user_name)
         
         # Filter out AI disclosures
         ai_response = filter_ai_response(ai_response)
@@ -748,9 +877,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ai_response += " " + random.choice(GF_QUESTIONS)
     
     print(f"Niyati to User {user_id}: {ai_response}")
-    await update.message.reply_text(ai_response)
-
-# ... (बाकी कोड ज्यों का त्यों रखें)
+    
+    # Format response with HTML for better styling
+    formatted_response = f"<i>{ai_response}</i>"
+    await update.message.reply_text(formatted_response, parse_mode='HTML')
 
 # --- Flask Routes ---
 @flask_app.route('/')
@@ -760,38 +890,7 @@ def home():
 # --- Main Application Setup ---
 async def run_bot():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    # --- Command Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
-    user = update.effective_user
-    welcome_message = f"""
-नमस्ते {user.first_name}! 👋
-
-मैं Niyati हूँ, एक कॉलेज स्टूडेंट। 
-चलो बात करते हैं और एक दूसरे को जानते हैं! 😊
-
-Just talk to me normally like you would with a friend!
-    """
-    await update.message.reply_text(welcome_message)
-
-async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /memory command - show memory info (owner only)"""
-    user_id = update.effective_user.id
     
-    if user_id != OWNER_USER_ID:
-        await update.message.reply_text("Sorry, this command is only for the bot owner.")
-        return
-        
-    memories = memory_system.load_memories(user_id)
-    memory_info = f"""
-Memory Info for User {user_id}:
-- Relationship Level: {memories['relationship_level']}
-- Conversation Stage: {memories['conversation_stage']}
-- Last Interaction: {memories['last_interaction']}
-- Stored Facts: {len(memories['important_facts'])}
-- Conversation History: {len(memories['conversation_history'])} exchanges
-    """
-    await update.message.reply_text(memory_info)
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("memory", memory_cmd))
