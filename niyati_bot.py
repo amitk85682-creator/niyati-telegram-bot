@@ -895,28 +895,62 @@ def home():
 
 # --- Main Application Setup ---
 async def run_bot():
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("memory", memory_cmd))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    try:
+        # Build application with better timeout settings
+        application = (
+            Application.builder()
+            .token(TELEGRAM_BOT_TOKEN)
+            .connect_timeout(30)
+            .read_timeout(30)
+            .pool_timeout(30)
+            .build()
+        )
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("memory", memory_cmd))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Start proactive messaging
-    proactive_messenger = ProactiveMessenger(application)
-    proactive_messenger.start()
-    
-    await application.initialize()
-    await application.start()
-    print("Niyati bot is polling with enhanced features…")
-    await application.updater.start_polling()
-    
+        # Start proactive messaging
+        proactive_messenger = ProactiveMessenger(application)
+        proactive_messenger.start()
+        
+        print("Niyati bot is starting with enhanced connection settings...")
+        
+        # Use webhook instead of polling for better reliability
+        webhook_url = f"https://your-app-name.onrender.com/{TELEGRAM_BOT_TOKEN}"
+        await application.bot.set_webhook(webhook_url)
+        
+        print(f"Webhook set to: {webhook_url}")
+        
+    except Exception as e:
+        print(f"Error starting bot: {e}")
+        # Fallback to polling if webhook fails
+        try:
+            print("Trying polling as fallback...")
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling(
+                poll_interval=3, 
+                timeout=30,
+                drop_pending_updates=True
+            )
+            print("Niyati bot is polling with enhanced features...")
+        except Exception as poll_error:
+            print(f"Polling also failed: {poll_error}")
+            
     # Keep running
     await asyncio.Event().wait()
 
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+@flask_app.route(f'/{TELEGRAM_BOT_TOKEN}', methods=['POST'])
+async def webhook():
+    try:
+        update = Update.de_json(await request.get_json(), application.bot)
+        await application.process_update(update)
+        return "OK"
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return "Error", 500
 
 if __name__ == "__main__":
     # Create necessary directories
