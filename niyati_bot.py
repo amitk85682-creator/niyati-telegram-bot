@@ -7,8 +7,7 @@ import pickle
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from flask import Flask, request
-import openai
-from openai import OpenAI
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationBuilder
 from telegram.constants import ChatAction
@@ -48,13 +47,17 @@ BASE_CHARACTER_PROMPT = """
 
 # --- API Keys & Flask Server ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Changed from OPENAI_API_KEY
 OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", 0))
 
 flask_app = Flask(__name__)
 
-# Configure OpenAI - Updated initialization
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+# Configure Gemini - New initialization
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-2.0-flash')  # Using Gemini Flash model
+else:
+    gemini_model = None
 
 # Timezone setup
 IST = pytz.timezone('Asia/Kolkata')
@@ -680,42 +683,27 @@ async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(memory_info, parse_mode='HTML')
 
-async def generate_chatgpt_response(prompt, user_message):
-    """Generate response using ChatGPT with better error handling"""
+async def generate_gemini_response(prompt, user_message):
+    """Generate response using Gemini API with better error handling"""
     try:
         # Check if API key is available
-        if not OPENAI_API_KEY:
+        if not GEMINI_API_KEY:
             return None
         
-        # Use the new OpenAI client
-        client = OpenAI(api_key=OPENAI_API_KEY)
-            
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=150,
-            temperature=0.8
-        )
-        return response.choices[0].message.content.strip()
+        # Create the full prompt for Gemini
+        full_prompt = f"{prompt}\n\nUser: {user_message}\nNiyati:"
+        
+        # Generate content using Gemini
+        response = gemini_model.generate_content(full_prompt)
+        
+        # Extract the text from the response
+        if response and response.text:
+            return response.text.strip()
+        else:
+            return None
     
-    # Updated exception handling
-    except openai.AuthenticationError:
-        print("OpenAI Authentication Error: Invalid API key")
-        return None
-    except openai.RateLimitError:
-        print("OpenAI Rate Limit Error: Too many requests")
-        return None
-    except openai.APIConnectionError:
-        print("OpenAI API Connection Error: Network issue")
-        return None
-    except openai.APITimeoutError:
-        print("OpenAI Timeout Error: Request timed out")
-        return None
     except Exception as e:
-        print(f"OpenAI API error: {e}")
+        print(f"Gemini API error: {e}")
         return None
 
 # Add fallback responses based on relationship stage
@@ -835,7 +823,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_response = emotional_response["response"]
         memory_system.update_relationship_level(user_id, emotional_response["mood_change"])
     else:
-        # Generate response using ChatGPT with fallback
+        # Generate response using Gemini with fallback
         user_context = memory_system.get_context_for_prompt(user_id)
         
         enhanced_prompt = f"""
@@ -853,7 +841,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         6. Use the user's name if you know it to personalize responses
         """
         
-        ai_response = await generate_chatgpt_response(enhanced_prompt, user_message)
+        ai_response = await generate_gemini_response(enhanced_prompt, user_message)
         
         # If API fails, use fallback response
         if not ai_response:
