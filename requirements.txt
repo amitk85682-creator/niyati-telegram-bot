@@ -1,7 +1,7 @@
 pytz==2025.2
-python-telegram-bot==20.7
+python-telegram-bot>=21.0  # Check for updates
 flask==2.3.3
 apscheduler==3.10.4
-openai>=1.0.0
+openai
 python-dotenv==1.0.0
 waitress==2.1.2
