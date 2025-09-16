@@ -7,7 +7,8 @@ import pickle
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from flask import Flask, request
-from openai import OpenAI  # Updated import
+import openai
+from openai import OpenAI
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationBuilder
 from telegram.constants import ChatAction
@@ -908,7 +909,7 @@ async def run_bot():
     await application.initialize()
     await application.start()
     print("Niyati bot is polling with enhanced features…")
-    await application.updater.start_polling()
+    await application.run_polling()
     
     # Keep running
     await asyncio.Event().wait()
