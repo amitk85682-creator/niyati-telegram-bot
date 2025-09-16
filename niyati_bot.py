@@ -552,9 +552,15 @@ HARD_TO_GET_RESPONSES = [
 # Store chat sessions per user
 user_chats = {}
 
+# ... (पिछला कोड ज्यों का त्यों रखें)
+
 async def generate_chatgpt_response(prompt, user_message):
-    """Generate response using ChatGPT"""
+    """Generate response using ChatGPT with better error handling"""
     try:
+        # Check if API key is available
+        if not OPENAI_API_KEY:
+            return None
+            
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -562,90 +568,74 @@ async def generate_chatgpt_response(prompt, user_message):
                 {"role": "user", "content": user_message}
             ],
             max_tokens=150,
-            temperature=0.8
+            temperature=0.8,
+            timeout=10  # Add timeout to prevent hanging
         )
         return response.choices[0].message.content.strip()
+    except openai.error.AuthenticationError:
+        print("OpenAI Authentication Error: Invalid API key")
+        return None
+    except openai.error.RateLimitError:
+        print("OpenAI Rate Limit Error: Too many requests")
+        return None
+    except openai.error.APIConnectionError:
+        print("OpenAI API Connection Error: Network issue")
+        return None
+    except openai.error.Timeout:
+        print("OpenAI Timeout Error: Request timed out")
+        return None
     except Exception as e:
         print(f"OpenAI API error: {e}")
         return None
 
-# --- Telegram Bot Functions ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+# Add fallback responses based on relationship stage
+def get_fallback_response(relationship_stage, user_message):
+    """Get appropriate fallback response when API fails"""
+    message_lower = user_message.lower()
     
-    if is_sleeping_time():
-        message_queue.add_message(
-            user_id, 
-            "/start command during sleep", 
-            datetime.now().isoformat()
-        )
-        
-        current_hour = get_ist_time().hour
-        
-        if current_hour < 6:
-            await update.message.reply_text(
-                "Shhh... Main so rahi hoon. 😴 Subah 10 baje tak message karna, tab tak sone do na! 🌙"
-            )
-        else:
-            await update.message.reply_text(
-                "Uff... subah ke 10 baje tak soti hoon main. 😴 Thodi der baad message karna, abhi neend aa rahi hai! 🌅"
-            )
-        return
+    # Greeting responses
+    if any(word in message_lower for word in ["hi", "hello", "hey", "hola", "namaste"]):
+        return random.choice([
+            "Hello! 😊",
+            "Hi there! 👋",
+            "Hey! Kaise ho?",
+            "Namaste! 🙏"
+        ])
     
-    memories = memory_system.load_memories(user_id)
-    memory_system.save_memories(user_id, memories)
+    # Question responses
+    if "?" in user_message:
+        return random.choice([
+            "Interesting question... Main sochti hoon iske bare mein! 🤔",
+            "Hmm... yeh to sochna padega! 😊",
+            "Tumhare sawaal bahut interesting hote hain! 😄"
+        ])
     
-    time_of_day = get_time_of_day()
-    
-    if time_of_day == "morning":
-        welcome_messages = [
-            "Good Morning! ☀️ Kaise ho?",
-            "Subah subah message! 😊 Uth gaye kya?",
-            "Morning! Aaj kya plan hai? 💖"
+    # Relationship stage based responses
+    if relationship_stage == "initial":
+        responses = [
+            "Accha... tell me more! 😊",
+            "Hmm... interesting! 😄",
+            "Main sun rahi hoon... aage batao! 👂",
+            "Kya baat kar rahe ho! 😊"
         ]
-    elif time_of_day == "afternoon":
-        welcome_messages = [
-            "Hello! 😊 Dopahar kaisi guzr rahi hai?",
-            "Hey! Lunch ho gaya? 🍲",
-            "Afternoon mein bhi yaad aaye tum! 💕"
+    elif relationship_stage == "middle":
+        responses = [
+            "Tumse baat karke accha lagta hai! 😊",
+            "Haha, tum funny ho! 😄",
+            "Aur batao... main enjoy kar rahi hoon! 💖",
+            "Tumhari baatein sunke accha lagta hai! 🥰"
         ]
-    elif time_of_day == "evening":
-        welcome_messages = [
-            "Good Evening! 🌆 Chai pi li?",
-            "Sham ho gayi... Kya kar rahe ho? 😊",
-            "Evening check-in! Aaj kuch interesting hua? 💖"
-        ]
-    else:
-        welcome_messages = [
-            "Hello! 🌙 Raat ko bhi yaad aaye?",
-            "Hey! So nahi gaye abhi tak? 😊",
-            "Good Night! Par so jaao, der ho gayi hai! 💤"
+    else:  # advanced stage
+        responses = [
+            "Tumhare bina bore ho raha tha! Miss you! 💖",
+            "Aaj tumhare bare mein soch rahi thi! 😊",
+            "Tumse baat karke dil khush ho jata hai! 🥰",
+            "You make me smile! 😊💖"
         ]
     
-    await update.message.reply_text(random.choice(welcome_messages))
+    return random.choice(responses)
 
-async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show what Niyati remembers about the user"""
-    user_id = update.message.from_user.id
-    memories = memory_system.load_memories(user_id)
-    
-    memory_text = "Mujhe tumhare baare mein yeh yaad hai:\n\n"
-    
-    if memories["user_info"]:
-        memory_text += "📋 User Information:\n"
-        for key, value in memories["user_info"].items():
-            memory_text += f"• {key}: {value}\n"
-        memory_text += "\n"
-    
-    if memories["important_facts"]:
-        memory_text += "🌟 Important Facts:\n"
-        for fact in memories["important_facts"][-5:]:
-            memory_text += f"• {fact}\n"
-    else:
-        memory_text += "Abhi tak kuch khaas yaad nahi hai tumhare baare mein. 😔\nThoda aur baat karo, yaad rakhungi! 💖"
-    
-    await update.message.reply_text(memory_text)
-
+# Update the handle_message function
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: 
         return
@@ -710,7 +700,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_response = emotional_response["response"]
         memory_system.update_relationship_level(user_id, emotional_response["mood_change"])
     else:
-        # Generate normal response using ChatGPT
+        # Generate response using ChatGPT with fallback
         memories = memory_system.load_memories(user_id)
         user_context = memory_system.get_context_for_prompt(user_id)
         
@@ -730,13 +720,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         ai_response = await generate_chatgpt_response(enhanced_prompt, user_message)
         
+        # If API fails, use fallback response
         if not ai_response:
-            error_responses = [
-                "Offo! Mera mood kharab ho gaya hai. 😤 Kuch ajeeb sa error aa raha hai, baad me message karna.",
-                "Arey yaar! Mera phone hang ho raha hai. 😫 Thodi der baad message karti hoon.",
-            ]
-            await update.message.reply_text(random.choice(error_responses))
-            return
+            ai_response = get_fallback_response(relationship_stage, user_message)
         
         # Filter out AI disclosures
         ai_response = filter_ai_response(ai_response)
@@ -763,6 +749,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     print(f"Niyati to User {user_id}: {ai_response}")
     await update.message.reply_text(ai_response)
+
+# ... (बाकी कोड ज्यों का त्यों रखें)
 
 # --- Flask Routes ---
 @flask_app.route('/')
