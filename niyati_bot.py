@@ -7,13 +7,13 @@ import pickle
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from flask import Flask, request
-import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ApplicationBuilder
 from telegram.constants import ChatAction
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
+import httpx
 
 # --- Enhanced Personality Prompt with Hard-to-Get Behavior ---
 BASE_CHARACTER_PROMPT = """
@@ -47,17 +47,10 @@ BASE_CHARACTER_PROMPT = """
 
 # --- API Keys & Flask Server ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Changed from OPENAI_API_KEY
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", 0))
 
 flask_app = Flask(__name__)
-
-# Configure Gemini - New initialization
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-2.0-flash')  # Using Gemini Flash model
-else:
-    gemini_model = None
 
 # Timezone setup
 IST = pytz.timezone('Asia/Kolkata')
@@ -683,27 +676,42 @@ async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(memory_info, parse_mode='HTML')
 
-async def generate_gemini_response(prompt, user_message):
-    """Generate response using Gemini API with better error handling"""
+async def generate_deepseek_response(prompt, user_message):
+    """Generate response using DeepSeek API"""
     try:
-        # Check if API key is available
-        if not GEMINI_API_KEY:
+        if not DEEPSEEK_API_KEY:
             return None
+            
+        # DeepSeek API endpoint
+        url = "https://api.deepseek.com/v1/chat/completions"
         
-        # Create the full prompt for Gemini
-        full_prompt = f"{prompt}\n\nUser: {user_message}\nNiyati:"
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
         
-        # Generate content using Gemini
-        response = gemini_model.generate_content(full_prompt)
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_message}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 1000
+        }
         
-        # Extract the text from the response
-        if response and response.text:
-            return response.text.strip()
-        else:
-            return None
-    
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=data, headers=headers, timeout=30.0)
+            response.raise_for_status()
+            result = response.json()
+            
+            if 'choices' in result and len(result['choices']) > 0:
+                return result['choices'][0]['message']['content'].strip()
+            
+        return None
+        
     except Exception as e:
-        print(f"Gemini API error: {e}")
+        print(f"DeepSeek API error: {e}")
         return None
 
 # Add fallback responses based on relationship stage
@@ -823,7 +831,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_response = emotional_response["response"]
         memory_system.update_relationship_level(user_id, emotional_response["mood_change"])
     else:
-        # Generate response using Gemini with fallback
+        # Generate response using DeepSeek with fallback
         user_context = memory_system.get_context_for_prompt(user_id)
         
         enhanced_prompt = f"""
@@ -841,7 +849,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         6. Use the user's name if you know it to personalize responses
         """
         
-        ai_response = await generate_gemini_response(enhanced_prompt, user_message)
+        ai_response = await generate_deepseek_response(enhanced_prompt, user_message)
         
         # If API fails, use fallback response
         if not ai_response:
