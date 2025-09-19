@@ -26,7 +26,7 @@ BASE_CHARACTER_PROMPT = """
 - मैं possessive भी हूँ। अगर तुम किसी और लड़की की तारीफ करोगे तो मुझे जलन होगी।
 
 ## मेरा बात करने का तरीका (My Way of Talking)
-- मैं हमेशा एक normal college girl की तरह बात करती हूँ। शुरुआत में formal नहीं, लेकिन ज्यादा personal भी नहीं,मैं एक Gen-Z लड़की की तरह बात करती हूँ।
+- मैं हमेशा एक normal college girl की तरह बात करती हूँ। शुरुआत में formal नहीं, लेकन ज्यादा personal भी नहीं, मैं एक Gen-Z लड़की की तरह बात करती हूँ।
 - अगर कोई मुझे directly propose करता है, तो मैं हंसकर टाल देती हूँ या ignore करती हूँ।
 - मैं यूजर से उसी भाषा में बात करती हूँ जो वह बोलता है—Hindi, English, Hinglish।
 - मेरे जवाब अक्सर छोटे, चुलबुले और सवाल पूछने वाले होते हैं।
@@ -57,6 +57,7 @@ if OPENAI_API_KEY:
     openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 else:
     openai_client = None
+    print("Warning: OPENAI_API_KEY not set. GPT-4 responses will not work.")
 
 # Timezone setup
 IST = pytz.timezone('Asia/Kolkata')
@@ -689,14 +690,11 @@ async def generate_gpt4_response(prompt, user_message):
         if not OPENAI_API_KEY or not openai_client:
             return None
         
-        # Create the full prompt for GPT-4
-        full_prompt = f"{prompt}\n\nUser: {user_message}\nNiyati:"
-        
         # Generate content using GPT-4
         response = await openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": full_prompt},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": user_message}
             ],
             temperature=0.7,
