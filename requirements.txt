@@ -4,4 +4,4 @@ flask==2.3.3
 apscheduler==3.10.4
 python-dotenv==1.0.0
 waitress==2.1.2
-
+openai>=1.0.0
