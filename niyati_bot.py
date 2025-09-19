@@ -13,7 +13,7 @@ from telegram.constants import ChatAction
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-import httpx
+from openai import AsyncOpenAI
 
 # --- Enhanced Personality Prompt with Hard-to-Get Behavior ---
 BASE_CHARACTER_PROMPT = """
@@ -47,10 +47,16 @@ BASE_CHARACTER_PROMPT = """
 
 # --- API Keys & Flask Server ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OWNER_USER_ID = int(os.environ.get("OWNER_USER_ID", 0))
 
 flask_app = Flask(__name__)
+
+# Configure OpenAI client
+if OPENAI_API_KEY:
+    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+else:
+    openai_client = None
 
 # Timezone setup
 IST = pytz.timezone('Asia/Kolkata')
@@ -676,42 +682,35 @@ async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(memory_info, parse_mode='HTML')
 
-async def generate_deepseek_response(prompt, user_message):
-    """Generate response using DeepSeek API"""
+async def generate_gpt4_response(prompt, user_message):
+    """Generate response using GPT-4 API"""
     try:
-        if not DEEPSEEK_API_KEY:
+        # Check if API key is available
+        if not OPENAI_API_KEY or not openai_client:
             return None
-            
-        # DeepSeek API endpoint
-        url = "https://api.deepseek.com/v1/chat/completions"
         
-        headers = {
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
-        }
+        # Create the full prompt for GPT-4
+        full_prompt = f"{prompt}\n\nUser: {user_message}\nNiyati:"
         
-        data = {
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": prompt},
+        # Generate content using GPT-4
+        response = await openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": full_prompt},
                 {"role": "user", "content": user_message}
             ],
-            "temperature": 0.7,
-            "max_tokens": 1000
-        }
+            temperature=0.7,
+            max_tokens=1000
+        )
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=data, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            result = response.json()
-            
-            if 'choices' in result and len(result['choices']) > 0:
-                return result['choices'][0]['message']['content'].strip()
-            
-        return None
-        
+        # Extract the text from the response
+        if response and response.choices and len(response.choices) > 0:
+            return response.choices[0].message.content.strip()
+        else:
+            return None
+    
     except Exception as e:
-        print(f"DeepSeek API error: {e}")
+        print(f"GPT-4 API error: {e}")
         return None
 
 # Add fallback responses based on relationship stage
@@ -831,7 +830,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_response = emotional_response["response"]
         memory_system.update_relationship_level(user_id, emotional_response["mood_change"])
     else:
-        # Generate response using DeepSeek with fallback
+        # Generate response using GPT-4 with fallback
         user_context = memory_system.get_context_for_prompt(user_id)
         
         enhanced_prompt = f"""
@@ -849,7 +848,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         6. Use the user's name if you know it to personalize responses
         """
         
-        ai_response = await generate_deepseek_response(enhanced_prompt, user_message)
+        ai_response = await generate_gpt4_response(enhanced_prompt, user_message)
         
         # If API fails, use fallback response
         if not ai_response:
