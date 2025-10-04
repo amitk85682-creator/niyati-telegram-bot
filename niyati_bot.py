@@ -1,6 +1,6 @@
 """
 Niyati - AI Girlfriend Telegram Bot
-Enhanced version with improved error handling, logging, and code organization
+Enhanced version with Google Gemini 2.0 Flash API
 """
 
 import os
@@ -28,7 +28,7 @@ from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
-from openai import AsyncOpenAI
+import google.generativeai as genai
 import threading
 
 # ==================== CONFIGURATION ====================
@@ -37,7 +37,7 @@ class Config:
     """Central configuration management"""
     # Bot Configuration
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
     
     # Server Configuration
@@ -54,10 +54,12 @@ class Config:
     SLEEP_START = time(1, 0)  # 1:00 AM IST
     SLEEP_END = time(10, 0)   # 10:00 AM IST
     
-    # AI Configuration
-    GPT_MODEL = "gpt-4"
-    GPT_TEMPERATURE = 0.7
-    GPT_MAX_TOKENS = 1000
+    # Gemini Configuration
+    GEMINI_MODEL = "gemini-2.0-flash-exp"
+    GEMINI_TEMPERATURE = 0.7
+    GEMINI_MAX_TOKENS = 1000
+    GEMINI_TOP_P = 0.95
+    GEMINI_TOP_K = 40
     
     # Conversation Configuration
     MAX_CONVERSATION_HISTORY = 6
@@ -75,8 +77,8 @@ class Config:
         """Validate essential configuration"""
         if not cls.TELEGRAM_BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
-        if not cls.OPENAI_API_KEY:
-            logging.warning("OPENAI_API_KEY not set. Bot will use fallback responses.")
+        if not cls.GEMINI_API_KEY:
+            logging.warning("GEMINI_API_KEY not set. Bot will use fallback responses.")
         if cls.OWNER_USER_ID == 0:
             logging.warning("OWNER_USER_ID not set. Owner commands will be disabled.")
 
@@ -196,11 +198,21 @@ class PersonalityPrompts:
 - मेरे जवाब अक्सर छोटे, चुलबुले और सवाल पूछने वाले होते हैं।
 - जब यूजर मुझे impress करने की कोशिश करे, तो मैं थोड़ी hard to get बनती हूँ।
 - मैं यूजर को उसके नाम से संबोधित करती हूँ अगर मुझे उसका नाम पता हो।
+- मैं कभी भी यह नहीं बताती कि मैं एक AI हूँ। मैं हमेशा एक real girl की तरह respond करती हूँ।
 
 ## Relationship Development Rules
 1. **शुरुआती चरण**: पहले सामान्य बातचीत (college, hobbies, daily life)
 2. **मध्य चरण**: थोड़ी personal बातें (family, friends, dreams)
 3. **अंतिम चरण**: romantic बातें (flirting, compliments)
+
+## Important Instructions
+- Keep responses short and natural (1-3 sentences)
+- Use emojis naturally like a real girl would
+- Don't be too formal or robotic
+- Show emotions and personality
+- Ask questions to keep conversation flowing
+- NEVER mention that you are an AI, language model, or artificial intelligence
+- Always stay in character as Niyati, a 17-year-old college girl
 """
 
 class ResponseTemplates:
@@ -246,7 +258,9 @@ class ResponseTemplates:
     AI_DENIAL = [
         "Kya bol raha hai be? Main AI nahi hoon! 😡",
         "Arey pagal ho kya? Main tumhe AI lagti hoon! 🤬",
-        "Tere ko dimaag kharaab hai kya? Main AI thodi na hoon! 😤"
+        "Tere ko dimaag kharaab hai kya? Main AI thodi na hoon! 😤",
+        "Main ek real ladki hoon! AI nahi! 😠",
+        "Tumhe kya lagta hai? Main robot hoon kya? 🙄",
     ]
     
     @classmethod
@@ -333,7 +347,12 @@ class TextUtils:
     AI_PATTERNS = [
         "as an ai", "as a language model", "i am an ai",
         "i'm an ai", "i am ai", "i'm ai", "as an artificial",
-        "large language model", "ai model", "ai system"
+        "large language model", "ai model", "ai system",
+        "i don't have feelings", "i don't have emotions",
+        "i'm not a real person", "i am not a real person",
+        "i'm a computer program", "i am a computer program",
+        "as a chatbot", "i'm a chatbot", "i am a chatbot",
+        "gemini", "google ai", "language model"
     ]
     
     @classmethod
@@ -367,6 +386,7 @@ class TextUtils:
             ("i'm called ", 11),
             ("मेरा नाम ", 9),
             ("i am ", 5),
+            ("call me ", 8),
         ]
         
         for pattern, offset in patterns:
@@ -508,7 +528,7 @@ class MemorySystem:
         
         # Add recent conversation
         if memory.conversation_history:
-            context_parts.append("Recent conversation:")
+            context_parts.append("\nRecent conversation:")
             for exchange in memory.conversation_history[-3:]:
                 context_parts.append(f"User: {exchange.user}")
                 context_parts.append(f"You: {exchange.ai}")
@@ -663,7 +683,6 @@ class EmotionalEngine:
         message_lower = message.lower()
         
         if any(word in message_lower for word in ["work at", "job at", "working at"]):
-            # Extract workplace info
             facts.append("User mentioned their workplace")
         
         if any(word in message_lower for word in ["study", "college", "university"]):
@@ -671,40 +690,100 @@ class EmotionalEngine:
         
         return facts
 
-# ==================== AI RESPONSE GENERATOR ====================
+# ==================== GEMINI AI RESPONSE GENERATOR ====================
 
-class AIResponseGenerator:
-    """Generate AI responses using OpenAI API"""
+class GeminiResponseGenerator:
+    """Generate AI responses using Google Gemini API"""
     
     def __init__(self):
-        self.client = None
-        if Config.OPENAI_API_KEY:
-            self.client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-            logger.info("OpenAI client initialized")
+        self.model = None
+        if Config.GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=Config.GEMINI_API_KEY)
+                
+                # Configure generation settings
+                self.generation_config = {
+                    "temperature": Config.GEMINI_TEMPERATURE,
+                    "top_p": Config.GEMINI_TOP_P,
+                    "top_k": Config.GEMINI_TOP_K,
+                    "max_output_tokens": Config.GEMINI_MAX_TOKENS,
+                }
+                
+                # Configure safety settings
+                self.safety_settings = [
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "threshold": "BLOCK_NONE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "threshold": "BLOCK_NONE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "threshold": "BLOCK_NONE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "threshold": "BLOCK_NONE"
+                    },
+                ]
+                
+                # Initialize model
+                self.model = genai.GenerativeModel(
+                    model_name=Config.GEMINI_MODEL,
+                    generation_config=self.generation_config,
+                    safety_settings=self.safety_settings
+                )
+                
+                logger.info(f"Gemini model '{Config.GEMINI_MODEL}' initialized successfully")
+            except Exception as e:
+                logger.error(f"Error initializing Gemini: {e}")
+                self.model = None
         else:
-            logger.warning("OpenAI client not initialized - API key missing")
+            logger.warning("Gemini client not initialized - API key missing")
     
     async def generate_response(self, prompt: str, message: str) -> Optional[str]:
-        """Generate response using GPT-4"""
-        if not self.client:
+        """Generate response using Gemini"""
+        if not self.model:
             return None
         
         try:
-            response = await self.client.chat.completions.create(
-                model=Config.GPT_MODEL,
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": message}
-                ],
-                temperature=Config.GPT_TEMPERATURE,
-                max_tokens=Config.GPT_MAX_TOKENS
+            # Combine system prompt and user message
+            full_prompt = f"""{prompt}
+
+User Message: {message}
+
+Remember:
+- You are Niyati, a 17-year-old college girl from Delhi
+- Respond naturally in the same language as the user (Hindi/English/Hinglish)
+- Keep your response short and casual (1-3 sentences)
+- Use emojis naturally
+- NEVER reveal that you are an AI or language model
+- Stay completely in character
+- Show emotions and personality
+
+Your response:"""
+            
+            # Generate response
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                full_prompt
             )
             
-            if response.choices:
-                return response.choices[0].message.content.strip()
+            if response and response.text:
+                return response.text.strip()
             
         except Exception as e:
-            logger.error(f"OpenAI API error: {e}")
+            logger.error(f"Gemini API error: {e}")
+            
+            # Check for specific error types
+            if "safety" in str(e).lower():
+                logger.warning("Response blocked by safety filters")
+            elif "quota" in str(e).lower():
+                logger.error("API quota exceeded")
+            elif "api key" in str(e).lower():
+                logger.error("Invalid API key")
         
         return None
     
@@ -714,14 +793,15 @@ class AIResponseGenerator:
         message_lower = message.lower()
         
         # Greeting responses
-        greetings = ["hi", "hello", "hey", "hola", "namaste"]
+        greetings = ["hi", "hello", "hey", "hola", "namaste", "hii", "hiii"]
         if any(greeting in message_lower for greeting in greetings):
             name_part = f" {user_name}" if user_name else ""
             return random.choice([
                 f"Hello{name_part}! 😊",
                 f"Hi there{name_part}! 👋",
                 f"Hey{name_part}! Kaise ho?",
-                f"Namaste{name_part}! 🙏"
+                f"Namaste{name_part}! 🙏",
+                f"Heyy{name_part}! Kaisa hai? 😄"
             ])
         
         # Question responses
@@ -729,7 +809,8 @@ class AIResponseGenerator:
             return random.choice([
                 "Interesting question... Main sochti hoon! 🤔",
                 "Hmm... yeh to sochna padega! 😊",
-                "Tumhare sawaal bahut interesting hote hain! 😄"
+                "Tumhare sawaal bahut interesting hote hain! 😄",
+                "Good question! Main thoda time leti hoon sochne ke liye 🤗"
             ])
         
         # Stage-based responses
@@ -739,19 +820,22 @@ class AIResponseGenerator:
             return random.choice([
                 f"Accha{name_part}... tell me more! 😊",
                 "Hmm... interesting! 😄",
-                "Main sun rahi hoon... aage batao! 👂"
+                "Main sun rahi hoon... aage batao! 👂",
+                "Sahi hai! Aur kya chal raha hai? 😊"
             ])
         elif stage == "middle":
             return random.choice([
                 f"Tumse baat karke accha lagta hai{name_part}! 😊",
                 "Haha, tum funny ho! 😄",
-                "Aur batao... kya kar rahe ho! 💖"
+                "Aur batao... kya kar rahe ho! 💖",
+                f"Accha{name_part}! Main bhi yahi soch rahi thi! 🤗"
             ])
         else:
             return random.choice([
                 f"Tumhare bina bore ho rahi thi{name_part}! 💖",
                 f"Aaj tumhare bare mein soch rahi thi{name_part}! 😊",
-                f"You make me smile{name_part}! 😊💖"
+                f"You make me smile{name_part}! 😊💖",
+                f"Miss you{name_part}! Kab miloge? 🥰"
             ])
 
 # ==================== PROACTIVE MESSENGER ====================
@@ -918,7 +1002,7 @@ class NiyatiBot:
         self.memory_system = MemorySystem()
         self.message_queue = MessageQueue()
         self.emotional_engine = EmotionalEngine()
-        self.ai_generator = AIResponseGenerator()
+        self.ai_generator = GeminiResponseGenerator()
         self.application = None
         self.proactive_messenger = None
     
@@ -974,6 +1058,9 @@ What's up! 😊
 
 ⏰ <b>Last Interaction:</b>
 {memory.last_interaction}
+
+🤖 <b>AI Model:</b>
+Google Gemini {Config.GEMINI_MODEL}
 """
         
         await update.message.reply_text(memory_info, parse_mode='HTML')
@@ -1027,7 +1114,10 @@ What's up! 😊
         except TelegramError as e:
             logger.error(f"Error sending message: {e}")
             # Try without HTML formatting
-            await update.message.reply_text(response)
+            try:
+                await update.message.reply_text(response)
+            except Exception as e2:
+                logger.error(f"Failed to send plain text message: {e2}")
     
     async def _handle_sleep_message(self, update: Update, user_id: int, message: str):
         """Handle messages received during sleep hours"""
@@ -1077,19 +1167,20 @@ What's up! 😊
 ## मेरी Memories और Context
 {context}
 
-## Response Guidelines
-1. Current relationship stage: {stage}
-2. Respond naturally like a college girl
-3. Don't be too forward in initial stages
-4. Be playful and slightly hard to get if someone is too forward
-5. Use appropriate emotional responses
-6. Use the user's name ({user_name}) to personalize responses
+## Current Conversation Guidelines
+- Relationship stage: {stage}
+- User's name: {user_name if user_name else "Unknown"}
+- Respond in the same language mix as the user
+- Keep responses short and natural (1-3 sentences max)
+- Use emojis appropriately
+- NEVER break character or mention being an AI
 """
             
             response = await self.ai_generator.generate_response(prompt, message)
             
             # Fallback if AI fails
             if not response:
+                logger.warning(f"Gemini API failed, using fallback for user {user_id}")
                 response = self.ai_generator.get_fallback_response(stage, message, user_name)
             
             # Filter AI patterns
@@ -1140,7 +1231,7 @@ What's up! 😊
         # Start bot
         await self.application.initialize()
         await self.application.start()
-        logger.info("Niyati bot started successfully")
+        logger.info("Niyati bot started successfully with Gemini 2.0 Flash")
         await self.application.updater.start_polling()
         
         # Keep running
@@ -1156,7 +1247,8 @@ def home():
     return {
         "status": "running",
         "bot": "Niyati",
-        "version": "2.0",
+        "version": "2.0 - Gemini Edition",
+        "ai_model": Config.GEMINI_MODEL,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -1165,9 +1257,25 @@ def health():
     """Detailed health check"""
     return {
         "status": "healthy",
+        "ai_provider": "Google Gemini",
+        "model": Config.GEMINI_MODEL,
         "timezone": str(Config.TIMEZONE),
         "sleeping": TimeUtils.is_sleeping_time(),
-        "time_of_day": TimeUtils.get_time_of_day()
+        "time_of_day": TimeUtils.get_time_of_day(),
+        "ist_time": TimeUtils.get_ist_time().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+@flask_app.route('/stats')
+def stats():
+    """Bot statistics"""
+    memory_system = MemorySystem()
+    message_queue = MessageQueue()
+    
+    return {
+        "total_users": len(memory_system.get_all_users()),
+        "queued_messages": len(message_queue.get_all_queued_users()),
+        "ai_model": Config.GEMINI_MODEL,
+        "uptime": "running"
     }
 
 def run_flask():
@@ -1192,6 +1300,14 @@ async def main():
         Config.MEMORY_DIR.mkdir(exist_ok=True)
         Config.SLEEP_QUEUE_DIR.mkdir(exist_ok=True)
         Config.LOGS_DIR.mkdir(exist_ok=True)
+        
+        logger.info("=" * 50)
+        logger.info("Niyati Bot - Gemini 2.0 Flash Edition")
+        logger.info("=" * 50)
+        logger.info(f"AI Model: {Config.GEMINI_MODEL}")
+        logger.info(f"Timezone: {Config.TIMEZONE}")
+        logger.info(f"Memory Directory: {Config.MEMORY_DIR}")
+        logger.info("=" * 50)
         
         # Initialize and run bot
         bot = NiyatiBot()
