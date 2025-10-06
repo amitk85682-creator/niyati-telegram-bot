@@ -28,7 +28,7 @@ waitress==3.0.2
 google-generativeai==0.8.3
 
 # Database - Supabase
-supabase==2.13.2
+supabase==2.21.1
 psycopg2-binary==2.9.10
 
 # Utilities
