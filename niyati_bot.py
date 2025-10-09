@@ -235,23 +235,29 @@ class VoiceGenerator:
         
     try:
         clean_text = self._clean_text_for_tts(text)
-    
+
     # Generate with ElevenLabs
     audio = await asyncio.to_thread(
         self.client.generate,
         text=clean_text,
-        voice="Sm1seazb4gs7RSlUVw7c",  # <-- Voice ID yahan de
+        voice="Sm1seazb4gs7RSlUVw7c",
         model="eleven_multilingual_v2"
     )
-    
+
     audio_io = BytesIO(audio)
     audio_io.seek(0)
     return audio_io
 
-            
-        except Exception as e:
-            logger.error(f"❌ ElevenLabs error: {e}")
-            return None
+except Exception as e:
+    logger.error(f"❌ ElevenLabs TTS failed: {e}")
+    logger.info("Falling back to gTTS...")
+
+    tts = gTTS(text=clean_text, lang='en')
+    audio_io = BytesIO()
+    tts.write_to_fp(audio_io)
+    audio_io.seek(0)
+    return audio_io
+
     
     async def generate(self, text: str) -> Optional[BytesIO]:
         """Generate voice message based on configured provider"""
