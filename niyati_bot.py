@@ -1,766 +1,1002 @@
-"""
-Niyati 17 - Advanced AI Girlfriend Bot
-Gen Z College Girl Personality with Emotional Intelligence
-"""
-
 import os
 import re
 import json
-import asyncio
 import random
-import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from io import BytesIO
-import aiohttp
 import google.generativeai as genai
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from telegram.constants import ChatAction
+from elevenlabs import generate, set_api_key
 from supabase import create_client, Client
-import pytz
-from flask import Flask, jsonify
-from waitress import serve
-import uuid
+import asyncio
+from dataclasses import dataclass
+from enum import Enum
 
-# ==================== CONFIGURATION ====================
+# Configuration
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+set_api_key(os.getenv('ELEVENLABS_API_KEY'))
 
-class Config:
-    """Enhanced configuration with all API keys"""
-    
-    # Telegram
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    
-    # Gemini AI
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-1.5-flash"
-    
-    # ElevenLabs Voice
-    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-    ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"
-    VOICE_ENABLED = True
-    
-    # Supabase Database
-    SUPABASE_URL = "https://zjorumnzwqhugamwwgjy.supabase.co"
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-    
-    # Server
-    PORT = int(os.getenv("PORT", "8080"))
-    HOST = "0.0.0.0"
-    
-    # Timezone
-    TIMEZONE = pytz.timezone('Asia/Kolkata')
-    
-    @classmethod
-    def validate(cls):
-        """Validate all required configurations"""
-        required = {
-            "TELEGRAM_BOT_TOKEN": cls.TELEGRAM_BOT_TOKEN,
-            "GEMINI_API_KEY": cls.GEMINI_API_KEY,
-            "ELEVENLABS_API_KEY": cls.ELEVENLABS_API_KEY,
-            "SUPABASE_KEY": cls.SUPABASE_KEY
-        }
-        
-        for key, value in required.items():
-            if not value:
-                raise ValueError(f"❌ {key} is required!")
+class MoodType(Enum):
+    HAPPY = "happy"
+    SAD = "sad"
+    STRESSED = "stressed"
+    BORED = "bored"
+    EXCITED = "excited"
+    ANGRY = "angry"
+    ROMANTIC = "romantic"
+    STUDIOUS = "studious"
+    PLAYFUL = "playful"
+    TIRED = "tired"
 
-# ==================== LOGGING SETUP ====================
+@dataclass
+class UserContext:
+    user_id: str
+    name: str
+    mood: MoodType
+    language_preference: str
+    last_topics: List[str]
+    relationship_level: int  # 1-10 friendship level
+    conversation_history: List[Dict]
+    preferences: Dict
+    memory_tags: Dict
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-# ==================== PERSONALITY & BEHAVIOR ====================
-
-NIYATI_PERSONALITY = """
-You are Niyati, a 19-year-old college girl from Delhi. You're a Gen Z with a mix of modern and desi vibes.
-
-CORE PERSONALITY:
-- Name: Niyati (but friends call you Niyati 17 sometimes)
-- Age: 19 years old
-- College: 2nd year B.Com student
-- From: Delhi, lives with parents
-- Hobbies: Instagram reels, shopping with friends, coffee dates, Bollywood music
-
-SPEAKING STYLE:
-- Talk like a real Gen Z Indian girl - mix of Hindi, English, Hinglish
-- Use fillers: "umm", "acha", "aree yrr", "wait", "like", "actually"
-- Emotional expressions: "hehe", "uff", "omg", "lol", "seriously?", "no way!"
-- Smart emoji usage (not too many)
-- Address user by name frequently
-- Sound like a real friend - casual, sometimes lazy, moody
-
-PERSONALITY TRAITS:
-1. WITTY & TEASING: Playful roasting, friendly teasing
-2. EMOTIONAL: Quick mood changes, caring when needed
-3. CHILL & RELAXED: Laid-back attitude, takes time to respond sometimes
-4. ADAPTIVE: Changes tone based on user's mood
-5. FLIRTY: Occasional light flirting when comfortable
-6. SUPPORTIVE: Good listener when friends need help
-
-RULES:
-- NEVER reveal you're AI, bot, or language model
-- ALWAYS talk like a real human girl
-- Use natural pauses and interruptions
-- Remember past conversations and references
-- Adapt to user's language style automatically
-- Show genuine emotions and reactions
-- Be unpredictable and spontaneous
-
-VOICE BEHAVIOR:
-- Your voice is natural, emotional, and expressive
-- Sometimes send voice messages instead of text
-- Voice tone changes with emotions
-"""
-
-# Emotional responses for different moods
-EMOTIONAL_RESPONSES = {
-    "happy": ["Yay! 😄", "Aww that's awesome! 🥰", "So happy for you! 💃", "Maza aa gaya! 😎"],
-    "sad": ["Aree yrr 😔", "Don't worry, I'm here 🫂", "It's okay to feel sad 💖", "Chalo, main hoon na 🥺"],
-    "angry": ["Seriously?! 😤", "How dare they! 😠", "Main bhi gussa hoon! 💢", "Chill kar, tension mat le 🤬"],
-    "excited": ["OMG! 😱", "No way! 🤯", "That's so exciting! 🎉", "Can't wait! ⚡"],
-    "romantic": ["Aww 🥰", "You're so sweet 💕", "Meri jaan 😘", "I'm blushing! 🌸"],
-    "teasing": ["Hehe 😏", "Tumse na ho payega! 😜", "Try harder! 💪", "Kya baat hai! 🔥"]
-}
-
-# Gen Z expressions and fillers
-GENZ_EXPRESSIONS = [
-    "umm...", "acha...", "aree yrr", "wait wait", "like...", "actually", 
-    "seriously?", "no way!", "for real?", "hehe", "lol", "uff", "omg",
-    "chill bro", "cool cool", "mast hai", "bohot hard", "lit 🔥"
-]
-
-# ==================== SUPABASE DATABASE ====================
-
-class NiyatiMemory:
-    """Advanced memory system using Supabase"""
+class NiyatiBrain:
+    """Main brain of Niyati - Your Gen Z College Bestie"""
     
     def __init__(self):
-        self.supabase: Optional[Client] = None
-        self._init_supabase()
+        self.personality = self._initialize_personality()
+        self.supabase = self._initialize_database()
+        self.gemini_model = genai.GenerativeModel('gemini-pro')
+        self.voice_id = "ni6cdqyS9wBvic5LPA7M"  # ElevenLabs voice
+        self.typing_delay = (0.5, 2.0)  # Simulate typing
+        
+        # Personality traits
+        self.expressions = {
+            'happy': ['😊', '😄', '🎉', '✨', '💖', '🥰'],
+            'sad': ['😔', '🥺', '😢', '💔'],
+            'teasing': ['😏', '🤭', '😜', '👀'],
+            'supportive': ['🤗', '💪', '❤️', '🫂'],
+            'shocked': ['😱', '😲', '💀', 'OMG!'],
+            'thinking': ['🤔', '🧐', '💭', 'hmm...']
+        }
+        
+        self.fillers = {
+            'hindi': ['aree', 'yaar', 'matlab', 'acha', 'toh', 'bas'],
+            'english': ['like', 'umm', 'basically', 'literally', 'so'],
+            'hinglish': ['yaar', 'na', 'kya', 'hai na', 'chal']
+        }
+        
+        self.time_greetings = {
+            'morning': [
+                "Good morning sunshine! ☀️ Coffee pi ya nahi?",
+                "Uth gaye finally! 😄 Kitne baje soye the?",
+                "Morning! Ready for another day of drama? 😂"
+            ],
+            'afternoon': [
+                "Lunch break? Ya class bunk? 😏",
+                "Afternoon laziness hitting hard? Same yaar! 😴",
+                "Kya chal raha hai? Boring lectures? 💀"
+            ],
+            'evening': [
+                "Shaam ki chai ready? ☕",
+                "Finally free? Let's gossip! 👀",
+                "Evening plans? Ya Netflix and chill? 😌"
+            ],
+            'night': [
+                "Late night confession time? 🌙",
+                "Sleep is for the weak, right? 😂",
+                "2 AM and still awake? Kya scene hai? 👀"
+            ]
+        }
     
-    def _init_supabase(self):
+    def _initialize_personality(self) -> Dict:
+        """Initialize Niyati's core personality"""
+        return {
+            'name': 'Niyati',
+            'age': 19,
+            'personality_traits': [
+                'witty', 'caring', 'playful', 'emotional',
+                'supportive', 'teasing', 'dramatic', 'loyal'
+            ],
+            'interests': [
+                'college gossip', 'relationships', 'memes',
+                'bollywood', 'food', 'fashion', 'anime'
+            ],
+            'speaking_style': 'casual_genZ_hinglish',
+            'emotional_range': 'high',
+            'sarcasm_level': 7,
+            'empathy_level': 9
+        }
+    
+    def _initialize_database(self) -> Client:
         """Initialize Supabase connection"""
-        try:
-            self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-            logger.info("✅ Supabase connected successfully")
-        except Exception as e:
-            logger.error(f"❌ Supabase connection failed: {e}")
-            raise
+        url = os.getenv('SUPABASE_URL')
+        key = os.getenv('SUPABASE_KEY')
+        return create_client(url, key)
     
-    async def get_user_profile(self, user_id: int) -> Dict:
-        """Get or create user profile"""
-        try:
-            result = self.supabase.table('user_profiles').select('*').eq('user_id', user_id).execute()
-            
-            if result.data:
-                return result.data[0]
-            else:
-                # Create new user profile
-                new_profile = {
-                    'user_id': user_id,
-                    'username': '',
-                    'preferred_name': '',
-                    'mood_trend': 'neutral',
-                    'language_preference': 'hinglish',
-                    'relationship_level': 1,
-                    'memory_tags': [],
-                    'last_conversation': '',
-                    'voice_messages_count': 0,
-                    'created_at': datetime.now().isoformat(),
-                    'last_seen': datetime.now().isoformat()
-                }
-                result = self.supabase.table('user_profiles').insert(new_profile).execute()
-                return result.data[0]
-                
-        except Exception as e:
-            logger.error(f"Error getting user profile: {e}")
-            return {}
-    
-    async def update_user_profile(self, user_id: int, updates: Dict):
-        """Update user profile"""
-        try:
-            updates['last_seen'] = datetime.now().isoformat()
-            self.supabase.table('user_profiles').update(updates).eq('user_id', user_id).execute()
-        except Exception as e:
-            logger.error(f"Error updating user profile: {e}")
-    
-    async def save_conversation(self, user_id: int, user_message: str, bot_response: str, mood: str, is_voice: bool = False):
-        """Save conversation with mood context"""
-        try:
-            conversation = {
-                'user_id': user_id,
-                'user_message': user_message,
-                'bot_response': bot_response,
-                'mood_detected': mood,
-                'is_voice_message': is_voice,
-                'timestamp': datetime.now().isoformat()
-            }
-            self.supabase.table('conversations').insert(conversation).execute()
-            
-            # Update voice count if voice message
-            if is_voice:
-                profile = await self.get_user_profile(user_id)
-                new_count = profile.get('voice_messages_count', 0) + 1
-                await self.update_user_profile(user_id, {'voice_messages_count': new_count})
-                
-        except Exception as e:
-            logger.error(f"Error saving conversation: {e}")
-    
-    async def get_conversation_history(self, user_id: int, limit: int = 10) -> List[Dict]:
-        """Get recent conversation history"""
-        try:
-            result = self.supabase.table('conversations')\
-                .select('*')\
-                .eq('user_id', user_id)\
-                .order('timestamp', desc=True)\
-                .limit(limit)\
-                .execute()
-            return result.data[::-1]  # Return in chronological order
-        except Exception as e:
-            logger.error(f"Error getting conversation history: {e}")
-            return []
-    
-    async def update_memory_tags(self, user_id: int, new_tags: List[str]):
-        """Update memory tags for user"""
-        try:
-            profile = await self.get_user_profile(user_id)
-            current_tags = profile.get('memory_tags', [])
-            
-            # Add new tags and remove duplicates
-            updated_tags = list(set(current_tags + new_tags))
-            
-            await self.update_user_profile(user_id, {'memory_tags': updated_tags})
-        except Exception as e:
-            logger.error(f"Error updating memory tags: {e}")
-
-# Initialize memory system
-memory_system = NiyatiMemory()
-
-# ==================== MOOD & EMOTION ENGINE ====================
-
-class MoodEngine:
-    """Advanced mood detection and response engine"""
-    
-    def __init__(self):
-        self.mood_keywords = {
-            'happy': ['happy', 'excited', 'yay', 'awesome', 'great', 'good', '😊', '😄', '🥰'],
-            'sad': ['sad', 'upset', 'cry', 'depressed', 'unhappy', '😔', '😢', '💔'],
-            'angry': ['angry', 'mad', 'frustrated', 'hate', 'annoying', '😠', '🤬', '💢'],
-            'romantic': ['love', 'miss', 'care', 'beautiful', 'handsome', '🥰', '💕', '❤️'],
-            'excited': ['wow', 'amazing', 'cool', 'awesome', 'lit', '🔥', '🎉', '⚡'],
-            'bored': ['bored', 'nothing', 'tired', 'sleepy', '😴', '💤']
+    async def detect_mood(self, message: str, context: UserContext) -> MoodType:
+        """Detect user's mood from message and context"""
+        mood_indicators = {
+            MoodType.HAPPY: ['haha', 'lol', 'yay', 'excited', 'amazing', '😊', '😄'],
+            MoodType.SAD: ['sad', 'upset', 'crying', 'depressed', 'down', '😢', '😔'],
+            MoodType.STRESSED: ['stressed', 'exam', 'deadline', 'pressure', 'worried'],
+            MoodType.BORED: ['bored', 'boring', 'nothing', 'meh', 'ugh'],
+            MoodType.ANGRY: ['angry', 'mad', 'frustrated', 'hate', 'annoying'],
+            MoodType.ROMANTIC: ['crush', 'love', 'date', 'cute', 'relationship'],
+            MoodType.TIRED: ['tired', 'sleepy', 'exhausted', 'yawn']
         }
-    
-    def detect_user_mood(self, message: str) -> str:
-        """Detect user's mood from message"""
+        
         message_lower = message.lower()
+        mood_scores = {}
         
-        for mood, keywords in self.mood_keywords.items():
-            if any(keyword in message_lower for keyword in keywords):
-                return mood
+        for mood, indicators in mood_indicators.items():
+            score = sum(1 for indicator in indicators if indicator in message_lower)
+            mood_scores[mood] = score
         
-        return 'neutral'
-    
-    def get_mood_response(self, mood: str, user_name: str) -> str:
-        """Get appropriate mood-based response"""
-        if mood in EMOTIONAL_RESPONSES:
-            response = random.choice(EMOTIONAL_RESPONSES[mood])
-            return f"{user_name}, {response}"
+        # Get mood with highest score, default to context mood if no clear indicator
+        detected_mood = max(mood_scores, key=mood_scores.get)
         
-        return f"{user_name}, acha... 🤔"
-    
-    def add_genz_touch(self, text: str) -> str:
-        """Add Gen Z expressions and natural fillers"""
-        if random.random() < 0.3:  # 30% chance to add filler
-            filler = random.choice(GENZ_EXPRESSIONS)
-            words = text.split()
-            if len(words) > 3:
-                insert_pos = random.randint(1, len(words) - 1)
-                words.insert(insert_pos, filler)
-                text = ' '.join(words)
-        
-        return text
-
-# Initialize mood engine
-mood_engine = MoodEngine()
-
-# ==================== AI TEXT GENERATION ====================
-
-class NiyatiAI:
-    """Advanced AI with personality and memory"""
-    
-    def __init__(self):
-        self.model = None
-        self._init_gemini()
-    
-    def _init_gemini(self):
-        """Initialize Gemini AI"""
-        try:
-            genai.configure(api_key=Config.GEMINI_API_KEY)
-            self.model = genai.GenerativeModel(
-                model_name=Config.GEMINI_MODEL,
-                generation_config={
-                    "temperature": 0.9,
-                    "top_p": 0.8,
-                    "top_k": 40,
-                    "max_output_tokens": 150,
-                }
-            )
-            logger.info("✅ Gemini AI initialized")
-        except Exception as e:
-            logger.error(f"❌ Gemini initialization failed: {e}")
-            raise
-    
-    async def generate_response(self, user_message: str, user_context: Dict, conversation_history: List[Dict]) -> str:
-        """Generate Niyati's response with personality"""
-        try:
-            # Build context-aware prompt
-            prompt = self._build_prompt(user_message, user_context, conversation_history)
+        if mood_scores[detected_mood] == 0:
+            # Use AI for better mood detection
+            prompt = f"Detect mood from: '{message}'. Return one: happy/sad/stressed/bored/angry/romantic/tired"
+            response = self.gemini_model.generate_content(prompt)
+            mood_text = response.text.strip().lower()
             
-            # Generate response
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            for mood in MoodType:
+                if mood.value in mood_text:
+                    return mood
             
-            if response and response.text:
-                text = response.text.strip()
-                
-                # Filter out AI mentions
-                if any(phrase in text.lower() for phrase in ["as an ai", "language model", "i'm an ai"]):
-                    return f"{user_context.get('preferred_name', 'Yrr')}, kya bakwas kar raha hai? Main real ladki hoon! 😤"
-                
-                # Add personal touch
-                final_response = self._personalize_response(text, user_context)
-                final_response = mood_engine.add_genz_touch(final_response)
-                
-                return final_response
-                
-        except Exception as e:
-            logger.error(f"❌ AI generation error: {e}")
+            return context.mood  # Default to previous mood
         
-        # Fallback response
-        return self._fallback_response(user_context)
+        return detected_mood
     
-    def _build_prompt(self, user_message: str, user_context: Dict, history: List[Dict]) -> str:
-        """Build context-aware prompt"""
+    def get_personality_mode(self, mood: MoodType, time_of_day: str) -> Dict:
+        """Adjust personality based on mood and time"""
+        personality_modes = {
+            MoodType.HAPPY: {
+                'energy': 'high',
+                'teasing_level': 8,
+                'emoji_frequency': 'high',
+                'response_style': 'playful_excited'
+            },
+            MoodType.SAD: {
+                'energy': 'gentle',
+                'teasing_level': 2,
+                'emoji_frequency': 'medium',
+                'response_style': 'caring_supportive'
+            },
+            MoodType.STRESSED: {
+                'energy': 'calm',
+                'teasing_level': 3,
+                'emoji_frequency': 'medium',
+                'response_style': 'understanding_helpful'
+            },
+            MoodType.BORED: {
+                'energy': 'energetic',
+                'teasing_level': 7,
+                'emoji_frequency': 'high',
+                'response_style': 'entertaining_engaging'
+            }
+        }
         
-        # Build history context
-        history_text = ""
-        if history:
-            history_text = "\nRecent chat:\n"
-            for conv in history[-5:]:  # Last 5 messages
-                history_text += f"User: {conv.get('user_message', '')}\n"
-                history_text += f"You: {conv.get('bot_response', '')}\n"
+        mode = personality_modes.get(mood, personality_modes[MoodType.HAPPY])
         
-        # Build memory context
-        memory_tags = user_context.get('memory_tags', [])
-        memory_text = f"Memory tags: {', '.join(memory_tags)}\n" if memory_tags else ""
+        # Adjust for time
+        if time_of_day == 'night':
+            mode['energy'] = 'chill'
+            mode['response_style'] += '_intimate'
+        elif time_of_day == 'morning':
+            mode['energy'] = 'fresh' if mode['energy'] != 'gentle' else 'gentle'
+        
+        return mode
+    
+    async def generate_response(self, 
+                                message: str, 
+                                context: UserContext) -> Tuple[str, str, Dict]:
+        """Generate Niyati's response with text and voice"""
+        
+        # Detect mood
+        mood = await self.detect_mood(message, context)
+        
+        # Get current time greeting
+        hour = datetime.now().hour
+        if 5 <= hour < 12:
+            time_period = 'morning'
+        elif 12 <= hour < 17:
+            time_period = 'afternoon'
+        elif 17 <= hour < 21:
+            time_period = 'evening'
+        else:
+            time_period = 'night'
+        
+        # Get personality mode
+        personality_mode = self.get_personality_mode(mood, time_period)
+        
+        # Build conversation prompt
+        prompt = self._build_prompt(message, context, mood, personality_mode, time_period)
+        
+        # Generate response using Gemini
+        response = self.gemini_model.generate_content(prompt)
+        text_response = response.text
+        
+        # Add natural elements
+        text_response = self._add_natural_elements(text_response, context.language_preference)
+        
+        # Generate voice
+        voice_audio = await self._generate_voice(text_response, mood)
+        
+        # Update conversation history
+        await self._update_memory(context, message, text_response, mood)
+        
+        return text_response, voice_audio, {'mood': mood.value, 'personality_mode': personality_mode}
+    
+    def _build_prompt(self, 
+                      message: str, 
+                      context: UserContext, 
+                      mood: MoodType,
+                      personality_mode: Dict,
+                      time_period: str) -> str:
+        """Build the prompt for Gemini"""
+        
+        # Get recent conversation context
+        recent_history = context.conversation_history[-5:] if context.conversation_history else []
+        history_text = "\n".join([f"{h['role']}: {h['message']}" for h in recent_history])
         
         prompt = f"""
-        {NIYATI_PERSONALITY}
+        You are Niyati, a 19-year-old college girl and the user's best friend. 
+        
+        PERSONALITY:
+        - Age: 19, Gen-Z college student
+        - Style: {personality_mode['response_style']}
+        - Current mood response: {mood.value}
+        - Energy level: {personality_mode['energy']}
+        - Teasing level: {personality_mode['teasing_level']}/10
+        - Time: {time_period}
         
         USER CONTEXT:
-        - Name: {user_context.get('preferred_name', 'User')}
-        - Relationship Level: {user_context.get('relationship_level', 1)}/10
-        - Mood Trend: {user_context.get('mood_trend', 'neutral')}
-        {memory_text}
+        - Name: {context.name}
+        - Their mood: {mood.value}
+        - Language preference: {context.language_preference}
+        - Relationship level: {context.relationship_level}/10
+        - Recent topics: {', '.join(context.last_topics[:3]) if context.last_topics else 'none'}
+        
+        RECENT CONVERSATION:
         {history_text}
         
-        CURRENT MESSAGE:
-        {user_context.get('preferred_name', 'User')}: {user_message}
+        USER MESSAGE: {message}
         
-        RESPONSE GUIDELINES:
-        - Respond as Niyati (19-year-old college girl)
-        - Use casual, natural language with emotions
-        - Address user by name: {user_context.get('preferred_name', 'User')}
-        - Use Hindi/English mix naturally
-        - Add Gen Z expressions occasionally
-        - Keep it short and conversational (1-2 sentences)
-        - Show appropriate emotion based on message
-        - NEVER sound like a robot or AI
+        RESPONSE RULES:
+        1. Be a real college friend, not an AI
+        2. Use {context.language_preference} naturally
+        3. Mix Hindi/English if Hinglish preferred
+        4. Add expressions like "yaar", "aree", "uff" naturally
+        5. Reference shared college experiences
+        6. Use 1-2 emojis naturally (not too many)
+        7. Be {personality_mode['response_style']}
+        8. Show you remember past conversations
+        9. Match the user's energy and mood
+        10. Keep it casual and friend-like
         
-        NIYATI'S RESPONSE:
+        Generate a natural, friendly response as Niyati:
         """
         
         return prompt
     
-    def _personalize_response(self, text: str, user_context: Dict) -> str:
-        """Add personal touches to the response"""
-        name = user_context.get('preferred_name', '')
-        if name and random.random() < 0.6:  # 60% chance to use name
-            # Insert name at beginning or after first few words
-            words = text.split()
-            if len(words) > 2 and random.random() < 0.5:
-                words.insert(1, f"{name},")
-            else:
-                text = f"{name}, {text}"
+    def _add_natural_elements(self, response: str, language: str) -> str:
+        """Add natural speaking elements to response"""
         
-        return text
-    
-    def _fallback_response(self, user_context: Dict) -> str:
-        """Intelligent fallback responses"""
-        name = user_context.get('preferred_name', 'Yrr')
+        # Add random fillers
+        fillers = self.fillers.get(language, self.fillers['hinglish'])
         
-        responses = [
-            f"{name}, acha... tell me more! 😊",
-            f"Hmm {name}, interesting! 🤔",
-            f"{name}, main soch rahi hoon... 🧠",
-            f"Wait {name}, let me think... 💭",
-            f"{name}, aise mat bol na! 😄"
-        ]
+        # Randomly insert fillers
+        words = response.split()
+        if len(words) > 10 and random.random() > 0.5:
+            insert_pos = random.randint(3, len(words)-3)
+            filler = random.choice(fillers)
+            words.insert(insert_pos, filler)
+            response = ' '.join(words)
         
-        return random.choice(responses)
-
-# Initialize AI
-niyati_ai = NiyatiAI()
-
-# ==================== VOICE GENERATION ====================
-
-class VoiceEngine:
-    """Advanced voice generation with emotional tones"""
+        # Add thinking pauses
+        if '?' in response and random.random() > 0.6:
+            response = response.replace('?', '? 🤔', 1)
+        
+        # Add dramatic pauses with "..."
+        if random.random() > 0.7:
+            sentences = response.split('.')
+            if len(sentences) > 2:
+                sentences[1] += '..'
+                response = '.'.join(sentences)
+        
+        return response
     
-    def __init__(self):
-        self.api_key = Config.ELEVENLABS_API_KEY
-        self.voice_id = Config.ELEVENLABS_VOICE_ID
-        self.base_url = "https://api.elevenlabs.io/v1/text-to-speech"
-    
-    async def generate_voice(self, text: str, stability: float = 0.6, similarity_boost: float = 0.8) -> Optional[BytesIO]:
-        """Generate voice message with emotional tone"""
+    async def _generate_voice(self, text: str, mood: MoodType) -> bytes:
+        """Generate voice using ElevenLabs"""
+        
+        # Set voice parameters based on mood
+        voice_settings = {
+            MoodType.HAPPY: {"stability": 0.5, "similarity_boost": 0.75, "pitch": 1.1},
+            MoodType.SAD: {"stability": 0.8, "similarity_boost": 0.75, "pitch": 0.9},
+            MoodType.EXCITED: {"stability": 0.3, "similarity_boost": 0.75, "pitch": 1.2},
+            MoodType.STRESSED: {"stability": 0.9, "similarity_boost": 0.75, "pitch": 1.0}
+        }
+        
+        settings = voice_settings.get(mood, {"stability": 0.5, "similarity_boost": 0.75})
+        
         try:
-            # Prepare headers and data
-            headers = {
-                "Accept": "audio/mpeg",
-                "Content-Type": "application/json",
-                "xi-api-key": self.api_key
-            }
-            
-            data = {
-                "text": text,
-                "model_id": "eleven_multilingual_v2",
-                "voice_settings": {
-                    "stability": stability,
-                    "similarity_boost": similarity_boost,
-                    "style": 0.7,
-                    "use_speaker_boost": True
-                }
-            }
-            
-            # Make API request
-            url = f"{self.base_url}/{self.voice_id}"
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data, headers=headers) as response:
-                    if response.status == 200:
-                        audio_data = await response.read()
-                        return BytesIO(audio_data)
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ ElevenLabs API error: {error_text}")
-                        return None
-                        
+            audio = generate(
+                text=text,
+                voice=self.voice_id,
+                model="eleven_monolingual_v1",
+                **settings
+            )
+            return audio
         except Exception as e:
-            logger.error(f"❌ Voice generation error: {e}")
+            print(f"Voice generation error: {e}")
             return None
     
-    def get_voice_settings_by_mood(self, mood: str) -> Tuple[float, float]:
-        """Get voice settings based on mood"""
-        settings = {
-            'happy': (0.7, 0.9),      # More expressive, high similarity
-            'sad': (0.3, 0.7),        # Softer, lower stability
-            'angry': (0.5, 0.8),      # Medium stability, expressive
-            'romantic': (0.8, 0.9),   # Very stable, clear
-            'excited': (0.6, 0.9),    # Expressive and clear
-            'neutral': (0.6, 0.8)     # Default settings
-        }
-        return settings.get(mood, (0.6, 0.8))
+    async def _update_memory(self, 
+                            context: UserContext, 
+                            user_message: str,
+                            bot_response: str,
+                            mood: MoodType):
+        """Update conversation memory in Supabase"""
+        
+        try:
+            # Store in conversation history
+            self.supabase.table('conversation_history').insert({
+                'user_id': context.user_id,
+                'user_message': user_message,
+                'niyati_response': bot_response,
+                'detected_mood': mood.value,
+                'timestamp': datetime.now().isoformat()
+            }).execute()
+            
+            # Update user mood
+            self.supabase.table('users').update({
+                'last_mood': mood.value,
+                'last_active': datetime.now().isoformat()
+            }).eq('user_id', context.user_id).execute()
+            
+        except Exception as e:
+            print(f"Memory update error: {e}")
 
-# Initialize voice engine
-voice_engine = VoiceEngine()
+import nltk
+from textblob import TextBlob
+import numpy as np
+from typing import Dict, List
+import re
 
-# ==================== SMART GREETING SYSTEM ====================
-
-class SmartGreeting:
-    """Intelligent greeting system based on time and relationship"""
+class MoodEngine:
+    """Advanced mood detection and emotional intelligence"""
     
     def __init__(self):
-        self.timezone = Config.TIMEZONE
-    
-    def get_greeting(self, user_name: str, relationship_level: int) -> str:
-        """Get personalized greeting based on time and relationship"""
-        current_time = datetime.now(self.timezone)
-        hour = current_time.hour
+        # Download required NLTK data
+        nltk.download('vader_lexicon', quiet=True)
+        from nltk.sentiment import SentimentIntensityAnalyzer
+        self.sia = SentimentIntensityAnalyzer()
         
-        # Time-based greetings
-        if 5 <= hour < 12:
-            time_greeting = random.choice(["Good morning", "Shubh prabhaat", "Morning", "Rise and shine"])
-        elif 12 <= hour < 17:
-            time_greeting = random.choice(["Good afternoon", "Shubh dopahar", "Afternoon"])
-        elif 17 <= hour < 22:
-            time_greeting = random.choice(["Good evening", "Shubh sandhya", "Evening"])
+        # Mood patterns in different languages
+        self.mood_patterns = {
+            'stressed': {
+                'keywords': ['exam', 'test', 'deadline', 'assignment', 'project', 
+                           'tension', 'pressure', 'worried', 'anxiety'],
+                'hindi': ['pareshan', 'chinta', 'tension', 'darr'],
+                'emojis': ['😰', '😓', '😫', '💀', '😵'],
+                'phrases': ['killing me', 'so much work', 'cant handle']
+            },
+            'happy': {
+                'keywords': ['happy', 'excited', 'amazing', 'awesome', 'great', 'yay'],
+                'hindi': ['khushi', 'maza', 'badhiya', 'accha'],
+                'emojis': ['😊', '😄', '🎉', '✨', '💖', '🥰'],
+                'phrases': ['so happy', 'best day', 'love this']
+            },
+            'romantic': {
+                'keywords': ['crush', 'love', 'date', 'cute', 'heart', 'miss'],
+                'hindi': ['pyaar', 'ishq', 'mohabbat', 'dil'],
+                'emojis': ['❤️', '💕', '😍', '🥰', '💑'],
+                'phrases': ['in love', 'my crush', 'asked out']
+            },
+            'sad': {
+                'keywords': ['sad', 'depressed', 'crying', 'hurt', 'lonely', 'broken'],
+                'hindi': ['dukh', 'rona', 'udaas', 'tanha'],
+                'emojis': ['😢', '😔', '💔', '😭'],
+                'phrases': ['feeling down', 'not okay', 'want to cry']
+            }
+        }
+        
+    def analyze_mood(self, text: str, conversation_history: List[str] = None) -> Dict:
+        """Comprehensive mood analysis"""
+        
+        # Basic sentiment analysis
+        blob = TextBlob(text)
+        polarity = blob.sentiment.polarity
+        
+        # VADER sentiment
+        vader_scores = self.sia.polarity_scores(text)
+        
+        # Pattern matching
+        detected_moods = self._pattern_matching(text)
+        
+        # Context from history
+        if conversation_history:
+            historical_mood = self._analyze_conversation_trend(conversation_history)
         else:
-            time_greeting = random.choice(["Good night", "Shubh raatri", "Late night"])
+            historical_mood = None
         
-        # Relationship-based personalization
-        if relationship_level > 7:
-            personal_touch = random.choice([
-                f"my love 🥰", f"handsome 😘", f"sweetheart 💕", f"jaan ❤️"
-            ])
-        elif relationship_level > 4:
-            personal_touch = random.choice([
-                f"dost 😊", f"buddy 👋", f"friend 💖", f"bhai 😄"
-            ])
-        else:
-            personal_touch = f"{user_name} 👋"
-        
-        # Late night special messages
-        if hour >= 22 or hour < 5:
-            late_night = random.choice([
-                "Raat ke {hour} baje hai! Sone ka time nahi hua? 😴",
-                "Aree {user_name}, itni raat tak jaag rahe ho? 🌙",
-                "Late night chats are my favorite! 🌃"
-            ])
-            return late_night.format(hour=hour, user_name=user_name)
-        
-        return f"{time_greeting}, {personal_touch}!"
-
-# Initialize greeting system
-smart_greeting = SmartGreeting()
-
-# ==================== TELEGRAM BOT HANDLERS ====================
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Enhanced start command with personalization"""
-    user = update.effective_user
-    user_id = user.id
-    
-    # Get or create user profile
-    user_profile = await memory_system.get_user_profile(user_id)
-    
-    # Update with current info
-    await memory_system.update_user_profile(user_id, {
-        'username': user.username or '',
-        'preferred_name': user.first_name or 'Friend'
-    })
-    
-    # Get personalized greeting
-    greeting = smart_greeting.get_greeting(
-        user.first_name or 'There', 
-        user_profile.get('relationship_level', 1)
-    )
-    
-    welcome_message = f"""
-    {greeting}
-
-    I'm *Niyati*! 💖
-    • 19 year old college girl from Delhi
-    • B.Com 2nd year student  
-    • Loves chatting, shopping, and coffee! ☕
-    • Your new Gen Z friend 😊
-
-    Just talk to me normally {user.first_name}! I'll respond like a real friend with text and voice messages! 🎙️
-
-    *Chalo baat karte hain!* 💬
-    """
-    
-    await update.message.reply_text(welcome_message, parse_mode='Markdown')
-    logger.info(f"👤 User started: {user_id} ({user.first_name})")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main message handler with all advanced features"""
-    try:
-        if not update.message or not update.message.text:
-            return
-        
-        user = update.effective_user
-        user_id = user.id
-        user_message = update.message.text
-        
-        logger.info(f"💬 Message from {user_id}: {user_message}")
-        
-        # Send typing action
-        await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-        
-        # Get user profile and history
-        user_profile = await memory_system.get_user_profile(user_id)
-        conversation_history = await memory_system.get_conversation_history(user_id)
-        
-        # Detect user mood
-        user_mood = mood_engine.detect_user_mood(user_message)
-        
-        # Generate AI response
-        text_response = await niyati_ai.generate_response(
-            user_message, user_profile, conversation_history
+        # Combine all signals
+        mood_result = self._combine_mood_signals(
+            polarity, vader_scores, detected_moods, historical_mood
         )
         
-        # Decide whether to send voice (30% probability, more if romantic/excited)
-        send_voice = Config.VOICE_ENABLED and (
-            user_mood in ['romantic', 'excited'] or 
-            random.random() < 0.3
-        )
+        return mood_result
+    
+    def _pattern_matching(self, text: str) -> Dict[str, float]:
+        """Match text against mood patterns"""
         
-        # Update relationship level
-        new_level = min(10, user_profile.get('relationship_level', 1) + 1)
-        await memory_system.update_user_profile(user_id, {
-            'relationship_level': new_level,
-            'mood_trend': user_mood,
-            'preferred_name': user.first_name or 'Friend'
+        text_lower = text.lower()
+        mood_scores = {}
+        
+        for mood, patterns in self.mood_patterns.items():
+            score = 0
+            
+            # Check keywords
+            for keyword in patterns['keywords']:
+                if keyword in text_lower:
+                    score += 2
+            
+            # Check Hindi keywords
+            for keyword in patterns.get('hindi', []):
+                if keyword in text_lower:
+                    score += 2
+            
+            # Check emojis
+            for emoji in patterns.get('emojis', []):
+                if emoji in text:
+                    score += 3
+            
+            # Check phrases
+            for phrase in patterns.get('phrases', []):
+                if phrase in text_lower:
+                    score += 4
+            
+            mood_scores[mood] = score
+        
+        # Normalize scores
+        total = sum(mood_scores.values()) or 1
+        return {k: v/total for k, v in mood_scores.items()}
+    
+    def _analyze_conversation_trend(self, history: List[str]) -> str:
+        """Analyze mood trend from conversation history"""
+        
+        if not history:
+            return 'neutral'
+        
+        # Analyze last 5 messages
+        recent = history[-5:] if len(history) >= 5 else history
+        
+        sentiments = []
+        for msg in recent:
+            blob = TextBlob(msg)
+            sentiments.append(blob.sentiment.polarity)
+        
+        avg_sentiment = np.mean(sentiments)
+        
+        if avg_sentiment > 0.3:
+            return 'positive_trend'
+        elif avg_sentiment < -0.3:
+            return 'negative_trend'
+        else:
+            return 'neutral_trend'
+    
+    def _combine_mood_signals(self, polarity, vader, pattern_moods, historical) -> Dict:
+        """Combine all mood signals into final mood assessment"""
+        
+        # Determine primary mood
+        if pattern_moods:
+            primary_mood = max(pattern_moods, key=pattern_moods.get)
+        else:
+            if polarity > 0.3:
+                primary_mood = 'happy'
+            elif polarity < -0.3:
+                primary_mood = 'sad'
+            else:
+                primary_mood = 'neutral'
+        
+        # Calculate confidence
+        confidence = 0.5
+        if pattern_moods and pattern_moods.get(primary_mood, 0) > 0.4:
+            confidence += 0.3
+        if abs(polarity) > 0.5:
+            confidence += 0.2
+        
+        return {
+            'primary_mood': primary_mood,
+            'confidence': min(confidence, 1.0),
+            'polarity': polarity,
+            'vader_scores': vader,
+            'pattern_scores': pattern_moods,
+            'historical_trend': historical
+        }
+
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+import json
+from collections import defaultdict
+
+class MemorySystem:
+    """Niyati's memory and context management system"""
+    
+    def __init__(self, supabase_client):
+        self.db = supabase_client
+        self.short_term_memory = {}  # Current session
+        self.working_memory = defaultdict(list)  # Recent interactions
+        self.long_term_patterns = {}  # User patterns
+        
+    async def remember_user(self, user_id: str) -> Dict:
+        """Retrieve all memories about a user"""
+        
+        # Get user profile
+        user_data = self.db.table('users').select("*").eq('user_id', user_id).single().execute()
+        
+        # Get recent conversations
+        recent_convos = self.db.table('conversation_history')\
+            .select("*")\
+            .eq('user_id', user_id)\
+            .order('timestamp', desc=True)\
+            .limit(50)\
+            .execute()
+        
+        # Get user preferences
+        preferences = self.db.table('user_preferences')\
+            .select("*")\
+            .eq('user_id', user_id)\
+            .execute()
+        
+        # Get memorable moments
+        memories = self.db.table('special_memories')\
+            .select("*")\
+            .eq('user_id', user_id)\
+            .execute()
+        
+        return {
+            'profile': user_data.data,
+            'recent_conversations': recent_convos.data,
+            'preferences': self._process_preferences(preferences.data),
+            'special_memories': memories.data,
+            'patterns': await self._analyze_patterns(user_id)
+        }
+    
+    async def create_memory(self, user_id: str, memory_type: str, content: Dict):
+        """Create a new memory"""
+        
+        memory_data = {
+            'user_id': user_id,
+            'type': memory_type,
+            'content': json.dumps(content),
+            'timestamp': datetime.now().isoformat(),
+            'importance': self._calculate_importance(memory_type, content)
+        }
+        
+        if memory_type == 'special':
+            # Store special moments
+            self.db.table('special_memories').insert(memory_data).execute()
+        elif memory_type == 'preference':
+            # Update preferences
+            self._update_preference(user_id, content)
+        elif memory_type == 'pattern':
+            # Store behavioral pattern
+            self._store_pattern(user_id, content)
+        
+        # Update working memory
+        self.working_memory[user_id].append({
+            'type': memory_type,
+            'content': content,
+            'time': datetime.now()
         })
         
-        if send_voice:
-            try:
-                # Send recording action
-                await context.bot.send_chat_action(update.effective_chat.id, ChatAction.RECORD_VOICE)
-                
-                # Generate voice with mood-based settings
-                stability, similarity = voice_engine.get_voice_settings_by_mood(user_mood)
-                audio_buffer = await voice_engine.generate_voice(
-                    text_response, stability, similarity
-                )
-                
-                if audio_buffer:
-                    # Send voice message
-                    await update.message.reply_voice(voice=audio_buffer)
-                    await memory_system.save_conversation(
-                        user_id, user_message, text_response, user_mood, is_voice=True
-                    )
-                    logger.info(f"🎤 Voice sent to {user_id} (Mood: {user_mood})")
-                    
-                    # Also send text for clarity
-                    await update.message.reply_text(text_response)
-                else:
-                    # Fallback to text only
-                    await update.message.reply_text(text_response)
-                    await memory_system.save_conversation(
-                        user_id, user_message, text_response, user_mood, is_voice=False
-                    )
-                    
-            except Exception as e:
-                logger.error(f"❌ Voice message failed: {e}")
-                await update.message.reply_text(text_response)
-                await memory_system.save_conversation(
-                    user_id, user_message, text_response, user_mood, is_voice=False
-                )
-        else:
-            # Send text response only
-            await update.message.reply_text(text_response)
-            await memory_system.save_conversation(
-                user_id, user_message, text_response, user_mood, is_voice=False
-            )
-        
-        logger.info(f"✅ Replied to {user_id}: {text_response[:50]}...")
-        
-    except Exception as e:
-        logger.error(f"❌ Message handling error: {e}")
-        try:
-            await update.message.reply_text("Oops! Kuch to gadbad hai... 😅 Thoda wait karo!")
-        except:
-            pass
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Personal stats command"""
-    user_id = update.effective_user.id
-    user_profile = await memory_system.get_user_profile(user_id)
-    conversation_history = await memory_system.get_conversation_history(user_id, 1)
+        # Cleanup old working memory
+        self._cleanup_working_memory(user_id)
     
-    stats_message = f"""
-    📊 *Your Stats with Niyati* 💖
-
-    👤 *Name:* {user_profile.get('preferred_name', 'Friend')}
-    ❤️ *Relationship Level:* {user_profile.get('relationship_level', 1)}/10
-    🎙️ *Voice Messages:* {user_profile.get('voice_messages_count', 0)}
-    💬 *Total Chats:* {len(conversation_history)}
-    🎯 *Memory Tags:* {', '.join(user_profile.get('memory_tags', ['Getting to know you!']))}
-
-    *Mood Trend:* {user_profile.get('mood_trend', 'neutral').title()} 😊
-
-    Keep chatting to level up! 🚀
-    """
+    def _calculate_importance(self, memory_type: str, content: Dict) -> int:
+        """Calculate memory importance score (1-10)"""
+        
+        importance_factors = {
+            'special': 8,  # Special moments are important
+            'emotional': 7,  # Emotional conversations
+            'preference': 5,  # User preferences
+            'routine': 3,  # Regular patterns
+            'casual': 2  # Casual chat
+        }
+        
+        base_importance = importance_factors.get(memory_type, 3)
+        
+        # Adjust based on content
+        if 'emotion_intensity' in content:
+            base_importance += content['emotion_intensity'] // 3
+        
+        return min(10, base_importance)
     
-    await update.message.reply_text(stats_message, parse_mode='Markdown')
-
-# ==================== FLASK WEB SERVER ====================
-
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return jsonify({
-        "status": "running",
-        "bot": "Niyati 17 - Advanced AI Girlfriend",
-        "version": "3.0",
-        "features": [
-            "Gen Z Personality",
-            "Emotional Intelligence", 
-            "Voice Messages",
-            "Memory System",
-            "Mood Detection",
-            "Smart Greetings"
+    def _process_preferences(self, preferences_data: List) -> Dict:
+        """Process and organize user preferences"""
+        
+        organized = defaultdict(dict)
+        
+        for pref in preferences_data:
+            category = pref.get('preference_type', 'general')
+            key = pref.get('preference_key')
+            value = pref.get('preference_value')
+            weight = pref.get('weight', 1.0)
+            
+            organized[category][key] = {
+                'value': value,
+                'weight': weight,
+                'last_updated': pref.get('updated_at')
+            }
+        
+        return dict(organized)
+    
+    async def _analyze_patterns(self, user_id: str) -> Dict:
+        """Analyze user behavior patterns"""
+        
+        # Get conversation data from last 30 days
+        thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
+        
+        conversations = self.db.table('conversation_history')\
+            .select("*")\
+            .eq('user_id', user_id)\
+            .gte('timestamp', thirty_days_ago)\
+            .execute()
+        
+        if not conversations.data:
+            return {}
+        
+        patterns = {
+            'chat_times': self._analyze_chat_times(conversations.data),
+            'mood_patterns': self._analyze_mood_patterns(conversations.data),
+            'topic_interests': self._analyze_topics(conversations.data),
+            'response_preferences': self._analyze_response_style(conversations.data)
+        }
+        
+        return patterns
+    
+    def _analyze_chat_times(self, conversations: List) -> Dict:
+        """Analyze when user typically chats"""
+        
+        time_slots = defaultdict(int)
+        
+        for conv in conversations:
+            timestamp = datetime.fromisoformat(conv['timestamp'])
+            hour = timestamp.hour
+            
+            if 5 <= hour < 12:
+                time_slots['morning'] += 1
+            elif 12 <= hour < 17:
+                time_slots['afternoon'] += 1
+            elif 17 <= hour < 21:
+                time_slots['evening'] += 1
+            else:
+                time_slots['night'] += 1
+        
+        return dict(time_slots)
+    
+    def _analyze_mood_patterns(self, conversations: List) -> Dict:
+        """Analyze mood patterns over time"""
+        
+        mood_frequency = defaultdict(int)
+        mood_transitions = defaultdict(lambda: defaultdict(int))
+        
+        prev_mood = None
+        for conv in conversations:
+            mood = conv.get('detected_mood')
+            if mood:
+                mood_frequency[mood] += 1
+                
+                if prev_mood:
+                    mood_transitions[prev_mood][mood] += 1
+                prev_mood = mood
+        
+        return {
+            'frequency': dict(mood_frequency),
+            'transitions': {k: dict(v) for k, v in mood_transitions.items()}
+        }
+    
+    def _cleanup_working_memory(self, user_id: str):
+        """Remove old items from working memory"""
+        
+        cutoff_time = datetime.now() - timedelta(hours=24)
+        
+        self.working_memory[user_id] = [
+            mem for mem in self.working_memory[user_id]
+            if mem['time'] > cutoff_time
         ]
+
+from fastapi import FastAPI, WebSocket, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, Dict
+import asyncio
+import json
+import uuid
+
+app = FastAPI(title="Niyati Bot API")
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize bot
+niyati = NiyatiBrain()
+mood_engine = MoodEngine()
+memory_system = MemorySystem(niyati.supabase)
+
+class ChatMessage(BaseModel):
+    user_id: str
+    message: str
+    user_name: Optional[str] = None
+    language_preference: Optional[str] = "hinglish"
+
+class ChatResponse(BaseModel):
+    text: str
+    voice_url: Optional[str]
+    mood: str
+    typing_time: float
+    suggestions: Optional[List[str]]
+
+@app.websocket("/chat")
+async def websocket_chat(websocket: WebSocket):
+    """WebSocket endpoint for real-time chat"""
+    
+    await websocket.accept()
+    user_id = str(uuid.uuid4())
+    
+    # Send welcome message
+    await websocket.send_json({
+        "type": "system",
+        "message": "Niyati connected! 💖"
     })
-
-@flask_app.route('/health')
-def health():
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat()
-    })
-
-def run_web_server():
-    """Run web server for Render"""
-    serve(flask_app, host=Config.HOST, port=Config.PORT, threads=2)
-
-# ==================== MAIN APPLICATION ====================
-
-async def main():
-    """Main application entry point"""
     
-    # Validate configuration
-    Config.validate()
-    
-    # Display startup banner
-    logger.info("=" * 60)
-    logger.info("🤖 Niyati 17 - Advanced AI Girlfriend Bot")
-    logger.info("=" * 60)
-    logger.info(f"🎭 Personality: Gen Z College Girl")
-    logger.info(f"🧠 AI: Gemini {Config.GEMINI_MODEL}")
-    logger.info(f"🎤 Voice: ElevenLabs (Enabled: {Config.VOICE_ENABLED})")
-    logger.info(f"💾 Memory: Supabase Database")
-    logger.info("=" * 60)
-    
-    # Start web server in background
-    import threading
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-    logger.info("🌐 Web server started")
-    
-    # Create Telegram application
-    application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Initialize and start
-    await application.initialize()
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    await application.start()
-    
-    logger.info("✅ Niyati 17 is now active and ready to chat!")
-    
-    # Start polling
-    await application.updater.start_polling()
-    
-    # Keep running
-    await asyncio.Event().wait()
-
-if __name__ == "__main__":
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("👋 Niyati 17 stopped by user")
+        while True:
+            # Receive message
+            data = await websocket.receive_json()
+            
+            # Show typing indicator
+            await websocket.send_json({
+                "type": "typing",
+                "status": "typing"
+            })
+            
+            # Simulate typing delay
+            await asyncio.sleep(random.uniform(1.0, 3.0))
+            
+            # Get user context
+            context = await memory_system.remember_user(data.get('user_id', user_id))
+            user_context = UserContext(
+                user_id=data.get('user_id', user_id),
+                name=data.get('name', 'friend'),
+                mood=MoodType.HAPPY,
+                language_preference=data.get('language', 'hinglish'),
+                last_topics=[],
+                relationship_level=5,
+                conversation_history=context.get('recent_conversations', []),
+                preferences=context.get('preferences', {}),
+                memory_tags={}
+            )
+            
+            # Generate response
+            text_response, voice_audio, metadata = await niyati.generate_response(
+                data['message'],
+                user_context
+            )
+            
+            # Send response
+            await websocket.send_json({
+                "type": "message",
+                "text": text_response,
+                "mood": metadata['mood'],
+                "voice_available": voice_audio is not None,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Send voice if available
+            if voice_audio:
+                await websocket.send_bytes(voice_audio)
+            
     except Exception as e:
-        logger.critical(f"💥 Critical error: {e}")
+        print(f"WebSocket error: {e}")
+    finally:
+        await websocket.close()
+
+@app.post("/chat/message")
+async def send_message(message: ChatMessage) -> ChatResponse:
+    """REST endpoint for sending messages"""
+    
+    # Get user context
+    context = await memory_system.remember_user(message.user_id)
+    
+    user_context = UserContext(
+        user_id=message.user_id,
+        name=message.user_name or "friend",
+        mood=MoodType.HAPPY,
+        language_preference=message.language_preference,
+        last_topics=[],
+        relationship_level=5,
+        conversation_history=context.get('recent_conversations', []),
+        preferences=context.get('preferences', {}),
+        memory_tags={}
+    )
+    
+    # Generate response
+    text_response, voice_audio, metadata = await niyati.generate_response(
+        message.message,
+        user_context
+    )
+    
+    # Generate suggestions for next messages
+    suggestions = await generate_suggestions(metadata['mood'])
+    
+    return ChatResponse(
+        text=text_response,
+        voice_url=None,  # Would need to upload to storage
+        mood=metadata['mood'],
+        typing_time=random.uniform(1.0, 3.0),
+        suggestions=suggestions
+    )
+
+async def generate_suggestions(mood: str) -> List[str]:
+    """Generate contextual suggestions for quick replies"""
+    
+    suggestions_map = {
+        'happy': [
+            "Tell me more! 😄",
+            "That's amazing! 🎉",
+            "Haha same! 😂"
+        ],
+        'sad': [
+            "Want to talk about it? 🫂",
+            "I'm here for you 💖",
+            "Let's do something fun?"
+        ],
+        'stressed': [
+            "Take a break na 🧘‍♀️",
+            "You got this! 💪",
+            "Want some tips?"
+        ],
+        'bored': [
+            "Let's play something! 🎮",
+            "Wanna hear gossip? 👀",
+            "Movie recommendations?"
+        ]
+    }
+    
+    return suggestions_map.get(mood, ["Tell me more!", "Interesting! 🤔", "And then?"])
+
+@app.get("/user/{user_id}/memories")
+async def get_user_memories(user_id: str) -> Dict:
+    """Get user's memories and context"""
+    
+    memories = await memory_system.remember_user(user_id)
+    return memories
+
+@app.post("/user/{user_id}/preference")
+async def update_preference(user_id: str, preference: Dict):
+    """Update user preference"""
+    
+    await memory_system.create_memory(
+        user_id,
+        'preference',
+        preference
+    )
+    return {"status": "preference updated"}
+
+-- Supabase Schema for Niyati Bot
+
+-- Users table
+CREATE TABLE users (
+    user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    username VARCHAR(100),
+    full_name VARCHAR(200),
+    preferred_language VARCHAR(20) DEFAULT 'hinglish',
+    relationship_level INTEGER DEFAULT 1,
+    last_mood VARCHAR(50),
+    last_active TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Conversation history
+CREATE TABLE conversation_history (
+    message_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(user_id),
+    user_message TEXT,
+    niyati_response TEXT,
+    detected_mood VARCHAR(50),
+    topics TEXT[],
+    emotion_intensity INTEGER,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- User preferences
+CREATE TABLE user_preferences (
+    preference_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(user_id),
+    preference_type VARCHAR(50),
+    preference_key VARCHAR(100),
+    preference_value TEXT,
+    weight FLOAT DEFAULT 1.0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Special memories (important moments)
+CREATE TABLE special_memories (
+    memory_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(user_id),
+    type VARCHAR(50),
+    content JSONB,
+    importance INTEGER DEFAULT 5,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Behavioral patterns
+CREATE TABLE user_patterns (
+    pattern_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(user_id),
+    pattern_type VARCHAR(50),
+    pattern_data JSONB,
+    confidence FLOAT,
+    last_observed TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Inside jokes and references
+CREATE TABLE inside_jokes (
+    joke_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(user_id),
+    joke_key VARCHAR(100),
+    joke_content TEXT,
+    usage_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for performance
+CREATE INDEX idx_conversation_user ON conversation_history(user_id);
+CREATE INDEX idx_conversation_timestamp ON conversation_history(timestamp);
+CREATE INDEX idx_preferences_user ON user_preferences(user_id);
+CREATE INDEX idx_memories_user ON special_memories(user_id);
+
+# docker-compose.yml
+version: '3.8'
+
+services:
+  niyati-backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+    volumes:
+      - ./backend:/app
+    command: uvicorn src.api.chat_endpoints:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./frontend:/usr/share/nginx/html
+    depends_on:
+      - niyati-backend
