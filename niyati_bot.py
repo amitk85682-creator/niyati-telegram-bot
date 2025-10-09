@@ -233,31 +233,27 @@ class VoiceGenerator:
         if not ELEVENLABS_AVAILABLE or not Config.ELEVENLABS_API_KEY:
             return None
         
-    try:
-        clean_text = self._clean_text_for_tts(text)
-
-    # Generate with ElevenLabs
-    audio = await asyncio.to_thread(
-        self.client.generate,
-        text=clean_text,
-        voice="Sm1seazb4gs7RSlUVw7c",
-        model="eleven_multilingual_v2"
-    )
-
-    audio_io = BytesIO(audio)
-    audio_io.seek(0)
-    return audio_io
-
-except Exception as e:
-    logger.error(f"❌ ElevenLabs TTS failed: {e}")
-    logger.info("Falling back to gTTS...")
-
-    tts = gTTS(text=clean_text, lang='en')
-    audio_io = BytesIO()
-    tts.write_to_fp(audio_io)
-    audio_io.seek(0)
-    return audio_io
-
+        try:
+            clean_text = self._clean_text_for_tts(text)
+            
+            # Generate with ElevenLabs
+            audio = await asyncio.to_thread(
+                self.client.generate,
+                text=clean_text,
+                voice="Sm1seazb4gs7RSlUVw7c",
+                    model="eleven_multilingual_v2"
+                    )
+            
+            # Convert to BytesIO
+            audio_io = BytesIO(audio)
+            audio_io.seek(0)
+            
+            logger.info("✅ Generated ElevenLabs voice")
+            return audio_io
+            
+        except Exception as e:
+            logger.error(f"❌ ElevenLabs error: {e}")
+            return None
     
     async def generate(self, text: str) -> Optional[BytesIO]:
         """Generate voice message based on configured provider"""
@@ -618,13 +614,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     voice_status = "🎙️ with Voice Messages!" if Config.VOICE_ENABLED else ""
     
     welcome = f"""
-<b>नमस्ते {user.first_name}! 👋</b>
+<b>Hey.. {user.first_name}! 👋</b>
 
-I'm <b>Niyati</b>, a 17-year-old college student from Delhi! 
+I'm <b>Niyati✨</b>! 
 
-Chat with me normally - I'll respond with text and sometimes voice messages! {voice_status}
+How are you!
 
-<i>✨ Powered by Gemini AI</i>
 """
     
     await update.message.reply_text(welcome, parse_mode='HTML')
