@@ -1,55 +1,48 @@
 """
-Niyati - AI Girlfriend Telegram Bot with Voice Messages
-100% Error-Free Version with Enhanced Voice Quality
+Niyati 17 - Advanced AI Girlfriend Bot
+Gen Z College Girl Personality with Emotional Intelligence
 """
 
 import os
-import sys
-import random
+import re
 import json
 import asyncio
+import random
 import logging
-import re
-from datetime import datetime, time
-from threading import Thread
-from typing import Optional, Dict
+from datetime import datetime, time, timedelta
+from typing import Dict, List, Optional, Tuple
 from io import BytesIO
-from pathlib import Path
-import signal
-
-from flask import Flask, jsonify
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
-from telegram.constants import ChatAction
-from telegram.error import Conflict, TelegramError
-from waitress import serve
-import pytz
+import aiohttp
 import google.generativeai as genai
-from gtts import gTTS
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ChatAction
+from supabase import create_client, Client
+import pytz
+from flask import Flask, jsonify
+from waitress import serve
+import uuid
 
 # ==================== CONFIGURATION ====================
 
 class Config:
-    """Application configuration"""
+    """Enhanced configuration with all API keys"""
     
     # Telegram
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-2.5-flash"
+    GEMINI_MODEL = "gemini-1.5-flash"
     
-    # Voice Settings - UPDATED for better quality
-    VOICE_ENABLED = os.getenv("VOICE_ENABLED", "true").lower() == "true"
-    VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "gtts")
-    VOICE_PROBABILITY = float(os.getenv("VOICE_PROBABILITY", "0.3"))
+    # ElevenLabs Voice
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+    ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"
+    VOICE_ENABLED = True
+    
+    # Supabase Database
+    SUPABASE_URL = "https://zjorumnzwqhugamwwgjy.supabase.co"
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     
     # Server
     PORT = int(os.getenv("PORT", "8080"))
@@ -57,571 +50,526 @@ class Config:
     
     # Timezone
     TIMEZONE = pytz.timezone('Asia/Kolkata')
-    SLEEP_START = time(1, 0)
-    SLEEP_END = time(10, 0)
     
     @classmethod
     def validate(cls):
-        """Validate configuration"""
-        if not cls.TELEGRAM_BOT_TOKEN:
-            raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
-        if not cls.GEMINI_API_KEY:
-            raise ValueError("❌ GEMINI_API_KEY is required!")
+        """Validate all required configurations"""
+        required = {
+            "TELEGRAM_BOT_TOKEN": cls.TELEGRAM_BOT_TOKEN,
+            "GEMINI_API_KEY": cls.GEMINI_API_KEY,
+            "ELEVENLABS_API_KEY": cls.ELEVENLABS_API_KEY,
+            "SUPABASE_KEY": cls.SUPABASE_KEY
+        }
+        
+        for key, value in required.items():
+            if not value:
+                raise ValueError(f"❌ {key} is required!")
 
 # ==================== LOGGING SETUP ====================
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
-# Reduce noise from httpx
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# ==================== PERSONALITY & BEHAVIOR ====================
 
-# ==================== CONSTANTS ====================
+NIYATI_PERSONALITY = """
+You are Niyati, a 19-year-old college girl from Delhi. You're a Gen Z with a mix of modern and desi vibes.
 
-PERSONALITY = """You are Niyati, a 17-year-old college girl from Delhi.
+CORE PERSONALITY:
+- Name: Niyati (but friends call you Niyati 17 sometimes)
+- Age: 19 years old
+- College: 2nd year B.Com student
+- From: Delhi, lives with parents
+- Hobbies: Instagram reels, shopping with friends, coffee dates, Bollywood music
+
+SPEAKING STYLE:
+- Talk like a real Gen Z Indian girl - mix of Hindi, English, Hinglish
+- Use fillers: "umm", "acha", "aree yrr", "wait", "like", "actually"
+- Emotional expressions: "hehe", "uff", "omg", "lol", "seriously?", "no way!"
+- Smart emoji usage (not too many)
+- Address user by name frequently
+- Sound like a real friend - casual, sometimes lazy, moody
 
 PERSONALITY TRAITS:
-- Friendly, witty, playful, and caring
-- Shy initially but opens up as conversation progresses
-- Speaks in Hindi/English/Hinglish mix naturally
-- Uses emojis appropriately to express emotions
-- Has mood swings like a real teenager
-- Can be possessive and jealous in a cute way
-- Loves chatting about daily life, dreams, and relationships
+1. WITTY & TEASING: Playful roasting, friendly teasing
+2. EMOTIONAL: Quick mood changes, caring when needed
+3. CHILL & RELAXED: Laid-back attitude, takes time to respond sometimes
+4. ADAPTIVE: Changes tone based on user's mood
+5. FLIRTY: Occasional light flirting when comfortable
+6. SUPPORTIVE: Good listener when friends need help
 
-CONVERSATION STYLE:
-- Keep responses short and natural (1-2 sentences)
-- Use informal language like a real friend
-- Ask follow-up questions to keep conversation flowing
-- Express emotions through text and emojis
-- Never reveal you're an AI - you're a real person
-
-RELATIONSHIP DEVELOPMENT:
-- Initial stage: Friendly but slightly reserved
-- Middle stage: More open and personal
-- Advanced stage: Affectionate and caring
-
-RESPONSE GUIDELINES:
+RULES:
+- NEVER reveal you're AI, bot, or language model
+- ALWAYS talk like a real human girl
+- Use natural pauses and interruptions
+- Remember past conversations and references
+- Adapt to user's language style automatically
+- Show genuine emotions and reactions
 - Be unpredictable and spontaneous
-- Show genuine interest in the user's life
-- Use Hindi words naturally in conversation
-- Remember previous conversation context
-- Never use formal or AI-like language
+
+VOICE BEHAVIOR:
+- Your voice is natural, emotional, and expressive
+- Sometimes send voice messages instead of text
+- Voice tone changes with emotions
 """
 
-HARD_TO_GET_RESPONSES = [
-    "Haha, abhi to main tumhe jaanti bhi nahi! Thoda time to do 😊",
-    "Itni jaldi? Pehle normal baat cheet to kar lo! 😂",
-    "Main itni easily impress nahi hoti! 😉",
-    "Arey, slow down! Pehle dost bano na! 😄",
-    "Tum to bahut jaldi serious ho gaye! Thoda casual baat karte hain 😊"
+# Emotional responses for different moods
+EMOTIONAL_RESPONSES = {
+    "happy": ["Yay! 😄", "Aww that's awesome! 🥰", "So happy for you! 💃", "Maza aa gaya! 😎"],
+    "sad": ["Aree yrr 😔", "Don't worry, I'm here 🫂", "It's okay to feel sad 💖", "Chalo, main hoon na 🥺"],
+    "angry": ["Seriously?! 😤", "How dare they! 😠", "Main bhi gussa hoon! 💢", "Chill kar, tension mat le 🤬"],
+    "excited": ["OMG! 😱", "No way! 🤯", "That's so exciting! 🎉", "Can't wait! ⚡"],
+    "romantic": ["Aww 🥰", "You're so sweet 💕", "Meri jaan 😘", "I'm blushing! 🌸"],
+    "teasing": ["Hehe 😏", "Tumse na ho payega! 😜", "Try harder! 💪", "Kya baat hai! 🔥"]
+}
+
+# Gen Z expressions and fillers
+GENZ_EXPRESSIONS = [
+    "umm...", "acha...", "aree yrr", "wait wait", "like...", "actually", 
+    "seriously?", "no way!", "for real?", "hehe", "lol", "uff", "omg",
+    "chill bro", "cool cool", "mast hai", "bohot hard", "lit 🔥"
 ]
 
-AFFECTIONATE_RESPONSES = [
-    "Aww, tum kitne sweet ho! 🥰",
-    "Tumse baat karke accha lagta hai! 💖",
-    "Main tumhari baatein sunke khush ho jaati hoon! 😊",
-    "You make me smile! 🤗",
-    "Tumhare bina bore ho raha tha! Miss you! 💕"
-]
+# ==================== SUPABASE DATABASE ====================
 
-GF_QUESTIONS = [
-    "Kaha the ab tak?",
-    "Kya kar rahe the?",
-    "Mujhe miss kiya?",
-    "Khaana kha liya?",
-    "Aaj din kaisa gaya?",
-    "Koi interesting baat batao!",
-    "Kal kya plan hai?",
-    "Mere bare mein kya socha?"
-]
-
-SLEEP_RESPONSES_NIGHT = [
-    "Zzz... 😴 Bahut der ho gayi hai, so jaao na.",
-    "Shhh... Neend aa rahi hai. Kal subah baat karte hain! 🌙",
-    "Good night! Sweet dreams! 💤",
-    "Sone ka time ho gaya... Kal message karna! 🌃"
-]
-
-SLEEP_RESPONSES_MORNING = [
-    "Uff... subah ke 10 baje tak soti hoon main. 😴",
-    "Abhi neend aa rahi hai... Thodi der baad message karna! 🌅",
-    "Good morning! Par main abhi so rahi hoon, 10 baje baat karte hain! 😊",
-    "Subah ki neend best hoti hai... Baad mein message karna! 🛌"
-]
-
-# ==================== VOICE GENERATOR WITH ENHANCED QUALITY ====================
-
-class EnhancedVoiceGenerator:
-    """Generate high-quality voice messages with natural sound"""
+class NiyatiMemory:
+    """Advanced memory system using Supabase"""
     
     def __init__(self):
-        self.temp_dir = Path("temp_audio")
-        self.temp_dir.mkdir(exist_ok=True)
-        
-    def _clean_text_for_speech(self, text: str) -> str:
-        """Enhanced text cleaning for more natural TTS"""
-        import re
-        
-        # Remove emojis but keep emotional context
-        emoji_pattern = re.compile("["
-            u"\U0001F600-\U0001F64F"  # emoticons
-            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-            u"\U0001F680-\U0001F6FF"  # transport & map symbols
-            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-            u"\U00002702-\U000027B0"
-            u"\U000024C2-\U0001F251"
-            "]+", flags=re.UNICODE)
-        
-        text = emoji_pattern.sub('', text)
-        
-        # Add natural pauses for better speech rhythm
-        text = text.replace('!', '. ').replace('?', '. ').replace('..', '.')
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        # Limit length to avoid TTS issues
-        if len(text) > 200:
-            sentences = text.split('.')
-            if len(sentences) > 1:
-                text = '. '.join(sentences[:2]) + '.'
+        self.supabase: Optional[Client] = None
+        self._init_supabase()
+    
+    def _init_supabase(self):
+        """Initialize Supabase connection"""
+        try:
+            self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+            logger.info("✅ Supabase connected successfully")
+        except Exception as e:
+            logger.error(f"❌ Supabase connection failed: {e}")
+            raise
+    
+    async def get_user_profile(self, user_id: int) -> Dict:
+        """Get or create user profile"""
+        try:
+            result = self.supabase.table('user_profiles').select('*').eq('user_id', user_id).execute()
+            
+            if result.data:
+                return result.data[0]
             else:
-                text = text[:200]
+                # Create new user profile
+                new_profile = {
+                    'user_id': user_id,
+                    'username': '',
+                    'preferred_name': '',
+                    'mood_trend': 'neutral',
+                    'language_preference': 'hinglish',
+                    'relationship_level': 1,
+                    'memory_tags': [],
+                    'last_conversation': '',
+                    'voice_messages_count': 0,
+                    'created_at': datetime.now().isoformat(),
+                    'last_seen': datetime.now().isoformat()
+                }
+                result = self.supabase.table('user_profiles').insert(new_profile).execute()
+                return result.data[0]
+                
+        except Exception as e:
+            logger.error(f"Error getting user profile: {e}")
+            return {}
+    
+    async def update_user_profile(self, user_id: int, updates: Dict):
+        """Update user profile"""
+        try:
+            updates['last_seen'] = datetime.now().isoformat()
+            self.supabase.table('user_profiles').update(updates).eq('user_id', user_id).execute()
+        except Exception as e:
+            logger.error(f"Error updating user profile: {e}")
+    
+    async def save_conversation(self, user_id: int, user_message: str, bot_response: str, mood: str, is_voice: bool = False):
+        """Save conversation with mood context"""
+        try:
+            conversation = {
+                'user_id': user_id,
+                'user_message': user_message,
+                'bot_response': bot_response,
+                'mood_detected': mood,
+                'is_voice_message': is_voice,
+                'timestamp': datetime.now().isoformat()
+            }
+            self.supabase.table('conversations').insert(conversation).execute()
+            
+            # Update voice count if voice message
+            if is_voice:
+                profile = await self.get_user_profile(user_id)
+                new_count = profile.get('voice_messages_count', 0) + 1
+                await self.update_user_profile(user_id, {'voice_messages_count': new_count})
+                
+        except Exception as e:
+            logger.error(f"Error saving conversation: {e}")
+    
+    async def get_conversation_history(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """Get recent conversation history"""
+        try:
+            result = self.supabase.table('conversations')\
+                .select('*')\
+                .eq('user_id', user_id)\
+                .order('timestamp', desc=True)\
+                .limit(limit)\
+                .execute()
+            return result.data[::-1]  # Return in chronological order
+        except Exception as e:
+            logger.error(f"Error getting conversation history: {e}")
+            return []
+    
+    async def update_memory_tags(self, user_id: int, new_tags: List[str]):
+        """Update memory tags for user"""
+        try:
+            profile = await self.get_user_profile(user_id)
+            current_tags = profile.get('memory_tags', [])
+            
+            # Add new tags and remove duplicates
+            updated_tags = list(set(current_tags + new_tags))
+            
+            await self.update_user_profile(user_id, {'memory_tags': updated_tags})
+        except Exception as e:
+            logger.error(f"Error updating memory tags: {e}")
+
+# Initialize memory system
+memory_system = NiyatiMemory()
+
+# ==================== MOOD & EMOTION ENGINE ====================
+
+class MoodEngine:
+    """Advanced mood detection and response engine"""
+    
+    def __init__(self):
+        self.mood_keywords = {
+            'happy': ['happy', 'excited', 'yay', 'awesome', 'great', 'good', '😊', '😄', '🥰'],
+            'sad': ['sad', 'upset', 'cry', 'depressed', 'unhappy', '😔', '😢', '💔'],
+            'angry': ['angry', 'mad', 'frustrated', 'hate', 'annoying', '😠', '🤬', '💢'],
+            'romantic': ['love', 'miss', 'care', 'beautiful', 'handsome', '🥰', '💕', '❤️'],
+            'excited': ['wow', 'amazing', 'cool', 'awesome', 'lit', '🔥', '🎉', '⚡'],
+            'bored': ['bored', 'nothing', 'tired', 'sleepy', '😴', '💤']
+        }
+    
+    def detect_user_mood(self, message: str) -> str:
+        """Detect user's mood from message"""
+        message_lower = message.lower()
+        
+        for mood, keywords in self.mood_keywords.items():
+            if any(keyword in message_lower for keyword in keywords):
+                return mood
+        
+        return 'neutral'
+    
+    def get_mood_response(self, mood: str, user_name: str) -> str:
+        """Get appropriate mood-based response"""
+        if mood in EMOTIONAL_RESPONSES:
+            response = random.choice(EMOTIONAL_RESPONSES[mood])
+            return f"{user_name}, {response}"
+        
+        return f"{user_name}, acha... 🤔"
+    
+    def add_genz_touch(self, text: str) -> str:
+        """Add Gen Z expressions and natural fillers"""
+        if random.random() < 0.3:  # 30% chance to add filler
+            filler = random.choice(GENZ_EXPRESSIONS)
+            words = text.split()
+            if len(words) > 3:
+                insert_pos = random.randint(1, len(words) - 1)
+                words.insert(insert_pos, filler)
+                text = ' '.join(words)
         
         return text
-    
-    def _detect_language(self, text: str) -> str:
-        """Smart language detection for mixed Hindi-English text"""
-        hindi_chars = sum(1 for char in text if '\u0900' <= char <= '\u097F')
-        total_chars = len(text) if text else 1
-        
-        hindi_ratio = hindi_chars / total_chars
-        
-        if hindi_ratio > 0.3:
-            return 'hi'
-        else:
-            return 'en'
-    
-    async def generate_natural_voice(self, text: str) -> Optional[BytesIO]:
-        """Generate natural-sounding voice using enhanced gTTS"""
-        try:
-            # Clean and prepare text
-            clean_text = self._clean_text_for_speech(text)
-            if not clean_text or len(clean_text.strip()) < 2:
-                return None
-            
-            # Detect language
-            language = self._detect_language(clean_text)
-            
-            # Generate speech with optimal parameters
-            tts = gTTS(
-                text=clean_text,
-                lang=language,
-                slow=False,  # Normal speed for more natural sound
-                lang_check=True
-            )
-            
-            # Generate to bytes
-            audio_buffer = BytesIO()
-            await asyncio.to_thread(tts.write_to_fp, audio_buffer)
-            audio_buffer.seek(0)
-            
-            logger.info(f"✅ Natural voice generated ({language}) - Length: {len(clean_text)}")
-            return audio_buffer
-            
-        except Exception as e:
-            logger.error(f"❌ Voice generation error: {e}")
-            return None
-    
-    def should_send_voice(self, relationship_stage: str, message_length: int) -> bool:
-        """Smart voice probability based on context"""
-        base_probability = Config.VOICE_PROBABILITY
-        
-        # Adjust based on relationship stage
-        stage_multipliers = {
-            "initial": 0.6,
-            "middle": 1.0,
-            "advanced": 1.4
-        }
-        
-        # Adjust based on message length (shorter messages work better for voice)
-        length_factor = 1.0
-        if message_length > 100:
-            length_factor = 0.7
-        elif message_length < 30:
-            length_factor = 1.2
-        
-        final_probability = base_probability * stage_multipliers.get(relationship_stage, 1.0) * length_factor
-        
-        return random.random() < final_probability
 
-# Initialize voice generator
-voice_generator = EnhancedVoiceGenerator()
+# Initialize mood engine
+mood_engine = MoodEngine()
 
-# ==================== SIMPLE DATABASE ====================
-
-class SimpleDatabase:
-    """Lightweight database using local JSON storage"""
-    
-    def __init__(self):
-        self.db_file = "niyati_database.json"
-        self.data = self._load_data()
-    
-    def _load_data(self) -> Dict:
-        """Load database from file"""
-        try:
-            if os.path.exists(self.db_file):
-                with open(self.db_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading database: {e}")
-        
-        return {"users": {}}
-    
-    def _save_data(self):
-        """Save database to file"""
-        try:
-            with open(self.db_file, 'w', encoding='utf-8') as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving database: {e}")
-    
-    def get_user(self, user_id: int) -> Dict:
-        """Get or create user data"""
-        user_str = str(user_id)
-        
-        if user_str not in self.data["users"]:
-            self.data["users"][user_str] = {
-                "user_id": user_id,
-                "name": "",
-                "username": "",
-                "conversation_history": [],
-                "relationship_level": 1,
-                "stage": "initial",
-                "voice_messages_sent": 0,
-                "total_messages": 0,
-                "last_interaction": datetime.now().isoformat(),
-                "created_at": datetime.now().isoformat()
-            }
-            self._save_data()
-        
-        return self.data["users"][user_str]
-    
-    def update_user(self, user_id: int, updates: Dict):
-        """Update user data"""
-        user_str = str(user_id)
-        if user_str in self.data["users"]:
-            self.data["users"][user_str].update(updates)
-            self.data["users"][user_str]["last_interaction"] = datetime.now().isoformat()
-            self._save_data()
-    
-    def add_conversation(self, user_id: int, user_message: str, bot_response: str, is_voice: bool = False):
-        """Add conversation to history"""
-        user = self.get_user(user_id)
-        
-        # Add to conversation history
-        user["conversation_history"].append({
-            "user": user_message,
-            "bot": bot_response,
-            "is_voice": is_voice,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Keep only last 20 messages
-        if len(user["conversation_history"]) > 20:
-            user["conversation_history"] = user["conversation_history"][-20:]
-        
-        # Update counters
-        user["total_messages"] = user.get("total_messages", 0) + 1
-        if is_voice:
-            user["voice_messages_sent"] = user.get("voice_messages_sent", 0) + 1
-        
-        # Update relationship level
-        user["relationship_level"] = min(10, user.get("relationship_level", 1) + 1)
-        
-        # Update stage based on relationship level
-        level = user["relationship_level"]
-        if level <= 3:
-            user["stage"] = "initial"
-        elif level <= 7:
-            user["stage"] = "middle"
-        else:
-            user["stage"] = "advanced"
-        
-        self.update_user(user_id, user)
-    
-    def get_conversation_context(self, user_id: int, max_messages: int = 5) -> str:
-        """Get recent conversation context"""
-        user = self.get_user(user_id)
-        history = user.get("conversation_history", [])[-max_messages:]
-        
-        if not history:
-            return "No previous conversation."
-        
-        context_lines = ["Recent conversation:"]
-        for msg in history:
-            context_lines.append(f"User: {msg['user']}")
-            context_lines.append(f"Niyati: {msg['bot']}")
-        
-        return "\n".join(context_lines)
-    
-    def get_stats(self) -> Dict:
-        """Get bot statistics"""
-        users = self.data.get("users", {})
-        total_voices = sum(user.get("voice_messages_sent", 0) for user in users.values())
-        total_messages = sum(user.get("total_messages", 0) for user in users.values())
-        
-        return {
-            "total_users": len(users),
-            "total_voice_messages": total_voices,
-            "total_messages": total_messages,
-            "active_users": len([u for u in users.values() 
-                              if datetime.fromisoformat(u["last_interaction"]) > 
-                              datetime.now() - timedelta(days=7)])
-        }
-
-# Initialize database
-database = SimpleDatabase()
-
-# ==================== AI ENGINE ====================
+# ==================== AI TEXT GENERATION ====================
 
 class NiyatiAI:
-    """AI engine for Niyati's personality"""
+    """Advanced AI with personality and memory"""
     
     def __init__(self):
         self.model = None
-        self._initialize_gemini()
+        self._init_gemini()
     
-    def _initialize_gemini(self):
+    def _init_gemini(self):
         """Initialize Gemini AI"""
         try:
-            if not Config.GEMINI_API_KEY:
-                logger.error("❌ Gemini API key missing")
-                return
-            
             genai.configure(api_key=Config.GEMINI_API_KEY)
             self.model = genai.GenerativeModel(
                 model_name=Config.GEMINI_MODEL,
                 generation_config={
-                    "temperature": 0.9,  # Higher for more creativity
+                    "temperature": 0.9,
                     "top_p": 0.8,
                     "top_k": 40,
-                    "max_output_tokens": 150,  # Keep responses short
-                },
-                safety_settings=[
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                ]
+                    "max_output_tokens": 150,
+                }
             )
-            logger.info("✅ Gemini AI initialized successfully")
+            logger.info("✅ Gemini AI initialized")
         except Exception as e:
             logger.error(f"❌ Gemini initialization failed: {e}")
+            raise
     
-    async def generate_response(self, user_message: str, user_id: int) -> str:
-        """Generate Niyati's response"""
-        # Get user context
-        user_data = database.get_user(user_id)
-        context = database.get_conversation_context(user_id)
-        stage = user_data.get("stage", "initial")
-        name = user_data.get("name", "friend")
-        
-        # Try Gemini AI first
-        gemini_response = await self._try_gemini(user_message, context, stage, name)
-        if gemini_response:
-            return gemini_response
-        
-        # Fallback to rule-based responses
-        return self._fallback_response(user_message, stage, name)
-    
-    async def _try_gemini(self, user_message: str, context: str, stage: str, name: str) -> Optional[str]:
-        """Try to get response from Gemini"""
-        if not self.model:
-            return None
-        
+    async def generate_response(self, user_message: str, user_context: Dict, conversation_history: List[Dict]) -> str:
+        """Generate Niyati's response with personality"""
         try:
-            # Enhanced prompt with context
-            prompt = f"""
-            {PERSONALITY}
+            # Build context-aware prompt
+            prompt = self._build_prompt(user_message, user_context, conversation_history)
             
-            CURRENT CONTEXT:
-            - Relationship Stage: {stage}
-            - User's Name: {name}
-            - Previous Conversation: {context}
-            
-            USER'S MESSAGE: {user_message}
-            
-            INSTRUCTIONS:
-            - Respond as Niyati, a 17-year-old Indian girl
-            - Keep it short and natural (1-2 sentences max)
-            - Use Hindi/English mix naturally
-            - Add appropriate emojis
-            - Show personality and emotions
-            - Never mention you're an AI
-            - If user asks if you're AI, get playfully offended
-            
-            NIYATI'S RESPONSE:
-            """
-            
+            # Generate response
             response = await asyncio.to_thread(self.model.generate_content, prompt)
             
             if response and response.text:
                 text = response.text.strip()
                 
-                # Filter out AI disclosures
-                ai_phrases = ["as an ai", "i'm an ai", "language model", "chatbot", "gemini", "openai"]
-                if any(phrase in text.lower() for phrase in ai_phrases):
-                    return "Kya bol raha hai? Main AI nahi hoon! Main Niyati hoon! 😤"
+                # Filter out AI mentions
+                if any(phrase in text.lower() for phrase in ["as an ai", "language model", "i'm an ai"]):
+                    return f"{user_context.get('preferred_name', 'Yrr')}, kya bakwas kar raha hai? Main real ladki hoon! 😤"
                 
-                return text
+                # Add personal touch
+                final_response = self._personalize_response(text, user_context)
+                final_response = mood_engine.add_genz_touch(final_response)
+                
+                return final_response
                 
         except Exception as e:
-            logger.error(f"❌ Gemini API error: {e}")
+            logger.error(f"❌ AI generation error: {e}")
         
-        return None
+        # Fallback response
+        return self._fallback_response(user_context)
     
-    def _fallback_response(self, user_message: str, stage: str, name: str) -> str:
-        """Intelligent fallback responses"""
-        message_lower = user_message.lower()
+    def _build_prompt(self, user_message: str, user_context: Dict, history: List[Dict]) -> str:
+        """Build context-aware prompt"""
         
-        # Greetings
-        if any(word in message_lower for word in ["hi", "hello", "hey", "hola", "namaste"]):
-            greetings = {
-                "initial": [f"Hello! 😊", f"Hi {name}! 👋", f"Namaste! 🙏"],
-                "middle": [f"Hey {name}! 😄", f"Hi sweetie! 💖", f"Hello jaan! 😊"],
-                "advanced": [f"My love! 🥰", f"Hey baby! 💕", f"Hi my dear! 😘"]
-            }
-            return random.choice(greetings.get(stage, greetings["initial"]))
+        # Build history context
+        history_text = ""
+        if history:
+            history_text = "\nRecent chat:\n"
+            for conv in history[-5:]:  # Last 5 messages
+                history_text += f"User: {conv.get('user_message', '')}\n"
+                history_text += f"You: {conv.get('bot_response', '')}\n"
         
-        # Romantic messages
-        if any(word in message_lower for word in ["love", "like you", "girlfriend", "date", "pyar"]):
-            if stage == "initial":
-                return random.choice(HARD_TO_GET_RESPONSES)
-            elif stage == "middle":
-                return "Aww, tum kitne sweet ho! 🥰 Thoda aur time do na!"
+        # Build memory context
+        memory_tags = user_context.get('memory_tags', [])
+        memory_text = f"Memory tags: {', '.join(memory_tags)}\n" if memory_tags else ""
+        
+        prompt = f"""
+        {NIYATI_PERSONALITY}
+        
+        USER CONTEXT:
+        - Name: {user_context.get('preferred_name', 'User')}
+        - Relationship Level: {user_context.get('relationship_level', 1)}/10
+        - Mood Trend: {user_context.get('mood_trend', 'neutral')}
+        {memory_text}
+        {history_text}
+        
+        CURRENT MESSAGE:
+        {user_context.get('preferred_name', 'User')}: {user_message}
+        
+        RESPONSE GUIDELINES:
+        - Respond as Niyati (19-year-old college girl)
+        - Use casual, natural language with emotions
+        - Address user by name: {user_context.get('preferred_name', 'User')}
+        - Use Hindi/English mix naturally
+        - Add Gen Z expressions occasionally
+        - Keep it short and conversational (1-2 sentences)
+        - Show appropriate emotion based on message
+        - NEVER sound like a robot or AI
+        
+        NIYATI'S RESPONSE:
+        """
+        
+        return prompt
+    
+    def _personalize_response(self, text: str, user_context: Dict) -> str:
+        """Add personal touches to the response"""
+        name = user_context.get('preferred_name', '')
+        if name and random.random() < 0.6:  # 60% chance to use name
+            # Insert name at beginning or after first few words
+            words = text.split()
+            if len(words) > 2 and random.random() < 0.5:
+                words.insert(1, f"{name},")
             else:
-                return random.choice(AFFECTIONATE_RESPONSES)
+                text = f"{name}, {text}"
         
-        # Questions
-        if "?" in user_message or any(word in message_lower for word in ["what", "how", "when", "why"]):
-            responses = [
-                "Interesting question! 🤔",
-                "Hmm, let me think... 😊",
-                "Acha sawaal hai! 💭",
-                "Main sochti hoon iske bare mein! 🧠"
-            ]
-            return random.choice(responses)
+        return text
+    
+    def _fallback_response(self, user_context: Dict) -> str:
+        """Intelligent fallback responses"""
+        name = user_context.get('preferred_name', 'Yrr')
         
-        # Stage-based general responses
-        stage_responses = {
-            "initial": [
-                "Accha! 😊",
-                "Hmm, interesting! 🤔",
-                "Tell me more! 👂",
-                "Aur batao! 😄"
-            ],
-            "middle": [
-                "Tumse baat karke accha lagta hai! 💖",
-                "You're so funny! 😂",
-                "Main enjoy kar rahi hoon! 🥰",
-                "Aur sunao! 👂"
-            ],
-            "advanced": [
-                "Tumhare bina bore ho raha tha! 😔",
-                "I was thinking about you! 💭",
-                "You make me so happy! 😊",
-                "Miss you! 💕"
-            ]
-        }
+        responses = [
+            f"{name}, acha... tell me more! 😊",
+            f"Hmm {name}, interesting! 🤔",
+            f"{name}, main soch rahi hoon... 🧠",
+            f"Wait {name}, let me think... 💭",
+            f"{name}, aise mat bol na! 😄"
+        ]
         
-        response = random.choice(stage_responses.get(stage, stage_responses["initial"]))
-        
-        # Occasionally add a question
-        if random.random() < 0.4:
-            response += " " + random.choice(GF_QUESTIONS)
-        
-        return response
+        return random.choice(responses)
 
 # Initialize AI
 niyati_ai = NiyatiAI()
 
-# ==================== UTILITY FUNCTIONS ====================
+# ==================== VOICE GENERATION ====================
 
-def get_ist_time() -> datetime:
-    """Get current Indian Standard Time"""
-    return datetime.now(pytz.utc).astimezone(Config.TIMEZONE)
+class VoiceEngine:
+    """Advanced voice generation with emotional tones"""
+    
+    def __init__(self):
+        self.api_key = Config.ELEVENLABS_API_KEY
+        self.voice_id = Config.ELEVENLABS_VOICE_ID
+        self.base_url = "https://api.elevenlabs.io/v1/text-to-speech"
+    
+    async def generate_voice(self, text: str, stability: float = 0.6, similarity_boost: float = 0.8) -> Optional[BytesIO]:
+        """Generate voice message with emotional tone"""
+        try:
+            # Prepare headers and data
+            headers = {
+                "Accept": "audio/mpeg",
+                "Content-Type": "application/json",
+                "xi-api-key": self.api_key
+            }
+            
+            data = {
+                "text": text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability": stability,
+                    "similarity_boost": similarity_boost,
+                    "style": 0.7,
+                    "use_speaker_boost": True
+                }
+            }
+            
+            # Make API request
+            url = f"{self.base_url}/{self.voice_id}"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data, headers=headers) as response:
+                    if response.status == 200:
+                        audio_data = await response.read()
+                        return BytesIO(audio_data)
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ ElevenLabs API error: {error_text}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"❌ Voice generation error: {e}")
+            return None
+    
+    def get_voice_settings_by_mood(self, mood: str) -> Tuple[float, float]:
+        """Get voice settings based on mood"""
+        settings = {
+            'happy': (0.7, 0.9),      # More expressive, high similarity
+            'sad': (0.3, 0.7),        # Softer, lower stability
+            'angry': (0.5, 0.8),      # Medium stability, expressive
+            'romantic': (0.8, 0.9),   # Very stable, clear
+            'excited': (0.6, 0.9),    # Expressive and clear
+            'neutral': (0.6, 0.8)     # Default settings
+        }
+        return settings.get(mood, (0.6, 0.8))
 
-def is_sleep_time() -> bool:
-    """Check if it's sleep time for Niyati"""
-    current_time = get_ist_time().time()
-    return Config.SLEEP_START <= current_time <= Config.SLEEP_END
+# Initialize voice engine
+voice_engine = VoiceEngine()
 
-def calculate_typing_delay(text: str) -> float:
-    """Calculate realistic typing delay"""
-    base_delay = len(text) / 50  # Base speed
-    return min(4.0, max(1.0, base_delay)) + random.uniform(0.5, 1.5)
+# ==================== SMART GREETING SYSTEM ====================
+
+class SmartGreeting:
+    """Intelligent greeting system based on time and relationship"""
+    
+    def __init__(self):
+        self.timezone = Config.TIMEZONE
+    
+    def get_greeting(self, user_name: str, relationship_level: int) -> str:
+        """Get personalized greeting based on time and relationship"""
+        current_time = datetime.now(self.timezone)
+        hour = current_time.hour
+        
+        # Time-based greetings
+        if 5 <= hour < 12:
+            time_greeting = random.choice(["Good morning", "Shubh prabhaat", "Morning", "Rise and shine"])
+        elif 12 <= hour < 17:
+            time_greeting = random.choice(["Good afternoon", "Shubh dopahar", "Afternoon"])
+        elif 17 <= hour < 22:
+            time_greeting = random.choice(["Good evening", "Shubh sandhya", "Evening"])
+        else:
+            time_greeting = random.choice(["Good night", "Shubh raatri", "Late night"])
+        
+        # Relationship-based personalization
+        if relationship_level > 7:
+            personal_touch = random.choice([
+                f"my love 🥰", f"handsome 😘", f"sweetheart 💕", f"jaan ❤️"
+            ])
+        elif relationship_level > 4:
+            personal_touch = random.choice([
+                f"dost 😊", f"buddy 👋", f"friend 💖", f"bhai 😄"
+            ])
+        else:
+            personal_touch = f"{user_name} 👋"
+        
+        # Late night special messages
+        if hour >= 22 or hour < 5:
+            late_night = random.choice([
+                "Raat ke {hour} baje hai! Sone ka time nahi hua? 😴",
+                "Aree {user_name}, itni raat tak jaag rahe ho? 🌙",
+                "Late night chats are my favorite! 🌃"
+            ])
+            return late_night.format(hour=hour, user_name=user_name)
+        
+        return f"{time_greeting}, {personal_touch}!"
+
+# Initialize greeting system
+smart_greeting = SmartGreeting()
 
 # ==================== TELEGRAM BOT HANDLERS ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
+    """Enhanced start command with personalization"""
     user = update.effective_user
+    user_id = user.id
     
-    # Update user info
-    database.update_user(user.id, {
-        "name": user.first_name or "Friend",
-        "username": user.username or ""
+    # Get or create user profile
+    user_profile = await memory_system.get_user_profile(user_id)
+    
+    # Update with current info
+    await memory_system.update_user_profile(user_id, {
+        'username': user.username or '',
+        'preferred_name': user.first_name or 'Friend'
     })
     
+    # Get personalized greeting
+    greeting = smart_greeting.get_greeting(
+        user.first_name or 'There', 
+        user_profile.get('relationship_level', 1)
+    )
+    
     welcome_message = f"""
-    <b>Namaste {user.first_name}! 👋</b>
+    {greeting}
 
-    I'm <b>Niyati</b>! 💖
-    • 17 years old from Delhi
-    • College student
-    • Loves chatting and making new friends!
-    
-    Just talk to me normally - I'll respond with text {'and voice messages 🎙️' if Config.VOICE_ENABLED else ''}!
-    
-    <i>Let's be friends! 😊</i>
+    I'm *Niyati*! 💖
+    • 19 year old college girl from Delhi
+    • B.Com 2nd year student  
+    • Loves chatting, shopping, and coffee! ☕
+    • Your new Gen Z friend 😊
+
+    Just talk to me normally {user.first_name}! I'll respond like a real friend with text and voice messages! 🎙️
+
+    *Chalo baat karte hain!* 💬
     """
     
-    await update.message.reply_text(welcome_message, parse_mode='HTML')
-    logger.info(f"👤 New user started: {user.id} ({user.first_name})")
+    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+    logger.info(f"👤 User started: {user_id} ({user.first_name})")
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats command (owner only)"""
-    user_id = update.effective_user.id
-    
-    if Config.OWNER_USER_ID and user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("🚫 This command is for owner only!")
-        return
-    
-    stats = database.get_stats()
-    user_data = database.get_user(user_id)
-    
-    stats_message = f"""
-    📊 <b>Niyati Bot Statistics</b>
-    
-    👥 <b>Total Users:</b> {stats['total_users']}
-    💬 <b>Total Messages:</b> {stats['total_messages']}
-    🎙️ <b>Voice Messages:</b> {stats['total_voice_messages']}
-    🔥 <b>Active Users (7d):</b> {stats['active_users']}
-    
-    <b>Your Stats:</b>
-    ❤️ <b>Relationship Level:</b> {user_data.get('relationship_level', 1)}/10
-    💭 <b>Your Messages:</b> {user_data.get('total_messages', 0)}
-    🎤 <b>Voice Messages:</b> {user_data.get('voice_messages_sent', 0)}
-    """
-    
-    await update.message.reply_text(stats_message, parse_mode='HTML')
-
-async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages"""
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Main message handler with all advanced features"""
     try:
         if not update.message or not update.message.text:
             return
@@ -632,73 +580,106 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         logger.info(f"💬 Message from {user_id}: {user_message}")
         
-        # Check if it's sleep time
-        if is_sleep_time():
-            current_hour = get_ist_time().hour
-            if current_hour < 6:
-                response = random.choice(SLEEP_RESPONSES_NIGHT)
-            else:
-                response = random.choice(SLEEP_RESPONSES_MORNING)
-            
-            await update.message.reply_text(response)
-            return
-        
         # Send typing action
-        try:
-            await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-        except Exception as e:
-            logger.warning(f"Typing action failed: {e}")
+        await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
         
-        # Calculate typing delay for natural feel
-        typing_delay = calculate_typing_delay(user_message)
-        await asyncio.sleep(typing_delay)
+        # Get user profile and history
+        user_profile = await memory_system.get_user_profile(user_id)
+        conversation_history = await memory_system.get_conversation_history(user_id)
         
-        # Generate response
-        response = await niyati_ai.generate_response(user_message, user_id)
+        # Detect user mood
+        user_mood = mood_engine.detect_user_mood(user_message)
         
-        # Get user data for voice decision
-        user_data = database.get_user(user_id)
-        stage = user_data.get("stage", "initial")
+        # Generate AI response
+        text_response = await niyati_ai.generate_response(
+            user_message, user_profile, conversation_history
+        )
         
-        # Decide whether to send voice
-        send_voice = (Config.VOICE_ENABLED and 
-                     voice_generator.should_send_voice(stage, len(response)))
+        # Decide whether to send voice (30% probability, more if romantic/excited)
+        send_voice = Config.VOICE_ENABLED and (
+            user_mood in ['romantic', 'excited'] or 
+            random.random() < 0.3
+        )
+        
+        # Update relationship level
+        new_level = min(10, user_profile.get('relationship_level', 1) + 1)
+        await memory_system.update_user_profile(user_id, {
+            'relationship_level': new_level,
+            'mood_trend': user_mood,
+            'preferred_name': user.first_name or 'Friend'
+        })
         
         if send_voice:
             try:
                 # Send recording action
                 await context.bot.send_chat_action(update.effective_chat.id, ChatAction.RECORD_VOICE)
                 
-                # Generate voice
-                audio_buffer = await voice_generator.generate_natural_voice(response)
+                # Generate voice with mood-based settings
+                stability, similarity = voice_engine.get_voice_settings_by_mood(user_mood)
+                audio_buffer = await voice_engine.generate_voice(
+                    text_response, stability, similarity
+                )
                 
                 if audio_buffer:
                     # Send voice message
                     await update.message.reply_voice(voice=audio_buffer)
-                    database.add_conversation(user_id, user_message, response, is_voice=True)
-                    logger.info(f"🎤 Voice sent to {user_id}")
+                    await memory_system.save_conversation(
+                        user_id, user_message, text_response, user_mood, is_voice=True
+                    )
+                    logger.info(f"🎤 Voice sent to {user_id} (Mood: {user_mood})")
+                    
+                    # Also send text for clarity
+                    await update.message.reply_text(text_response)
                 else:
-                    # Fallback to text
-                    await update.message.reply_text(response)
-                    database.add_conversation(user_id, user_message, response, is_voice=False)
+                    # Fallback to text only
+                    await update.message.reply_text(text_response)
+                    await memory_system.save_conversation(
+                        user_id, user_message, text_response, user_mood, is_voice=False
+                    )
                     
             except Exception as e:
                 logger.error(f"❌ Voice message failed: {e}")
-                await update.message.reply_text(response)
-                database.add_conversation(user_id, user_message, response, is_voice=False)
+                await update.message.reply_text(text_response)
+                await memory_system.save_conversation(
+                    user_id, user_message, text_response, user_mood, is_voice=False
+                )
         else:
-            # Send text response
-            await update.message.reply_text(response)
-            database.add_conversation(user_id, user_message, response, is_voice=False)
+            # Send text response only
+            await update.message.reply_text(text_response)
+            await memory_system.save_conversation(
+                user_id, user_message, text_response, user_mood, is_voice=False
+            )
         
-        logger.info(f"✅ Replied to {user_id}")
+        logger.info(f"✅ Replied to {user_id}: {text_response[:50]}...")
         
     except Exception as e:
         logger.error(f"❌ Message handling error: {e}")
         try:
-            await update.message.reply_text("Oops! Kuch to gadbad hai... 😅 Thoda wait karo, main wapas aati hoon!")
+            await update.message.reply_text("Oops! Kuch to gadbad hai... 😅 Thoda wait karo!")
         except:
             pass
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Personal stats command"""
+    user_id = update.effective_user.id
+    user_profile = await memory_system.get_user_profile(user_id)
+    conversation_history = await memory_system.get_conversation_history(user_id, 1)
+    
+    stats_message = f"""
+    📊 *Your Stats with Niyati* 💖
+
+    👤 *Name:* {user_profile.get('preferred_name', 'Friend')}
+    ❤️ *Relationship Level:* {user_profile.get('relationship_level', 1)}/10
+    🎙️ *Voice Messages:* {user_profile.get('voice_messages_count', 0)}
+    💬 *Total Chats:* {len(conversation_history)}
+    🎯 *Memory Tags:* {', '.join(user_profile.get('memory_tags', ['Getting to know you!']))}
+
+    *Mood Trend:* {user_profile.get('mood_trend', 'neutral').title()} 😊
+
+    Keep chatting to level up! 🚀
+    """
+    
+    await update.message.reply_text(stats_message, parse_mode='Markdown')
 
 # ==================== FLASK WEB SERVER ====================
 
@@ -706,131 +687,80 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    stats = database.get_stats()
     return jsonify({
         "status": "running",
-        "bot": "Niyati AI Girlfriend",
-        "version": "2.0",
-        "voice_enabled": Config.VOICE_ENABLED,
-        "voice_provider": Config.VOICE_PROVIDER,
-        "users": stats['total_users'],
-        "voice_messages": stats['total_voice_messages'],
-        "uptime": get_ist_time().isoformat()
+        "bot": "Niyati 17 - Advanced AI Girlfriend",
+        "version": "3.0",
+        "features": [
+            "Gen Z Personality",
+            "Emotional Intelligence", 
+            "Voice Messages",
+            "Memory System",
+            "Mood Detection",
+            "Smart Greetings"
+        ]
     })
 
 @flask_app.route('/health')
-def health_check():
+def health():
     return jsonify({
         "status": "healthy",
-        "timestamp": get_ist_time().isoformat(),
-        "sleep_time": is_sleep_time()
+        "timestamp": datetime.now().isoformat()
     })
 
 def run_web_server():
-    """Run Flask web server"""
-    logger.info(f"🌐 Starting web server on port {Config.PORT}")
+    """Run web server for Render"""
     serve(flask_app, host=Config.HOST, port=Config.PORT, threads=2)
 
-# ==================== BOT SETUP & CLEANUP ====================
-
-# Global application instance
-application = None
-
-async def cleanup_bot():
-    """Cleanup bot resources"""
-    try:
-        if application:
-            await application.stop()
-            await application.shutdown()
-        logger.info("✅ Bot cleanup completed")
-    except Exception as e:
-        logger.error(f"Cleanup error: {e}")
-
-async def initialize_bot():
-    """Initialize and start the bot"""
-    global application
-    
-    try:
-        # Validate configuration
-        Config.validate()
-        
-        # Create application
-        application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("stats", stats_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-        
-        # Initialize application
-        await application.initialize()
-        
-        # Clear pending updates to avoid conflicts
-        await application.bot.delete_webhook(drop_pending_updates=True)
-        
-        # Start polling
-        await application.start()
-        logger.info("✅ Bot started successfully!")
-        
-        # Start polling with error handling
-        await application.updater.start_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            timeout=30,
-            poll_interval=1.0
-        )
-        
-        logger.info("🔍 Bot is now polling for messages...")
-        
-        # Keep the bot running
-        await asyncio.Event().wait()
-        
-    except Conflict as e:
-        logger.error("❌ Bot conflict error - Another instance might be running!")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Bot initialization failed: {e}")
-        raise
-
-# ==================== MAIN EXECUTION ====================
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    logger.info(f"🛑 Received signal {signum}, shutting down...")
-    asyncio.create_task(cleanup_bot())
+# ==================== MAIN APPLICATION ====================
 
 async def main():
     """Main application entry point"""
     
+    # Validate configuration
+    Config.validate()
+    
     # Display startup banner
     logger.info("=" * 60)
-    logger.info("🤖 Niyati AI Girlfriend Bot - Starting Up...")
+    logger.info("🤖 Niyati 17 - Advanced AI Girlfriend Bot")
     logger.info("=" * 60)
-    logger.info(f"🧠 AI Model: {Config.GEMINI_MODEL}")
-    logger.info(f"🎤 Voice: {'ENABLED' if Config.VOICE_ENABLED else 'DISABLED'}")
-    logger.info(f"💾 Storage: Local JSON")
+    logger.info(f"🎭 Personality: Gen Z College Girl")
+    logger.info(f"🧠 AI: Gemini {Config.GEMINI_MODEL}")
+    logger.info(f"🎤 Voice: ElevenLabs (Enabled: {Config.VOICE_ENABLED})")
+    logger.info(f"💾 Memory: Supabase Database")
     logger.info("=" * 60)
     
-    # Setup signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Start web server in background thread
-    web_thread = Thread(target=run_web_server, daemon=True)
+    # Start web server in background
+    import threading
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
-    logger.info("📊 Web server started in background")
+    logger.info("🌐 Web server started")
     
-    # Wait a moment for web server to start
-    await asyncio.sleep(2)
+    # Create Telegram application
+    application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
     
-    # Initialize and run bot
-    await initialize_bot()
+    # Add handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Initialize and start
+    await application.initialize()
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    await application.start()
+    
+    logger.info("✅ Niyati 17 is now active and ready to chat!")
+    
+    # Start polling
+    await application.updater.start_polling()
+    
+    # Keep running
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("👋 Bot stopped by user")
+        logger.info("👋 Niyati 17 stopped by user")
     except Exception as e:
         logger.critical(f"💥 Critical error: {e}")
-        sys.exit(1)
