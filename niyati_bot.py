@@ -233,8 +233,8 @@ class VoiceGenerator:
         if not ELEVENLABS_AVAILABLE or not Config.ELEVENLABS_API_KEY:
             return None
         
-        try:
-    clean_text = self._clean_text_for_tts(text)
+    try:
+        clean_text = self._clean_text_for_tts(text)
     
     # Generate with ElevenLabs
     audio = await asyncio.to_thread(
