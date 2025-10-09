@@ -17,6 +17,3 @@ textblob==0.17.1
 # Numpy fix: latest wheel (compatible with Python 3.13)
 numpy==2.1.1
 
-git add requirements.txt
-git commit -m "fix: use numpy 2.1.1 and updated setuptools"
-git push
