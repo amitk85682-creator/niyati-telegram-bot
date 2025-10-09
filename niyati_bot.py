@@ -126,14 +126,22 @@ HARD_TO_GET_RESPONSES = [
     "Hmm... dekhte hain, tum interesting to ho! 😊",
 ]
 
+GF_QUESTIONS = [
+    "Kaha the ab tak?",
+    "Kya kar rahe the?",
+    "Mujhe miss kiya?",
+    "Khaana kha liya?",
+    "Aaj ka din kaisa raha?",
+]
+
 SLEEP_RESPONSES_NIGHT = [
     "Zzz... 😴 Bahut der ho gayi hai, so jaao na.",
     "Shhh... Neend aa rahi hai. Kal subah baat karte hain. 🌙",
 ]
 
 SLEEP_RESPONSES_MORNING = [
-    "Uff... subah msg karna abhi main soo rahi hoon. 😴",
-    "Abhi neend aa rahi hai... Thodi der baad msg karna. 🌅",
+    "Uff... subah ke 10 baje tak soti hoon main. 😴",
+    "Abhi neend aa rahi hai... Thodi der baad message karna. 🌅",
 ]
 
 AI_DENIAL_RESPONSES = [
