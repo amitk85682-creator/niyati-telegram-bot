@@ -234,30 +234,20 @@ class VoiceGenerator:
             return None
         
         try:
-            clean_text = self._clean_text_for_tts(text)
-            
-            # Generate with ElevenLabs
-            audio = await asyncio.to_thread(
-                generate,
-                text=clean_text,
-                voice=Voice(
-                    voice_id=Config.ELEVENLABS_VOICE_ID,
-                    settings=VoiceSettings(
-                        stability=0.5,
-                        similarity_boost=0.75,
-                        style=0.5,
-                        use_speaker_boost=True
-                    )
-                ),
-                model="eleven_multilingual_v2"
-            )
-            
-            # Convert to BytesIO
-            audio_io = BytesIO(audio)
-            audio_io.seek(0)
-            
-            logger.info("✅ Generated ElevenLabs voice")
-            return audio_io
+    clean_text = self._clean_text_for_tts(text)
+    
+    # Generate with ElevenLabs
+    audio = await asyncio.to_thread(
+        self.client.generate,
+        text=clean_text,
+        voice="Sm1seazb4gs7RSlUVw7c",  # <-- Voice ID yahan de
+        model="eleven_multilingual_v2"
+    )
+    
+    audio_io = BytesIO(audio)
+    audio_io.seek(0)
+    return audio_io
+
             
         except Exception as e:
             logger.error(f"❌ ElevenLabs error: {e}")
