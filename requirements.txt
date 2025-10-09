@@ -1,4 +1,6 @@
 # requirements.txt
+setuptools>=65.5.0
+wheel
 google-generativeai==0.3.0
 elevenlabs==0.2.24
 supabase==2.0.0
@@ -14,5 +16,5 @@ pydantic==2.4.2
 python-multipart==0.0.6
 aiofiles==23.2.1
 pip>=25.0
-setuptools>=70.0
-wheel>=0.43.0
+numpy==1.26.4
+
