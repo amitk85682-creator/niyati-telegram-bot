@@ -1,6 +1,6 @@
 """
-Niyati - AI Girlfriend Telegram Bot
-Complete Error-Free Version with Gemini + Supabase
+Niyati - AI Girlfriend Telegram Bot with Voice Messages
+Complete Version with Gemini + Supabase + Voice Support
 """
 
 import os
@@ -12,6 +12,8 @@ import logging
 from datetime import datetime, time, timedelta
 from threading import Thread
 from typing import Optional, List, Dict
+from io import BytesIO
+from pathlib import Path
 
 from flask import Flask, jsonify
 from telegram import Update
@@ -27,6 +29,14 @@ from waitress import serve
 import pytz
 import google.generativeai as genai
 from supabase import create_client, Client
+
+# Voice support
+from gtts import gTTS
+try:
+    from elevenlabs import generate, set_api_key, Voice, VoiceSettings
+    ELEVENLABS_AVAILABLE = True
+except:
+    ELEVENLABS_AVAILABLE = False
 
 # ==================== LOGGING SETUP ====================
 
@@ -54,14 +64,21 @@ class Config:
     SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     
+    # Voice Settings
+    VOICE_ENABLED = os.getenv("VOICE_ENABLED", "true").lower() == "true"
+    VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "gtts")  # "gtts" or "elevenlabs"
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+    ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")  # Bella voice
+    VOICE_PROBABILITY = float(os.getenv("VOICE_PROBABILITY", "0.3"))  # 30% chance
+    
     # Server
     PORT = int(os.getenv("PORT", "8080"))
     HOST = "0.0.0.0"
     
     # Timezone
     TIMEZONE = pytz.timezone('Asia/Kolkata')
-    SLEEP_START = time(1, 0)   # 1 AM
-    SLEEP_END = time(10, 0)     # 10 AM
+    SLEEP_START = time(1, 0)
+    SLEEP_END = time(10, 0)
     
     @classmethod
     def validate(cls):
@@ -72,6 +89,9 @@ class Config:
             logger.warning("⚠️ GEMINI_API_KEY not set - using fallback responses")
         if not cls.SUPABASE_KEY:
             logger.warning("⚠️ SUPABASE_KEY not set - using local storage")
+        if cls.VOICE_ENABLED and cls.VOICE_PROVIDER == "elevenlabs" and not cls.ELEVENLABS_API_KEY:
+            logger.warning("⚠️ ElevenLabs API key not set - falling back to gTTS")
+            cls.VOICE_PROVIDER = "gtts"
 
 # ==================== CONSTANTS ====================
 
@@ -104,37 +124,168 @@ HARD_TO_GET_RESPONSES = [
     "Main itni easily impress nahi hoti! 😉",
     "Tumhare dimaag mein ye sab kya chalta rehta hai? 😏",
     "Hmm... dekhte hain, tum interesting to ho! 😊",
-    "Arre wah, tum to kaafi confident ho! 😅",
-    "Thoda aur try karo… shayad impress ho jaun. 😇",
-]
-
-GF_QUESTIONS = [
-    "Kaha the ab tak?",
-    "Kya kar rahe the?",
-    "Mujhe miss kiya?",
-    "Khaana kha liya?",
-    "Aaj ka din kaisa raha?",
-    "Sab theek hai na?",
 ]
 
 SLEEP_RESPONSES_NIGHT = [
     "Zzz... 😴 Bahut der ho gayi hai, so jaao na.",
     "Shhh... Neend aa rahi hai. Kal subah baat karte hain. 🌙",
-    "Sone ka time hai... Good night! 💤",
 ]
 
 SLEEP_RESPONSES_MORNING = [
-    "Uff... subah ke 10 baje tak soti hoon main. 😴",
-    "Abhi neend aa rahi hai... Thodi der baad message karna. 🌅",
-    "Good morning! Par main abhi so rahi hoon. 😊",
+    "Uff... subah msg karna abhi main soo rahi hoon. 😴",
+    "Abhi neend aa rahi hai... Thodi der baad msg karna. 🌅",
 ]
 
 AI_DENIAL_RESPONSES = [
     "Kya bol raha hai? Main AI nahi hoon! Main Niyati hoon! 😡",
     "Pagal ho kya? Main ek real ladki hoon! 🤬",
-    "Tumhe main robot lagti hoon kya? 😤",
-    "Stop it! Main normal college girl hoon! 😠",
 ]
+
+# Voice-specific responses (shorter for better TTS)
+VOICE_GREETINGS = [
+    "Hello! Kaise ho?",
+    "Hi! What's up?",
+    "Hey there!",
+    "Namaste!",
+]
+
+VOICE_QUESTIONS = [
+    "Aur batao, kya chal raha hai?",
+    "Kahan the tum?",
+    "Mujhe miss kiya?",
+]
+
+# ==================== VOICE GENERATOR ====================
+
+class VoiceGenerator:
+    """Generate voice messages from text"""
+    
+    def __init__(self):
+        self.temp_dir = Path("temp_audio")
+        self.temp_dir.mkdir(exist_ok=True)
+        
+        # Initialize ElevenLabs if available
+        if ELEVENLABS_AVAILABLE and Config.ELEVENLABS_API_KEY:
+            try:
+                set_api_key(Config.ELEVENLABS_API_KEY)
+                logger.info("✅ ElevenLabs initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ ElevenLabs init failed: {e}")
+    
+    def _clean_text_for_tts(self, text: str) -> str:
+        """Clean text for better TTS output"""
+        # Remove emojis for cleaner speech
+        import re
+        emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+            u"\U0001F1E0-\U0001F1FF"  # flags
+            u"\U00002702-\U000027B0"
+            u"\U000024C2-\U0001F251"
+            "]+", flags=re.UNICODE)
+        
+        text = emoji_pattern.sub('', text)
+        text = text.strip()
+        
+        # Limit length for voice
+        if len(text) > 200:
+            text = text[:200] + "..."
+        
+        return text
+    
+    async def generate_gtts(self, text: str) -> Optional[BytesIO]:
+        """Generate voice using Google TTS"""
+        try:
+            clean_text = self._clean_text_for_tts(text)
+            
+            # Detect language (Hindi if contains Devanagari, else English)
+            if any('\u0900' <= char <= '\u097F' for char in clean_text):
+                lang = 'hi'
+            else:
+                lang = 'en'
+            
+            # Generate TTS
+            audio = BytesIO()
+            tts = gTTS(text=clean_text, lang=lang, slow=False)
+            
+            # Run in thread to avoid blocking
+            await asyncio.to_thread(tts.write_to_fp, audio)
+            audio.seek(0)
+            
+            logger.info(f"✅ Generated gTTS voice ({lang})")
+            return audio
+            
+        except Exception as e:
+            logger.error(f"❌ gTTS error: {e}")
+            return None
+    
+    async def generate_elevenlabs(self, text: str) -> Optional[BytesIO]:
+        """Generate voice using ElevenLabs (premium quality)"""
+        if not ELEVENLABS_AVAILABLE or not Config.ELEVENLABS_API_KEY:
+            return None
+        
+        try:
+            clean_text = self._clean_text_for_tts(text)
+            
+            # Generate with ElevenLabs
+            audio = await asyncio.to_thread(
+                generate,
+                text=clean_text,
+                voice=Voice(
+                    voice_id=Config.ELEVENLABS_VOICE_ID,
+                    settings=VoiceSettings(
+                        stability=0.5,
+                        similarity_boost=0.75,
+                        style=0.5,
+                        use_speaker_boost=True
+                    )
+                ),
+                model="eleven_multilingual_v2"
+            )
+            
+            # Convert to BytesIO
+            audio_io = BytesIO(audio)
+            audio_io.seek(0)
+            
+            logger.info("✅ Generated ElevenLabs voice")
+            return audio_io
+            
+        except Exception as e:
+            logger.error(f"❌ ElevenLabs error: {e}")
+            return None
+    
+    async def generate(self, text: str) -> Optional[BytesIO]:
+        """Generate voice message based on configured provider"""
+        if not Config.VOICE_ENABLED:
+            return None
+        
+        if Config.VOICE_PROVIDER == "elevenlabs":
+            audio = await self.generate_elevenlabs(text)
+            if audio:
+                return audio
+            # Fallback to gTTS
+            logger.info("Falling back to gTTS")
+        
+        return await self.generate_gtts(text)
+    
+    def should_send_voice(self, stage: str) -> bool:
+        """Decide if should send voice based on relationship stage"""
+        if not Config.VOICE_ENABLED:
+            return False
+        
+        # More likely to send voice as relationship progresses
+        probabilities = {
+            "initial": Config.VOICE_PROBABILITY * 0.5,  # Less voice initially
+            "middle": Config.VOICE_PROBABILITY,
+            "advanced": Config.VOICE_PROBABILITY * 1.5  # More voice when close
+        }
+        
+        prob = probabilities.get(stage, Config.VOICE_PROBABILITY)
+        return random.random() < prob
+
+# Initialize voice generator
+voice_gen = VoiceGenerator()
 
 # ==================== DATABASE ====================
 
@@ -154,16 +305,14 @@ class Database:
         if Config.SUPABASE_KEY and Config.SUPABASE_URL:
             try:
                 self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-                # Test connection
                 self.supabase.table('user_chats').select("*").limit(1).execute()
                 self.use_local = False
-                logger.info("✅ Supabase connected successfully")
+                logger.info("✅ Supabase connected")
             except Exception as e:
-                logger.warning(f"⚠️ Supabase connection failed: {e}")
-                logger.info("📁 Using local storage instead")
+                logger.warning(f"⚠️ Supabase failed: {e}")
                 self.use_local = True
         else:
-            logger.info("📁 Using local storage (no Supabase key)")
+            logger.info("📁 Using local storage")
     
     def _load_local(self):
         """Load local database"""
@@ -171,7 +320,7 @@ class Database:
             if os.path.exists('local_db.json'):
                 with open('local_db.json', 'r', encoding='utf-8') as f:
                     self.local_db = json.load(f)
-                logger.info(f"📂 Loaded {len(self.local_db)} users from local storage")
+                logger.info(f"📂 Loaded {len(self.local_db)} users")
         except Exception as e:
             logger.error(f"❌ Error loading local db: {e}")
             self.local_db = {}
@@ -189,7 +338,6 @@ class Database:
         user_id_str = str(user_id)
         
         if self.use_local:
-            # Local storage
             if user_id_str not in self.local_db:
                 self.local_db[user_id_str] = {
                     "user_id": user_id,
@@ -198,22 +346,20 @@ class Database:
                     "chats": [],
                     "relationship_level": 1,
                     "stage": "initial",
+                    "voice_messages_sent": 0,
                     "last_interaction": datetime.now().isoformat()
                 }
             return self.local_db[user_id_str]
         else:
-            # Supabase
             try:
                 result = self.supabase.table('user_chats').select("*").eq('user_id', user_id).execute()
                 
                 if result.data and len(result.data) > 0:
                     user_data = result.data[0]
-                    # Parse JSON fields
                     if isinstance(user_data.get('chats'), str):
                         user_data['chats'] = json.loads(user_data['chats'])
                     return user_data
                 else:
-                    # Create new user
                     new_user = {
                         "user_id": user_id,
                         "name": "",
@@ -221,15 +367,14 @@ class Database:
                         "chats": json.dumps([]),
                         "relationship_level": 1,
                         "stage": "initial",
+                        "voice_messages_sent": 0,
                         "last_interaction": datetime.now().isoformat()
                     }
                     self.supabase.table('user_chats').insert(new_user).execute()
                     new_user['chats'] = []
                     return new_user
-                    
             except Exception as e:
                 logger.error(f"❌ Supabase error: {e}")
-                # Fallback to local
                 return self.get_user(user_id)
     
     def save_user(self, user_id: int, user_data: Dict):
@@ -238,51 +383,44 @@ class Database:
         user_data['last_interaction'] = datetime.now().isoformat()
         
         if self.use_local:
-            # Local storage
             self.local_db[user_id_str] = user_data
             self._save_local()
         else:
-            # Supabase
             try:
-                # Prepare data for Supabase
                 save_data = user_data.copy()
                 if isinstance(save_data.get('chats'), list):
                     save_data['chats'] = json.dumps(save_data['chats'])
                 
-                # Upsert
                 self.supabase.table('user_chats').upsert(save_data).execute()
-                
             except Exception as e:
                 logger.error(f"❌ Supabase save error: {e}")
-                # Fallback to local
                 self.local_db[user_id_str] = user_data
                 self._save_local()
     
-    def add_message(self, user_id: int, user_msg: str, bot_msg: str):
+    def add_message(self, user_id: int, user_msg: str, bot_msg: str, is_voice: bool = False):
         """Add message to conversation history"""
         user = self.get_user(user_id)
         
-        # Ensure chats is a list
         if isinstance(user.get('chats'), str):
             user['chats'] = json.loads(user['chats'])
         if not isinstance(user.get('chats'), list):
             user['chats'] = []
         
-        # Add new message
         user['chats'].append({
             "user": user_msg,
             "bot": bot_msg,
+            "is_voice": is_voice,
             "timestamp": datetime.now().isoformat()
         })
         
-        # Keep only last 10 messages
         if len(user['chats']) > 10:
             user['chats'] = user['chats'][-10:]
         
-        # Update relationship level
         user['relationship_level'] = min(10, user['relationship_level'] + 1)
         
-        # Update stage
+        if is_voice:
+            user['voice_messages_sent'] = user.get('voice_messages_sent', 0) + 1
+        
         level = user['relationship_level']
         if level <= 3:
             user['stage'] = "initial"
@@ -304,7 +442,6 @@ class Database:
         """Get conversation context for AI"""
         user = self.get_user(user_id)
         
-        # Ensure chats is a list
         if isinstance(user.get('chats'), str):
             user['chats'] = json.loads(user['chats'])
         
@@ -314,7 +451,6 @@ class Database:
             f"Relationship level: {user.get('relationship_level', 1)}/10"
         ]
         
-        # Add recent conversation
         chats = user.get('chats', [])
         if chats and isinstance(chats, list):
             context_parts.append("\nRecent conversation:")
@@ -328,21 +464,27 @@ class Database:
     def get_stats(self) -> Dict:
         """Get database statistics"""
         if self.use_local:
+            total_voice = sum(
+                user.get('voice_messages_sent', 0) 
+                for user in self.local_db.values()
+            )
             return {
                 "total_users": len(self.local_db),
+                "total_voice_messages": total_voice,
                 "storage": "local"
             }
         else:
             try:
-                result = self.supabase.table('user_chats').select("user_id", count='exact').execute()
+                result = self.supabase.table('user_chats').select("user_id, voice_messages_sent", count='exact').execute()
+                total_voice = sum(row.get('voice_messages_sent', 0) for row in result.data)
                 return {
                     "total_users": result.count if hasattr(result, 'count') else 0,
+                    "total_voice_messages": total_voice,
                     "storage": "supabase"
                 }
             except:
-                return {"total_users": 0, "storage": "error"}
+                return {"total_users": 0, "total_voice_messages": 0, "storage": "error"}
 
-# Initialize database
 db = Database()
 
 # ==================== AI ENGINE ====================
@@ -380,7 +522,6 @@ class GeminiAI:
             logger.info("✅ Gemini AI initialized")
         except Exception as e:
             logger.error(f"❌ Gemini initialization error: {e}")
-            self.model = None
     
     async def generate(self, message: str, context: str = "") -> Optional[str]:
         """Generate AI response"""
@@ -404,70 +545,45 @@ Respond as Niyati (short and natural):"""
             if response and response.text:
                 text = response.text.strip()
                 
-                # Filter AI mentions
                 bad_phrases = [
                     "as an ai", "i'm an ai", "i am an ai", "language model",
-                    "artificial intelligence", "chatbot", "i'm a chatbot",
-                    "gemini", "google ai", "i don't have feelings",
-                    "i'm not a real person", "i cannot"
+                    "artificial intelligence", "chatbot", "gemini", "google ai"
                 ]
                 
-                text_lower = text.lower()
-                if any(phrase in text_lower for phrase in bad_phrases):
+                if any(phrase in text.lower() for phrase in bad_phrases):
                     return random.choice(AI_DENIAL_RESPONSES)
                 
                 return text
-            
         except Exception as e:
-            logger.error(f"❌ Gemini generation error: {e}")
+            logger.error(f"❌ Gemini error: {e}")
         
         return None
     
     def fallback_response(self, message: str, stage: str = "initial", name: str = "") -> str:
-        """Fallback response when AI fails"""
+        """Fallback response"""
         msg_lower = message.lower()
         
-        # Greetings
-        if any(word in msg_lower for word in ["hi", "hello", "hey", "hola", "namaste"]):
-            greetings = [
+        if any(word in msg_lower for word in ["hi", "hello", "hey", "namaste"]):
+            return random.choice([
                 f"Hello {name}! Kaise ho? 😊",
-                f"Hi {name}! What's up? 👋",
-                f"Hey {name}! 😄",
-                f"Namaste {name}! 🙏"
-            ]
-            return random.choice(greetings).replace("  ", " ")
+                f"Hi {name}! 👋",
+                f"Hey {name}! 😄"
+            ]).replace("  ", " ")
         
-        # Questions
         if "?" in message:
             return random.choice([
-                "Hmm... interesting question! 🤔",
-                "Good question! Let me think 😊",
-                "Mujhe sochne do thoda! 🤗"
+                "Hmm... good question! 🤔",
+                "Interesting! 😊",
             ])
         
-        # Stage-based responses
-        if stage == "initial":
-            responses = [
-                "Accha! Tell me more 😊",
-                "Interesting! 😄",
-                "Sahi hai! Aur kya chal raha hai? 👍"
-            ]
-        elif stage == "middle":
-            responses = [
-                f"Tumse baat karke accha lagta hai {name}! 😊",
-                "Haha, tum funny ho! 😄",
-                "Aur batao! 💖"
-            ]
-        else:
-            responses = [
-                f"Miss you {name}! 💖",
-                "Tumhare baare mein soch rahi thi! 😊",
-                "You make me smile! 🥰"
-            ]
+        responses = {
+            "initial": ["Accha! Tell me more 😊", "Interesting! 😄"],
+            "middle": [f"Tumse baat karke accha lagta hai {name}! 😊", "Aur batao! 💖"],
+            "advanced": [f"Miss you {name}! 💖", "You make me smile! 🥰"]
+        }
         
-        return random.choice(responses).replace("  ", " ")
+        return random.choice(responses.get(stage, responses["initial"])).replace("  ", " ")
 
-# Initialize AI
 ai = GeminiAI()
 
 # ==================== UTILITIES ====================
@@ -477,44 +593,45 @@ def get_ist_time() -> datetime:
     return datetime.now(pytz.utc).astimezone(Config.TIMEZONE)
 
 def is_sleeping_time() -> bool:
-    """Check if it's sleeping time"""
+    """Check if sleeping"""
     now = get_ist_time().time()
     return Config.SLEEP_START <= now <= Config.SLEEP_END
 
 def calculate_typing_delay(text: str) -> float:
-    """Calculate realistic typing delay"""
+    """Calculate typing delay"""
     base_delay = min(3.0, max(0.5, len(text) / 50))
     return base_delay + random.uniform(0.3, 1.0)
 
 # ==================== BOT HANDLERS ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
+    """Handle /start"""
     user = update.effective_user
     user_id = user.id
     
-    # Update user info
     db.update_user_info(user_id, user.first_name, user.username or "")
     
-    welcome_msg = f"""
+    voice_status = "🎙️ with Voice Messages!" if Config.VOICE_ENABLED else ""
+    
+    welcome = f"""
 <b>नमस्ते {user.first_name}! 👋</b>
 
 I'm <b>Niyati</b>, a 17-year-old college student from Delhi! 
 
-Just chat with me normally - I love making new friends! 😊
+Chat with me normally - I'll respond with text and sometimes voice messages! {voice_status}
 
 <i>✨ Powered by Gemini AI</i>
 """
     
-    await update.message.reply_text(welcome_msg, parse_mode='HTML')
-    logger.info(f"✅ User {user_id} ({user.first_name}) started bot")
+    await update.message.reply_text(welcome, parse_mode='HTML')
+    logger.info(f"✅ User {user_id} started")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats command (owner only)"""
+    """Handle /stats"""
     user_id = update.effective_user.id
     
     if Config.OWNER_USER_ID and user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("⛔ This command is only for the bot owner.")
+        await update.message.reply_text("⛔ Owner only")
         return
     
     stats = db.get_stats()
@@ -523,25 +640,26 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats_msg = f"""
 📊 <b>Bot Statistics</b>
 
-👥 Total Users: {stats['total_users']}
+👥 Users: {stats['total_users']}
+🎙️ Voice Messages: {stats['total_voice_messages']}
 💾 Storage: {stats['storage'].upper()}
-🤖 AI Model: {Config.GEMINI_MODEL}
+🤖 AI: {Config.GEMINI_MODEL}
 
 <b>Your Stats:</b>
 💬 Messages: {len(user_data.get('chats', []))}
-❤️ Relationship Level: {user_data.get('relationship_level', 1)}/10
+🎤 Voice Received: {user_data.get('voice_messages_sent', 0)}
+❤️ Level: {user_data.get('relationship_level', 1)}/10
 🎭 Stage: {user_data.get('stage', 'initial')}
 """
     
     await update.message.reply_text(stats_msg, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages"""
+    """Handle all messages"""
     try:
         if not update.message or not update.message.text:
             return
         
-        # Check if message is for bot
         is_private = update.message.chat.type == "private"
         is_reply = (update.message.reply_to_message and 
                    update.message.reply_to_message.from_user.id == context.bot.id)
@@ -552,169 +670,158 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         user_msg = update.message.text
         
-        # Sleep mode check
+        # Sleep check
         if is_sleeping_time():
             hour = get_ist_time().hour
-            if hour < 6:
-                response = random.choice(SLEEP_RESPONSES_NIGHT)
-            else:
-                response = random.choice(SLEEP_RESPONSES_MORNING)
-            
-            await update.message.reply_text(response)
+            resp = random.choice(SLEEP_RESPONSES_NIGHT if hour < 6 else SLEEP_RESPONSES_MORNING)
+            await update.message.reply_text(resp)
             return
         
-        # Show typing indicator
+        # Typing indicator
         try:
-            await context.bot.send_chat_action(
-                chat_id=update.effective_chat.id,
-                action=ChatAction.TYPING
-            )
+            await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
         except:
             pass
         
-        # Calculate typing delay
-        delay = calculate_typing_delay(user_msg)
-        await asyncio.sleep(delay)
+        await asyncio.sleep(calculate_typing_delay(user_msg))
         
         # Get user data
         user_data = db.get_user(user_id)
         stage = user_data.get('stage', 'initial')
         name = user_data.get('name', '')
         
-        # Check for romantic message in initial stage
-        romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar", "propose"]
+        # Check romantic
+        romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar"]
         is_romantic = any(word in user_msg.lower() for word in romantic_keywords)
         
         if is_romantic and stage == "initial":
             response = random.choice(HARD_TO_GET_RESPONSES)
         else:
-            # Generate AI response
             context_str = db.get_context(user_id)
             response = await ai.generate(user_msg, context_str)
             
-            # Use fallback if AI fails
             if not response:
                 response = ai.fallback_response(user_msg, stage, name)
             
-            # Occasionally add a question
             if random.random() < 0.3:
                 response += " " + random.choice(GF_QUESTIONS)
         
-        # Save conversation
-        db.add_message(user_id, user_msg, response)
+        # Decide voice or text
+        send_voice = voice_gen.should_send_voice(stage)
         
-        # Send response
-        await update.message.reply_text(response)
-        logger.info(f"✅ Replied to user {user_id}")
+        if send_voice:
+            # Send voice message
+            try:
+                await context.bot.send_chat_action(update.effective_chat.id, ChatAction.RECORD_VOICE)
+                
+                audio = await voice_gen.generate(response)
+                
+                if audio:
+                    await update.message.reply_voice(
+                        voice=audio,
+                        caption="🎙️" if random.random() < 0.3 else None
+                    )
+                    logger.info(f"🎤 Sent voice to user {user_id}")
+                    db.add_message(user_id, user_msg, response, is_voice=True)
+                else:
+                    # Fallback to text
+                    await update.message.reply_text(response)
+                    db.add_message(user_id, user_msg, response, is_voice=False)
+            except Exception as e:
+                logger.error(f"❌ Voice error: {e}")
+                await update.message.reply_text(response)
+                db.add_message(user_id, user_msg, response, is_voice=False)
+        else:
+            # Send text
+            await update.message.reply_text(response)
+            db.add_message(user_id, user_msg, response, is_voice=False)
+        
+        logger.info(f"✅ Replied to {user_id}")
         
     except Exception as e:
-        logger.error(f"❌ Message handler error: {e}")
+        logger.error(f"❌ Handler error: {e}")
         try:
-            await update.message.reply_text(
-                "Oops! Kuch gadbad ho gayi. Phir se try karo? 😅"
-            )
+            await update.message.reply_text("Oops! Kuch gadbad ho gayi 😅")
         except:
             pass
 
-# ==================== FLASK APP ====================
+# ==================== FLASK ====================
 
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    """Home route"""
     stats = db.get_stats()
     return jsonify({
         "status": "running",
         "bot": "Niyati",
-        "version": "2.0",
+        "version": "2.1 - Voice Edition",
         "model": Config.GEMINI_MODEL,
+        "voice_enabled": Config.VOICE_ENABLED,
+        "voice_provider": Config.VOICE_PROVIDER,
         "users": stats['total_users'],
-        "storage": stats['storage'],
-        "time": datetime.now().isoformat()
+        "voice_messages": stats['total_voice_messages'],
+        "storage": stats['storage']
     })
 
 @flask_app.route('/health')
 def health():
-    """Health check route"""
     return jsonify({
         "status": "healthy",
         "sleeping": is_sleeping_time(),
         "time": get_ist_time().strftime("%Y-%m-%d %H:%M:%S IST")
     })
 
-@flask_app.route('/stats')
-def stats_route():
-    """Stats route"""
-    return jsonify(db.get_stats())
-
 def run_flask():
-    """Run Flask server"""
-    logger.info(f"🌐 Starting Flask server on {Config.HOST}:{Config.PORT}")
+    logger.info(f"🌐 Flask on port {Config.PORT}")
     serve(flask_app, host=Config.HOST, port=Config.PORT, threads=4)
 
-# ==================== MAIN BOT ====================
+# ==================== MAIN ====================
 
 async def main():
-    """Main bot function"""
     try:
-        # Validate configuration
         Config.validate()
         
         logger.info("="*60)
-        logger.info("🤖 Starting Niyati AI Girlfriend Bot")
+        logger.info("🤖 Niyati AI Girlfriend Bot with Voice 🎙️")
         logger.info("="*60)
-        logger.info(f"📱 Bot: @{(await Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build().bot.get_me()).username}")
-        logger.info(f"🧠 AI Model: {Config.GEMINI_MODEL}")
+        logger.info(f"🧠 AI: {Config.GEMINI_MODEL}")
+        logger.info(f"🎤 Voice: {Config.VOICE_PROVIDER.upper() if Config.VOICE_ENABLED else 'Disabled'}")
         logger.info(f"💾 Storage: {db.get_stats()['storage'].upper()}")
-        logger.info(f"🌍 Timezone: {Config.TIMEZONE}")
         logger.info("="*60)
         
-        # Build application
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
-        # Add handlers
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("stats", stats_command))
-        app.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message
-        ))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        # Start bot
         await app.initialize()
         await app.start()
-        logger.info("✅ Bot started successfully!")
-        logger.info("🎯 Listening for messages...")
+        logger.info("✅ Bot started with voice support!")
         
         await app.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
         
-        # Keep running
         await asyncio.Event().wait()
         
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.error(f"❌ Fatal: {e}")
         raise
 
-# ==================== ENTRY POINT ====================
-
 if __name__ == "__main__":
-    # Start Flask server in background thread
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # Give Flask time to start
     import time
     time.sleep(2)
     
-    # Run bot
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("\n👋 Bot stopped by user")
+        logger.info("\n👋 Stopped")
     except Exception as e:
-        logger.critical(f"💥 Critical error: {e}")
+        logger.critical(f"💥 Error: {e}")
         sys.exit(1)
