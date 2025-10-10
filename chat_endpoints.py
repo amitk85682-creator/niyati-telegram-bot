@@ -45,7 +45,7 @@ async def telegram_webhook(update: TelegramUpdate, request: Request):
         if not text:
             return {"status": "ok, no text"}
 
-        context_data = await memory_system.remember_user(user_id)
+        context_data = await memory_system.remember_user(user_id, user_name)
         user_context = UserContext(
             user_id=user_id,
             name=user_name,
