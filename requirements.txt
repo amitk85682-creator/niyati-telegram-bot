@@ -17,4 +17,4 @@ textblob==0.17.1
 # Numpy fix: latest wheel (compatible with Python 3.13)
 numpy==2.1.1
 
-python-telegram-bot[httpx]>=20.0.0
+python-telegram-bot[httpx]==21.0.1
