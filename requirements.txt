@@ -20,3 +20,4 @@ numpy==2.1.1
 python-telegram-bot[httpx]==21.0.1
 services
 aiohttp
+pytz
