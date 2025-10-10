@@ -579,9 +579,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Final decision: respond if private OR reply OR explicitly mentioned in group
         ALWAYS_REPLY_IN_GROUP = True  # agar True, to mention na bhi ho bot reply kare
 
-if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
-    if not ALWAYS_REPLY_IN_GROUP:
-        return
+        if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
+            if not ALWAYS_REPLY_IN_GROUP:
+                return
 
         user_id = update.effective_user.id
         user_msg = update.message.text
@@ -649,8 +649,6 @@ if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
             )
         except:
             pass
-
-
 # ==================== FLASK APP ====================
 
 flask_app = Flask(__name__)
