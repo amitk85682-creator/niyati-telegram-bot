@@ -1,24 +1,3 @@
-# YEH LINES SABSE UPAR ADD KAREIN
-from fastapi import FastAPI, WebSocket, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict
-import asyncio
-import json
-import uuid
-import random
-from datetime import datetime
-
-# Apni doosri files se classes import karein
-from niyati_brain import NiyatiBrain, UserContext, MoodType
-from mood_engine import MoodEngine
-from memory_system import MemorySystem
-
-
-# Aapka baaki ka code yahan se shuru hoga
-app = FastAPI(title="Niyati Bot API")
-# ...
-
 # Add these imports to the top of your chat_endpoints.py file
 
 from fastapi import FastAPI, WebSocket, HTTPException, Depends
