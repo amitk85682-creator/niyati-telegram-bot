@@ -542,48 +542,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # --- Decide if message is intended for bot ---
+        is_private = update.message.chat.type == "private"
 
-# Private chat?
-is_private = update.message.chat.type == "private"
-
-# Message is a direct reply to one of bot's messages
-is_reply = False
-if update.message.reply_to_message and update.message.reply_to_message.from_user:
-    try:
-        is_reply = update.message.reply_to_message.from_user.id == context.bot.id
-    except Exception:
+        # Message is a direct reply to one of bot's messages
         is_reply = False
+        if update.message.reply_to_message and update.message.reply_to_message.from_user:
+            try:
+                is_reply = update.message.reply_to_message.from_user.id == context.bot.id
+            except Exception:
+                is_reply = False
 
-# Message contains an explicit mention like "@YourBotUserName"
-bot_username = ""
-try:
-    bot_username = (await context.bot.get_me()).username or ""
-except Exception:
-    bot_username = ""
+        # Message contains an explicit mention like "@YourBotUserName"
+        bot_username = ""
+        try:
+            bot_username = (await context.bot.get_me()).username or ""
+        except Exception:
+            bot_username = ""
 
-msg_text_lower = update.message.text.lower() if update.message.text else ""
-is_mentioned_text = False
-if bot_username:
-    is_mentioned_text = f"@{bot_username.lower()}" in msg_text_lower
+        msg_text_lower = update.message.text.lower() if update.message.text else ""
+        is_mentioned_text = False
+        if bot_username:
+            is_mentioned_text = f"@{bot_username.lower()}" in msg_text_lower
 
-# Entities: 'mention' (text like @username) or 'text_mention' (user directly)
-is_mentioned_entity = False
-if update.message.entities:
-    for ent in update.message.entities:
-        if ent.type == "mention":
-            is_mentioned_entity = True
-            break
-        if ent.type == "text_mention":
-            if getattr(ent, "user", None) and ent.user.id == context.bot.id:
-                is_mentioned_entity = True
-                break
+        # Entities: 'mention' (text like @username) or 'text_mention' (user directly)
+        is_mentioned_entity = False
+        if update.message.entities:
+            for ent in update.message.entities:
+                if ent.type == "mention":
+                    is_mentioned_entity = True
+                    break
+                if ent.type == "text_mention":
+                    if getattr(ent, "user", None) and ent.user.id == context.bot.id:
+                        is_mentioned_entity = True
+                        break
 
-# 🚀 Always reply in groups too
-ALWAYS_REPLY_IN_GROUP = True
+        # Final decision: respond if private OR reply OR explicitly mentioned in group
+        ALWAYS_REPLY_IN_GROUP = True  # agar True, to mention na bhi ho bot reply kare
 
 if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
     if not ALWAYS_REPLY_IN_GROUP:
-        # ignore message if flag off
         return
 
         user_id = update.effective_user.id
