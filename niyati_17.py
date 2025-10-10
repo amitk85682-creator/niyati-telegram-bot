@@ -558,7 +558,8 @@ is_reply = False
 if update.message.reply_to_message and update.message.reply_to_message.from_user:
     try:
         is_reply = update.message.reply_to_message.from_user.id == context.bot.id
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error checking if message is a reply: {e}")
         is_reply = False
 
 # Message contains an explicit mention like "@YourBotUserName"
