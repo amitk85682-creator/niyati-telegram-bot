@@ -33,7 +33,7 @@ class Config:
     
     # Gemini AI - Using working model
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-pro"
+    GEMINI_MODEL = "gemini-1.5-flash"
     
     # Voice Settings
     VOICE_ENABLED = True
