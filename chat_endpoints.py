@@ -1,15 +1,10 @@
 # chat_endpoints.py
 
-from fastapi import FastAPI, WebSocket, HTTPException, Depends, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict, List
-import asyncio
-import json
-import uuid
+from typing import Optional, Dict
 import os
-import random
-from datetime import datetime
 
 # --- Import Telegram Core Classes ---
 import telegram
@@ -21,15 +16,10 @@ from mood_engine import MoodEngine
 from memory_system import MemorySystem
 
 # --- Basic Configuration ---
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') # IMPORTANT: Add this to your environment variables
-WEBHOOK_URL = os.getenv('WEBHOOK_URL') # e.g., https://niyati-telegram-bot-3.onrender.com
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL') 
 
 app = FastAPI(title="Niyati Bot API")
-
-# --- Initialize Telegram App ---
-# We initialize it here to use it in our webhook
-telegram_app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
 
 # CORS middleware
 app.add_middleware(
@@ -45,22 +35,18 @@ niyati = NiyatiBrain()
 mood_engine = MoodEngine()
 memory_system = MemorySystem(niyati.supabase)
 
-
-# --- Define Telegram Update Model ---
+# Define Telegram Update Model
 class TelegramUpdate(BaseModel):
     update_id: int
     message: Optional[Dict] = None
     edited_message: Optional[Dict] = None
-    # Add other update types if needed
-
 
 # --- NEW: Webhook Endpoint for Telegram ---
 @app.post("/webhook")
 async def telegram_webhook(update: TelegramUpdate, request: Request):
     """This endpoint receives updates from Telegram."""
-    bot = telegram_app.bot
-    
-    # Process the update
+    bot: telegram.Bot = request.app.state.bot # <-- CHANGE: Access bot from app state
+
     if update.message:
         user_id = str(update.message['from']['id'])
         user_name = update.message['from'].get('first_name', 'friend')
@@ -69,12 +55,11 @@ async def telegram_webhook(update: TelegramUpdate, request: Request):
         if not text:
             return {"status": "ok, no text"}
 
-        # Get user context from your memory system
         context_data = await memory_system.remember_user(user_id)
         user_context = UserContext(
             user_id=user_id,
             name=user_name,
-            mood=MoodType.HAPPY, # Let Niyati's brain detect the real mood
+            mood=MoodType.HAPPY,
             language_preference="hinglish",
             last_topics=[],
             relationship_level=5,
@@ -83,33 +68,32 @@ async def telegram_webhook(update: TelegramUpdate, request: Request):
             memory_tags={}
         )
 
-        # Generate response using Niyati's brain
         text_response, voice_audio, metadata = await niyati.generate_response(
             text,
             user_context
         )
         
-        # Send the response back to the user via Telegram
         await bot.send_message(chat_id=update.message['chat']['id'], text=text_response)
 
     return {"status": "ok"}
 
-
 # --- Lifespan events to set and remove webhook ---
 @app.on_event("startup")
 async def startup_event():
-    """On startup, set the webhook."""
+    """On startup, initialize the bot and set the webhook."""
+    # --- CHANGE: Initialize Application here ---
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app.state.bot = application.bot # Store the bot instance in app.state
+    
     print(f"Setting webhook to {WEBHOOK_URL}/webhook")
-    await telegram_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    await app.state.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """On shutdown, remove the webhook."""
     print("Removing webhook...")
-    await telegram_app.bot.delete_webhook()
+    await app.state.bot.delete_webhook()
 
-
-# --- Your Existing Endpoints (can remain for other purposes) ---
 @app.get("/")
 async def root():
     return {"message": "Niyati Bot API is running. Webhook is active at /webhook"}
