@@ -550,7 +550,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     return
 # --- With this block ---
 
-# Decide if message is intended for bot
+# --- Decide if message is intended for bot ---
 is_private = update.message.chat.type == "private"
 
 # Message is a direct reply to one of bot's messages
@@ -558,8 +558,7 @@ is_reply = False
 if update.message.reply_to_message and update.message.reply_to_message.from_user:
     try:
         is_reply = update.message.reply_to_message.from_user.id == context.bot.id
-    except Exception as e:
-        logger.error(f"Error checking if message is a reply: {e}")
+    except Exception:
         is_reply = False
 
 # Message contains an explicit mention like "@YourBotUserName"
@@ -567,7 +566,6 @@ bot_username = ""
 try:
     bot_username = (await context.bot.get_me()).username or ""
 except Exception:
-    # fallback if get_me fails (we'll still check entities/text)
     bot_username = ""
 
 msg_text_lower = update.message.text.lower() if update.message.text else ""
@@ -580,21 +578,21 @@ is_mentioned_entity = False
 if update.message.entities:
     for ent in update.message.entities:
         if ent.type == "mention":
-            # mention as text, e.g. @username
-            # we'll rely on text check above, but keep for completeness
             is_mentioned_entity = True
             break
         if ent.type == "text_mention":
-            # text_mention contains a .user object
             if getattr(ent, "user", None) and ent.user.id == context.bot.id:
                 is_mentioned_entity = True
                 break
 
 # Final decision: respond if private OR reply OR explicitly mentioned in group
 if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
-    logger.debug(f"Ignoring message in chat {update.effective_chat.id}: private={is_private}, reply={is_reply}, mentioned_text={is_mentioned_text}, mentioned_entity={is_mentioned_entity}")
+    logger.debug(
+        f"Ignoring message in chat {update.effective_chat.id}: "
+        f"private={is_private}, reply={is_reply}, "
+        f"mentioned_text={is_mentioned_text}, mentioned_entity={is_mentioned_entity}"
+    )
     return
-
         
         user_id = update.effective_user.id
         user_msg = update.message.text
