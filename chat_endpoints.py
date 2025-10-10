@@ -1,7 +1,6 @@
 # chat_endpoints.py
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict
 import os
@@ -21,15 +20,6 @@ WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
 app = FastAPI(title="Niyati Bot API")
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Initialize bot components
 niyati = NiyatiBrain()
 mood_engine = MoodEngine()
@@ -41,11 +31,11 @@ class TelegramUpdate(BaseModel):
     message: Optional[Dict] = None
     edited_message: Optional[Dict] = None
 
-# --- NEW: Webhook Endpoint for Telegram ---
+# --- Webhook Endpoint for Telegram ---
 @app.post("/webhook")
 async def telegram_webhook(update: TelegramUpdate, request: Request):
     """This endpoint receives updates from Telegram."""
-    bot: telegram.Bot = request.app.state.bot # <-- CHANGE: Access bot from app state
+    bot: telegram.Bot = request.app.state.bot
 
     if update.message:
         user_id = str(update.message['from']['id'])
@@ -81,12 +71,13 @@ async def telegram_webhook(update: TelegramUpdate, request: Request):
 @app.on_event("startup")
 async def startup_event():
     """On startup, initialize the bot and set the webhook."""
-    # --- CHANGE: Initialize Application here ---
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    app.state.bot = application.bot # Store the bot instance in app.state
+    app.state.bot = application.bot
     
-    print(f"Setting webhook to {WEBHOOK_URL}/webhook")
-    await app.state.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    # Set the webhook
+    webhook_full_url = f"{WEBHOOK_URL}/webhook"
+    await app.state.bot.set_webhook(url=webhook_full_url)
+    print(f"Webhook set to {webhook_full_url}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -96,16 +87,4 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    return {"message": "Niyati Bot API is running. Webhook is active at /webhook"}
-    
-@app.post("/chat/message")
-async def send_message(message: ChatMessage) -> ChatResponse:
-    # This endpoint can still be used for a web UI, but is separate from Telegram
-    pass # Your existing code here
-
-@app.websocket("/chat")
-async def websocket_chat(websocket: WebSocket):
-    # This endpoint can still be used for a web UI, but is separate from Telegram
-    pass # Your existing code here
-
-# Your other endpoints like /user/{user_id}/memories can also stay
+    return {"message": "Niyati Bot is running. Webhook is active."}
