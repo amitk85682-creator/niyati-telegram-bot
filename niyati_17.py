@@ -540,63 +540,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not update.message or not update.message.text:
             return
-        
-        # --- Replace this block ---
-# is_private = update.message.chat.type == "private"
-# is_reply = (update.message.reply_to_message and 
-#            update.message.reply_to_message.from_user.id == context.bot.id)
-#
-# if not (is_private or is_reply):
-#     return
-# --- With this block ---
 
-# --- Decide if message is intended for bot ---
-is_private = update.message.chat.type == "private"
+        # --- Decide if message is intended for bot ---
+        is_private = update.message.chat.type == "private"
 
-# Message is a direct reply to one of bot's messages
-is_reply = False
-if update.message.reply_to_message and update.message.reply_to_message.from_user:
-    try:
-        is_reply = update.message.reply_to_message.from_user.id == context.bot.id
-    except Exception:
+        # Message is a direct reply to one of bot's messages
         is_reply = False
+        if update.message.reply_to_message and update.message.reply_to_message.from_user:
+            try:
+                is_reply = update.message.reply_to_message.from_user.id == context.bot.id
+            except Exception:
+                is_reply = False
 
-# Message contains an explicit mention like "@YourBotUserName"
-bot_username = ""
-try:
-    bot_username = (await context.bot.get_me()).username or ""
-except Exception:
-    bot_username = ""
+        # Message contains an explicit mention like "@YourBotUserName"
+        bot_username = ""
+        try:
+            bot_username = (await context.bot.get_me()).username or ""
+        except Exception:
+            bot_username = ""
 
-msg_text_lower = update.message.text.lower() if update.message.text else ""
-is_mentioned_text = False
-if bot_username:
-    is_mentioned_text = f"@{bot_username.lower()}" in msg_text_lower
+        msg_text_lower = update.message.text.lower() if update.message.text else ""
+        is_mentioned_text = False
+        if bot_username:
+            is_mentioned_text = f"@{bot_username.lower()}" in msg_text_lower
 
-# Entities: 'mention' (text like @username) or 'text_mention' (user directly)
-is_mentioned_entity = False
-if update.message.entities:
-    for ent in update.message.entities:
-        if ent.type == "mention":
-            is_mentioned_entity = True
-            break
-        if ent.type == "text_mention":
-            if getattr(ent, "user", None) and ent.user.id == context.bot.id:
-                is_mentioned_entity = True
-                break
+        # Entities: 'mention' (text like @username) or 'text_mention' (user directly)
+        is_mentioned_entity = False
+        if update.message.entities:
+            for ent in update.message.entities:
+                if ent.type == "mention":
+                    is_mentioned_entity = True
+                    break
+                if ent.type == "text_mention":
+                    if getattr(ent, "user", None) and ent.user.id == context.bot.id:
+                        is_mentioned_entity = True
+                        break
 
-# Final decision: respond if private OR reply OR explicitly mentioned in group
-if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
-    logger.debug(
-        f"Ignoring message in chat {update.effective_chat.id}: "
-        f"private={is_private}, reply={is_reply}, "
-        f"mentioned_text={is_mentioned_text}, mentioned_entity={is_mentioned_entity}"
-    )
-    return
-        
+        # Final decision: respond if private OR reply OR explicitly mentioned in group
+        if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
+            logger.debug(
+                f"Ignoring message in chat {update.effective_chat.id}: "
+                f"private={is_private}, reply={is_reply}, "
+                f"mentioned_text={is_mentioned_text}, mentioned_entity={is_mentioned_entity}"
+            )
+            return
+
         user_id = update.effective_user.id
         user_msg = update.message.text
-        
+
         # Sleep mode check
         if is_sleeping_time():
             hour = get_ist_time().hour
@@ -604,10 +595,10 @@ if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
                 response = random.choice(SLEEP_RESPONSES_NIGHT)
             else:
                 response = random.choice(SLEEP_RESPONSES_MORNING)
-            
+
             await update.message.reply_text(response)
             return
-        
+
         # Show typing indicator
         try:
             await context.bot.send_chat_action(
@@ -616,42 +607,42 @@ if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
             )
         except:
             pass
-        
+
         # Calculate typing delay
         delay = calculate_typing_delay(user_msg)
         await asyncio.sleep(delay)
-        
+
         # Get user data
         user_data = db.get_user(user_id)
         stage = user_data.get('stage', 'initial')
         name = user_data.get('name', '')
-        
+
         # Check for romantic message in initial stage
         romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar", "propose"]
         is_romantic = any(word in user_msg.lower() for word in romantic_keywords)
-        
+
         if is_romantic and stage == "initial":
             response = random.choice(HARD_TO_GET_RESPONSES)
         else:
             # Generate AI response
             context_str = db.get_context(user_id)
             response = await ai.generate(user_msg, context_str)
-            
+
             # Use fallback if AI fails
             if not response:
                 response = ai.fallback_response(user_msg, stage, name)
-            
+
             # Occasionally add a question
             if random.random() < 0.3:
                 response += " " + random.choice(GF_QUESTIONS)
-        
+
         # Save conversation
         db.add_message(user_id, user_msg, response)
-        
+
         # Send response
         await update.message.reply_text(response)
         logger.info(f"✅ Replied to user {user_id}")
-        
+
     except Exception as e:
         logger.error(f"❌ Message handler error: {e}")
         try:
@@ -660,6 +651,7 @@ if not (is_private or is_reply or is_mentioned_text or is_mentioned_entity):
             )
         except:
             pass
+
 
 # ==================== FLASK APP ====================
 
