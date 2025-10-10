@@ -1,3 +1,5 @@
+# memory_system.py (Corrected)
+
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import json
@@ -12,12 +14,33 @@ class MemorySystem:
         self.working_memory = defaultdict(list)  # Recent interactions
         self.long_term_patterns = {}  # User patterns
         
-    async def remember_user(self, user_id: str) -> Dict:
-        """Retrieve all memories about a user"""
+    async def remember_user(self, user_id: str, user_name: Optional[str] = "Friend") -> Dict:
+        """Retrieve all memories about a user. If the user doesn't exist, create them."""
         
-        # Get user profile
-        user_data = self.db.table('users').select("*").eq('user_id', user_id).single().execute()
+        # --- MODIFICATION START ---
+        # Step 1: Try to get the user without .single()
+        user_response = self.db.table('users').select("*").eq('user_id', user_id).execute()
         
+        user_data = None
+        if user_response.data:
+            # If the user exists, use their data
+            user_data = user_response.data[0]
+        else:
+            # Step 2: If user does not exist, create them
+            print(f"User {user_id} not found. Creating new user.")
+            new_user_response = self.db.table('users').insert({
+                'user_id': user_id,
+                'full_name': user_name,
+                'username': user_name
+            }).execute()
+            if new_user_response.data:
+                user_data = new_user_response.data[0]
+        
+        if not user_data:
+            # If creation also failed for some reason, return a default structure
+            return {'profile': {'user_id': user_id, 'full_name': user_name}, 'recent_conversations': [], 'preferences': {}, 'special_memories': [], 'patterns': {}}
+        # --- MODIFICATION END ---
+
         # Get recent conversations
         recent_convos = self.db.table('conversation_history')\
             .select("*")\
@@ -39,13 +62,15 @@ class MemorySystem:
             .execute()
         
         return {
-            'profile': user_data.data,
+            'profile': user_data,
             'recent_conversations': recent_convos.data,
             'preferences': self._process_preferences(preferences.data),
             'special_memories': memories.data,
             'patterns': await self._analyze_patterns(user_id)
         }
-    
+
+    # ... the rest of your MemorySystem class remains the same ...
+    # Make sure to copy the rest of the functions from your original file below this line
     async def create_memory(self, user_id: str, memory_type: str, content: Dict):
         """Create a new memory"""
         
@@ -145,17 +170,19 @@ class MemorySystem:
         time_slots = defaultdict(int)
         
         for conv in conversations:
-            timestamp = datetime.fromisoformat(conv['timestamp'])
-            hour = timestamp.hour
-            
-            if 5 <= hour < 12:
-                time_slots['morning'] += 1
-            elif 12 <= hour < 17:
-                time_slots['afternoon'] += 1
-            elif 17 <= hour < 21:
-                time_slots['evening'] += 1
-            else:
-                time_slots['night'] += 1
+            timestamp_str = conv.get('timestamp')
+            if timestamp_str:
+                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                hour = timestamp.hour
+                
+                if 5 <= hour < 12:
+                    time_slots['morning'] += 1
+                elif 12 <= hour < 17:
+                    time_slots['afternoon'] += 1
+                elif 17 <= hour < 21:
+                    time_slots['evening'] += 1
+                else:
+                    time_slots['night'] += 1
         
         return dict(time_slots)
     
@@ -189,3 +216,16 @@ class MemorySystem:
             mem for mem in self.working_memory[user_id]
             if mem['time'] > cutoff_time
         ]
+
+    # Added dummy methods that might be missing
+    def _update_preference(self, user_id: str, content: Dict):
+        pass
+
+    def _store_pattern(self, user_id: str, content: Dict):
+        pass
+
+    def _analyze_topics(self, conversations: list) -> dict:
+        return {}
+
+    def _analyze_response_style(self, conversations: list) -> dict:
+        return {}
