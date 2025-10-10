@@ -45,7 +45,7 @@ class NiyatiBrain:
     def __init__(self):
         self.personality = self._initialize_personality()
         self.supabase = self._initialize_database()
-        self.gemini_model = genai.GenerativeModel('gemini-pro')
+        self.gemini_model = genai.GenerativeModel('gemini 2.5 flash')
         self.voice_id = "ni6cdqyS9wBvic5LPA7M"  # ElevenLabs voice
         self.typing_delay = (0.5, 2.0)  # Simulate typing
         
