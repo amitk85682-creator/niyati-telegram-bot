@@ -536,21 +536,99 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(stats_msg, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages"""
+    # ==================== SMART REPLY LOGIC ====================
+
+# Global cooldown tracking
+last_reply_time = {}
+user_last_interaction = {}
+
+def should_reply_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Smart logic to decide if bot should reply in group
+    
+    REPLY CONDITIONS:
+    1. Direct mention/reply → Always reply (100%)
+    2. Keywords present → High chance (70%)
+    3. Recent conversation → Medium chance (40%)
+    4. Random engagement → Low chance (15%)
+    5. Cooldown active → Skip
+    """
+    
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    message_text = update.message.text.lower()
+    
+    # 1. ALWAYS reply to direct mention/reply
+    is_reply_to_bot = (update.message.reply_to_message and 
+                       update.message.reply_to_message.from_user.id == context.bot.id)
+    
+    bot_username = context.bot.username.lower() if context.bot.username else ""
+    is_mentioned = f"@{bot_username}" in message_text or "niyati" in message_text
+    
+    if is_reply_to_bot or is_mentioned:
+        return True
+    
+    # 2. COOLDOWN check (prevent spam)
+    now = datetime.now()
+    cooldown_key = f"{chat_id}_{user_id}"
+    
+    # Per-user cooldown: 2 minutes
+    if cooldown_key in user_last_interaction:
+        time_diff = (now - user_last_interaction[cooldown_key]).total_seconds()
+        if time_diff < 120:  # 2 minutes
+            return False
+    
+    # Per-group cooldown: 30 seconds
+    if chat_id in last_reply_time:
+        time_diff = (now - last_reply_time[chat_id]).total_seconds()
+        if time_diff < 30:  # 30 seconds
+            return False
+    
+    # 3. KEYWORD triggers (high priority)
+    high_priority_keywords = [
+        "kya", "kaise", "kyu", "kab", "kaha", "kaun",  # Question words
+        "niyati", "baby", "jaan", "love", "miss",      # Personal
+        "hello", "hi", "hey", "good morning", "gn",    # Greetings
+        "?", "please", "help", "bata", "batao"         # Help/Questions
+    ]
+    
+    if any(keyword in message_text for keyword in high_priority_keywords):
+        return random.random() < 0.7  # 70% chance
+    
+    # 4. RECENT conversation context
+    # If bot replied in last 3 messages, stay engaged
+    if chat_id in last_reply_time:
+        time_diff = (now - last_reply_time[chat_id]).total_seconds()
+        if time_diff < 180:  # Last 3 minutes
+            return random.random() < 0.4  # 40% chance
+    
+    # 5. RANDOM engagement (keep group alive)
+    # Only reply to 15% of random messages
+    return random.random() < 0.15
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all text messages with SMART filtering"""
     try:
         if not update.message or not update.message.text:
             return
         
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
+        user_msg = update.message.text
+        
         # Check if message is for bot
         is_private = update.message.chat.type == "private"
-        is_reply = (update.message.reply_to_message and 
-                   update.message.reply_to_message.from_user.id == context.bot.id)
         
-        if not (is_private or is_reply):
-            return
+        # In GROUPS: Use smart reply logic
+        if not is_private:
+            if not should_reply_in_group(update, context):
+                logger.info(f"⏭️ Skipped group message (smart filter)")
+                return
         
-        user_id = update.effective_user.id
-        user_msg = update.message.text
+        # Update last reply timestamp
+        now = datetime.now()
+        last_reply_time[chat_id] = now
+        user_last_interaction[f"{chat_id}_{user_id}"] = now
         
         # Sleep mode check
         if is_sleeping_time():
@@ -596,8 +674,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not response:
                 response = ai.fallback_response(user_msg, stage, name)
             
-            # Occasionally add a question
-            if random.random() < 0.3:
+            # Occasionally add a question (only in private chats)
+            if is_private and random.random() < 0.3:
                 response += " " + random.choice(GF_QUESTIONS)
         
         # Save conversation
@@ -605,7 +683,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Send response
         await update.message.reply_text(response)
-        logger.info(f"✅ Replied to user {user_id}")
+        logger.info(f"✅ Replied to user {user_id} in {'private' if is_private else 'group'}")
         
     except Exception as e:
         logger.error(f"❌ Message handler error: {e}")
