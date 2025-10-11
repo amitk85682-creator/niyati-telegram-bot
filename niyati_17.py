@@ -535,8 +535,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(stats_msg, parse_mode='HTML')
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ==================== BOT HANDLERS ====================
+# ==================== BOT HANDLERS ====================
 
 # Global dictionaries to track cooldowns across different chats
 group_reply_cooldown = {}
