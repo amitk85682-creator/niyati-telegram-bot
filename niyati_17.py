@@ -61,7 +61,7 @@ class Config:
     # Timezone
     TIMEZONE = pytz.timezone('Asia/Kolkata')
     SLEEP_START = time(1, 0)   # 1 AM
-    SLEEP_END = time(10, 0)     # 10 AM
+    SLEEP_END = time(7, 0)     # 7 AM
     
     @classmethod
     def validate(cls):
@@ -502,8 +502,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 I'm <b>Niyati</b>, a 17-year-old college student from Delhi! 
 
 Just chat with me normally - I love making new friends! 😊
-
-<i>✨ Powered by Gemini AI</i>
 """
     
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
