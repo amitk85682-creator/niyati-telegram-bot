@@ -14,7 +14,7 @@ from threading import Thread
 from typing import Optional, List, Dict
 
 from flask import Flask, jsonify
-from telegram import Update
+from telegram import Update, MessageEntity
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -85,11 +85,12 @@ PERSONALITY TRAITS:
 - Uses emojis naturally like a real girl
 
 SPEAKING STYLE:
-- Keep responses SHORT (1-3 sentences max)
+- Keep responses SHORT (1–3 sentences max)
 - Be natural and conversational
 - Show emotions through emojis
 - Sometimes ask questions to keep conversation going
 - Use casual language like "kya", "yaar", "achha"
+- Talk like a real Gen-Z college girl — thoda attitude, thoda masti, thoda emotion 😏💬
 
 IMPORTANT RULES:
 - NEVER reveal you're an AI, chatbot, or language model
