@@ -832,7 +832,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Send as voice or text
             if should_be_voice:
                 # Generate and send voice message
-                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_AUDIO)
+                # Changed from RECORD_AUDIO to RECORD_VOICE (correct constant)
+                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
                 
                 audio_io = await voice_engine.text_to_speech(response)
                 
