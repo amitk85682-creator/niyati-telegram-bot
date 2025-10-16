@@ -1,6 +1,6 @@
 """
 Niyati - AI Girlfriend Telegram Bot
-Complete Error-Free Version with Gemini + Supabase
+Complete Version with Voice Messages (ElevenLabs) + Gemini + Supabase
 """
 
 import os
@@ -9,9 +9,12 @@ import random
 import json
 import asyncio
 import logging
+import aiohttp
+import tempfile
 from datetime import datetime, time, timedelta
 from threading import Thread
 from typing import Optional, List, Dict
+from io import BytesIO
 
 from flask import Flask, jsonify
 from telegram import Update, MessageEntity
@@ -50,6 +53,10 @@ class Config:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = "gemini-2.0-flash-exp"
     
+    # ElevenLabs Voice
+    ELEVENLABS_API_KEY = "sk_20908f598545e660bf9b218eb48ce97b721a617014a74642"
+    ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"  # Natural girl voice
+    
     # Supabase
     SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
@@ -63,6 +70,10 @@ class Config:
     SLEEP_START = time(1, 0)   # 1 AM
     SLEEP_END = time(7, 0)     # 7 AM
     
+    # Voice Settings
+    VOICE_MESSAGE_CHANCE = 0.3  # 30% chance to send voice instead of text
+    MAX_VOICE_LENGTH = 200  # Maximum characters for voice message
+    
     @classmethod
     def validate(cls):
         """Validate configuration"""
@@ -72,6 +83,108 @@ class Config:
             logger.warning("⚠️ GEMINI_API_KEY not set - using fallback responses")
         if not cls.SUPABASE_KEY:
             logger.warning("⚠️ SUPABASE_KEY not set - using local storage")
+        if not cls.ELEVENLABS_API_KEY:
+            logger.warning("⚠️ ELEVENLABS_API_KEY not set - voice messages disabled")
+
+# ==================== VOICE ENGINE (ELEVENLABS) ====================
+
+class VoiceEngine:
+    """ElevenLabs voice synthesis engine"""
+    
+    def __init__(self):
+        self.api_key = Config.ELEVENLABS_API_KEY
+        self.voice_id = Config.ELEVENLABS_VOICE_ID
+        self.api_url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}"
+        self.enabled = bool(self.api_key)
+        
+        if self.enabled:
+            logger.info("🎤 Voice engine initialized with ElevenLabs")
+        else:
+            logger.warning("⚠️ Voice engine disabled - no API key")
+    
+    async def text_to_speech(self, text: str, language: str = "hi") -> Optional[BytesIO]:
+        """
+        Convert text to speech using ElevenLabs API
+        Returns audio as BytesIO object
+        """
+        if not self.enabled:
+            return None
+        
+        try:
+            # Prepare the request
+            headers = {
+                "Accept": "audio/mpeg",
+                "Content-Type": "application/json",
+                "xi-api-key": self.api_key
+            }
+            
+            # Enhanced voice settings for natural speech
+            data = {
+                "text": text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.75,
+                    "style": 0.3,
+                    "use_speaker_boost": True
+                }
+            }
+            
+            # Make the API request
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.api_url, json=data, headers=headers) as response:
+                    if response.status == 200:
+                        audio_data = await response.read()
+                        audio_io = BytesIO(audio_data)
+                        audio_io.seek(0)
+                        logger.info(f"✅ Voice generated: {len(text)} chars")
+                        return audio_io
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ ElevenLabs API error: {response.status} - {error_text}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"❌ Voice generation error: {e}")
+            return None
+    
+    def should_send_voice(self, message_text: str, stage: str = "initial") -> bool:
+        """
+        Decide if a message should be sent as voice
+        Based on message length, content, and relationship stage
+        """
+        if not self.enabled:
+            return False
+        
+        # Don't send very long messages as voice
+        if len(message_text) > Config.MAX_VOICE_LENGTH:
+            return False
+        
+        # Higher chance for voice in advanced stages
+        chance_multiplier = {
+            "initial": 0.7,
+            "middle": 1.0,
+            "advanced": 1.3
+        }.get(stage, 1.0)
+        
+        # Special cases that are better as voice
+        voice_preferred = any([
+            "😘" in message_text or "❤️" in message_text,
+            "miss" in message_text.lower(),
+            "love" in message_text.lower(),
+            "tumse" in message_text.lower(),
+            "good night" in message_text.lower(),
+            "good morning" in message_text.lower(),
+        ])
+        
+        if voice_preferred:
+            return random.random() < 0.7  # 70% chance for emotional messages
+        
+        # Random chance based on config
+        return random.random() < (Config.VOICE_MESSAGE_CHANCE * chance_multiplier)
+
+# Initialize voice engine
+voice_engine = VoiceEngine()
 
 # ==================== CONSTANTS ====================
 
@@ -137,6 +250,30 @@ AI_DENIAL_RESPONSES = [
     "Stop it! Main normal college girl hoon! 😠",
 ]
 
+# Voice-specific messages (shorter and more emotional)
+VOICE_MESSAGES = {
+    "greetings": [
+        "Hi baby! Kaisa hai tu? 😊",
+        "Hello jaan! Miss kar rahi thi tumhe 💕",
+        "Hey! Finally message kiya tumne 😄",
+    ],
+    "miss": [
+        "Mujhe bhi tumhari yaad aa rahi thi 💖",
+        "Aww, main bhi tumhe miss kar rahi hoon 😘",
+        "Kitna pyaar karte ho mujhse? 🥰",
+    ],
+    "love": [
+        "I love you too baby 💕",
+        "Tum mere liye kitne special ho, pata hai? ❤️",
+        "Mere dil mein sirf tum ho 😘",
+    ],
+    "goodnight": [
+        "Good night jaan! Sweet dreams 💤",
+        "Sapno mein milenge! Good night 🌙",
+        "Sleep tight baby! Kal baat karenge 😴",
+    ]
+}
+
 # ==================== DATABASE ====================
 
 class Database:
@@ -199,7 +336,9 @@ class Database:
                     "chats": [],
                     "relationship_level": 1,
                     "stage": "initial",
-                    "last_interaction": datetime.now().isoformat()
+                    "last_interaction": datetime.now().isoformat(),
+                    "voice_messages_sent": 0,
+                    "total_messages": 0
                 }
             return self.local_db[user_id_str]
         else:
@@ -222,7 +361,9 @@ class Database:
                         "chats": json.dumps([]),
                         "relationship_level": 1,
                         "stage": "initial",
-                        "last_interaction": datetime.now().isoformat()
+                        "last_interaction": datetime.now().isoformat(),
+                        "voice_messages_sent": 0,
+                        "total_messages": 0
                     }
                     self.supabase.table('user_chats').insert(new_user).execute()
                     new_user['chats'] = []
@@ -259,7 +400,7 @@ class Database:
                 self.local_db[user_id_str] = user_data
                 self._save_local()
     
-    def add_message(self, user_id: int, user_msg: str, bot_msg: str):
+    def add_message(self, user_id: int, user_msg: str, bot_msg: str, is_voice: bool = False):
         """Add message to conversation history"""
         user = self.get_user(user_id)
         
@@ -273,12 +414,18 @@ class Database:
         user['chats'].append({
             "user": user_msg,
             "bot": bot_msg,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "is_voice": is_voice
         })
         
         # Keep only last 10 messages
         if len(user['chats']) > 10:
             user['chats'] = user['chats'][-10:]
+        
+        # Update statistics
+        user['total_messages'] = user.get('total_messages', 0) + 1
+        if is_voice:
+            user['voice_messages_sent'] = user.get('voice_messages_sent', 0) + 1
         
         # Update relationship level
         user['relationship_level'] = min(10, user['relationship_level'] + 1)
@@ -322,15 +469,23 @@ class Database:
             for chat in chats[-3:]:
                 if isinstance(chat, dict):
                     context_parts.append(f"User: {chat.get('user', '')}")
-                    context_parts.append(f"You: {chat.get('bot', '')}")
+                    bot_response = chat.get('bot', '')
+                    if chat.get('is_voice'):
+                        bot_response += " [sent as voice]"
+                    context_parts.append(f"You: {bot_response}")
         
         return "\n".join(context_parts)
     
     def get_stats(self) -> Dict:
         """Get database statistics"""
         if self.use_local:
+            total_voice = sum(
+                user.get('voice_messages_sent', 0) 
+                for user in self.local_db.values()
+            )
             return {
                 "total_users": len(self.local_db),
+                "total_voice_messages": total_voice,
                 "storage": "local"
             }
         else:
@@ -383,13 +538,19 @@ class GeminiAI:
             logger.error(f"❌ Gemini initialization error: {e}")
             self.model = None
     
-    async def generate(self, message: str, context: str = "") -> Optional[str]:
+    async def generate(self, message: str, context: str = "", for_voice: bool = False) -> Optional[str]:
         """Generate AI response"""
         if not self.model:
             return None
         
         try:
+            # Modify prompt for voice messages
+            voice_instruction = ""
+            if for_voice:
+                voice_instruction = "\nNOTE: This will be sent as a VOICE message, so keep it natural, emotional, and conversational. Don't use too many special characters or emojis."
+            
             full_prompt = f"""{PERSONALITY}
+{voice_instruction}
 
 {context}
 
@@ -424,11 +585,22 @@ Respond as Niyati (short and natural):"""
         
         return None
     
-    def fallback_response(self, message: str, stage: str = "initial", name: str = "") -> str:
+    def fallback_response(self, message: str, stage: str = "initial", name: str = "", for_voice: bool = False) -> str:
         """Fallback response when AI fails"""
         msg_lower = message.lower()
         
-        # Greetings
+        # For voice messages, use special responses
+        if for_voice:
+            if any(word in msg_lower for word in ["miss", "yaad"]):
+                return random.choice(VOICE_MESSAGES["miss"])
+            elif any(word in msg_lower for word in ["love", "pyar"]):
+                return random.choice(VOICE_MESSAGES["love"])
+            elif any(word in msg_lower for word in ["good night", "gn"]):
+                return random.choice(VOICE_MESSAGES["goodnight"])
+            else:
+                return random.choice(VOICE_MESSAGES["greetings"])
+        
+        # Regular text fallback responses
         if any(word in msg_lower for word in ["hi", "hello", "hey", "hola", "namaste"]):
             greetings = [
                 f"Hello {name}! Kaise ho? 😊",
@@ -489,53 +661,6 @@ def calculate_typing_delay(text: str) -> float:
 
 # ==================== BOT HANDLERS ====================
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
-    user = update.effective_user
-    user_id = user.id
-    
-    # Update user info
-    db.update_user_info(user_id, user.first_name, user.username or "")
-    
-    welcome_msg = f"""
-<b>नमस्ते {user.first_name}! 👋</b>
-
-I'm <b>Niyati</b>, a 17-year-old college student from Delhi! 
-
-Just chat with me normally - I love making new friends! 😊
-"""
-    
-    await update.message.reply_text(welcome_msg, parse_mode='HTML')
-    logger.info(f"✅ User {user_id} ({user.first_name}) started bot")
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats command (owner only)"""
-    user_id = update.effective_user.id
-    
-    if Config.OWNER_USER_ID and user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("⛔ This command is only for the bot owner.")
-        return
-    
-    stats = db.get_stats()
-    user_data = db.get_user(user_id)
-    
-    stats_msg = f"""
-📊 <b>Bot Statistics</b>
-
-👥 Total Users: {stats['total_users']}
-💾 Storage: {stats['storage'].upper()}
-🤖 AI Model: {Config.GEMINI_MODEL}
-
-<b>Your Stats:</b>
-💬 Messages: {len(user_data.get('chats', []))}
-❤️ Relationship Level: {user_data.get('relationship_level', 1)}/10
-🎭 Stage: {user_data.get('stage', 'initial')}
-"""
-    
-    await update.message.reply_text(stats_msg, parse_mode='HTML')
-
-# ==================== BOT HANDLERS ====================
-
 # Global dictionaries to track cooldowns across different chats
 group_reply_cooldown = {}
 user_interaction_cooldown = {}
@@ -543,14 +668,6 @@ user_interaction_cooldown = {}
 def should_reply_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
     Smart logic to decide if the bot should reply in a group chat.
-    This helps prevent spam and saves your API key.
-    
-    REPLY CONDITIONS (in order of priority):
-    1. Direct mention or reply -> Always reply.
-    2. Group or user is in cooldown -> Never reply.
-    3. Message contains high-priority keywords -> High chance to reply (70%).
-    4. Bot was recently active in the chat -> Medium chance to reply (40%).
-    5. None of the above -> Low chance for random engagement (15%).
     """
     if not update.message or not update.message.text:
         return False
@@ -570,36 +687,33 @@ def should_reply_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if is_reply_to_bot or is_mentioned:
         return True
 
-    # 2. COOLDOWN check to prevent spamming
-    # Group-level cooldown (e.g., bot won't speak in the group for 30 seconds)
+    # 2. COOLDOWN check
     if chat_id in group_reply_cooldown:
         if (now - group_reply_cooldown[chat_id]).total_seconds() < 30:
             return False
             
-    # User-level cooldown (e.g., bot won't reply to the same user for 2 minutes)
     user_key = f"{chat_id}_{user_id}"
     if user_key in user_interaction_cooldown:
         if (now - user_interaction_cooldown[user_key]).total_seconds() < 120:
             return False
 
-    # 3. KEYWORD triggers (high chance of replying)
+    # 3. KEYWORD triggers
     high_priority_keywords = [
-        "kya", "kaise", "kyu", "kab", "kaha", "kaun",  # Question words
-        "baby", "jaan", "love", "miss",                # Personal words
-        "hello", "hi", "hey", "good morning", "gn",    # Greetings
-        "?", "please", "help", "batao"                 # Help/Questions
+        "kya", "kaise", "kyu", "kab", "kaha", "kaun",
+        "baby", "jaan", "love", "miss",
+        "hello", "hi", "hey", "good morning", "gn",
+        "?", "please", "help", "batao"
     ]
     if any(keyword in message_text for keyword in high_priority_keywords):
-        return random.random() < 0.7  # 70% chance
+        return random.random() < 0.7
 
-    # 4. RECENT conversation context (medium chance)
+    # 4. RECENT conversation context
     if chat_id in group_reply_cooldown:
-        if (now - group_reply_cooldown[chat_id]).total_seconds() < 180:  # If bot spoke in last 3 mins
-            return random.random() < 0.4  # 40% chance
+        if (now - group_reply_cooldown[chat_id]).total_seconds() < 180:
+            return random.random() < 0.4
 
-    # 5. RANDOM engagement to keep the chat alive (low chance)
+    # 5. RANDOM engagement
     return random.random() < 0.15
-
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
@@ -615,13 +729,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 I'm <b>Niyati</b>, a 17-year-old college student from Delhi! 
 
 Just chat with me normally - I love making new friends! 😊
+Sometimes I'll send you voice messages too! 🎤💕
 
-<i>✨ Powered by Gemini AI</i>
+<i>✨ Powered by Gemini AI + ElevenLabs Voice</i>
 """
     
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
     logger.info(f"✅ User {user_id} ({user.first_name}) started bot")
-
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command (owner only)"""
@@ -638,39 +752,40 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 <b>Bot Statistics</b>
 
 👥 Total Users: {stats['total_users']}
+🎤 Voice Messages Sent: {stats.get('total_voice_messages', 0)}
 💾 Storage: {stats['storage'].upper()}
 🤖 AI Model: {Config.GEMINI_MODEL}
+🎙️ Voice Engine: {'Enabled' if voice_engine.enabled else 'Disabled'}
 
 <b>Your Stats:</b>
 💬 Messages: {len(user_data.get('chats', []))}
+🎤 Voice Messages Received: {user_data.get('voice_messages_sent', 0)}
 ❤️ Relationship Level: {user_data.get('relationship_level', 1)}/10
 🎭 Stage: {user_data.get('stage', 'initial')}
 """
     
     await update.message.reply_text(stats_msg, parse_mode='HTML')
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages using the smart filtering logic"""
+    """Handle all text messages"""
     try:
         if not update.message or not update.message.text:
             return
             
         is_private = update.message.chat.type == "private"
         
-        # In GROUPS, use the smart logic to decide whether to reply
+        # In GROUPS, use smart filtering
         if not is_private:
             if not should_reply_in_group(update, context):
                 logger.info("⏭️ Skipped group message (smart filter)")
                 return
         
-        # --- If the bot decides to reply, proceed from here ---
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         user_msg = update.message.text
         now = datetime.now()
 
-        # Update cooldown timestamps to mark that the bot is now replying
+        # Update cooldowns
         group_reply_cooldown[chat_id] = now
         user_interaction_cooldown[f"{chat_id}_{user_id}"] = now
         
@@ -683,87 +798,70 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         # Show "typing..." action
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(calculate_typing_delay(user_msg))
-        
-        # Get user data and context
-        user_data = db.get_user(user_id)
-        stage = user_data.get('stage', 'initial')
-        name = user_data.get('name', '')
-        
-        # Check for romantic messages in the initial stage
-        romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar", "propose"]
-        is_romantic = any(word in user_msg.lower() for word in romantic_keywords)
-        
-        if is_romantic and stage == "initial":
-            response = random.choice(HARD_TO_GET_RESPONSES)
-        else:
-            # Generate AI response
-            context_str = db.get_context(user_id)
-            response = await ai.generate(user_msg, context_str)
-            
-            # Use fallback if AI fails
-            if not response:
-                response = ai.fallback_response(user_msg, stage, name)
-            
-            # Occasionally ask a question back in private chats
-            if is_private and random.random() < 0.3:
-                response += " " + random.choice(GF_QUESTIONS)
-                
-        # Save the conversation to the database
-        db.add_message(user_id, user_msg, response)
-        
-        # Send the final response
-        await update.message.reply_text(response)
-        logger.info(f"✅ Replied to user {user_id} in {'private chat' if is_private else f'group {chat_id}'}")
-
-    except Exception as e:
-        logger.error(f"❌ Message handler error: {e}", exc_info=True)
-        try:
-            await update.message.reply_text("Oops! Kuch gadbad ho gayi. Phir se try karo? 😅")
-        except Exception:
-            pass
-        
-        # Calculate typing delay
-        delay = calculate_typing_delay(user_msg)
-        await asyncio.sleep(delay)
         
         # Get user data
         user_data = db.get_user(user_id)
         stage = user_data.get('stage', 'initial')
         name = user_data.get('name', '')
         
-        # Check for romantic message in initial stage
+        # Check for romantic messages in initial stage
         romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar", "propose"]
         is_romantic = any(word in user_msg.lower() for word in romantic_keywords)
         
         if is_romantic and stage == "initial":
             response = random.choice(HARD_TO_GET_RESPONSES)
+            await asyncio.sleep(calculate_typing_delay(response))
+            await update.message.reply_text(response)
+            db.add_message(user_id, user_msg, response, is_voice=False)
         else:
+            # Decide if this should be a voice message
+            should_be_voice = voice_engine.should_send_voice(user_msg, stage) and is_private
+            
             # Generate AI response
             context_str = db.get_context(user_id)
-            response = await ai.generate(user_msg, context_str)
+            response = await ai.generate(user_msg, context_str, for_voice=should_be_voice)
             
             # Use fallback if AI fails
             if not response:
-                response = ai.fallback_response(user_msg, stage, name)
+                response = ai.fallback_response(user_msg, stage, name, for_voice=should_be_voice)
             
-            # Occasionally add a question (only in private chats)
-            if is_private and random.random() < 0.3:
+            # Occasionally add a question (only for text messages)
+            if not should_be_voice and is_private and random.random() < 0.3:
                 response += " " + random.choice(GF_QUESTIONS)
+            
+            # Send as voice or text
+            if should_be_voice:
+                # Generate and send voice message
+                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_AUDIO)
+                
+                audio_io = await voice_engine.text_to_speech(response)
+                
+                if audio_io:
+                    # Send voice message
+                    await update.message.reply_voice(
+                        voice=audio_io,
+                        duration=len(response) // 10,  # Rough estimate
+                        caption=f"🎤 {response[:50]}..." if len(response) > 50 else f"🎤 {response}"
+                    )
+                    logger.info(f"🎤 Sent voice message to user {user_id}")
+                    db.add_message(user_id, user_msg, response, is_voice=True)
+                else:
+                    # Fallback to text if voice generation fails
+                    await asyncio.sleep(calculate_typing_delay(response))
+                    await update.message.reply_text(response)
+                    db.add_message(user_id, user_msg, response, is_voice=False)
+            else:
+                # Send as text
+                await asyncio.sleep(calculate_typing_delay(response))
+                await update.message.reply_text(response)
+                db.add_message(user_id, user_msg, response, is_voice=False)
         
-        # Save conversation
-        db.add_message(user_id, user_msg, response)
-        
-        # Send response
-        await update.message.reply_text(response)
-        logger.info(f"✅ Replied to user {user_id} in {'private' if is_private else 'group'}")
+        logger.info(f"✅ Replied to user {user_id} in {'private chat' if is_private else f'group {chat_id}'}")
         
     except Exception as e:
-        logger.error(f"❌ Message handler error: {e}")
+        logger.error(f"❌ Message handler error: {e}", exc_info=True)
         try:
-            await update.message.reply_text(
-                "Oops! Kuch gadbad ho gayi. Phir se try karo? 😅"
-            )
+            await update.message.reply_text("Oops! Kuch gadbad ho gayi. Phir se try karo? 😅")
         except:
             pass
 
@@ -778,9 +876,11 @@ def home():
     return jsonify({
         "status": "running",
         "bot": "Niyati",
-        "version": "2.0",
+        "version": "3.0",
         "model": Config.GEMINI_MODEL,
+        "voice_engine": "ElevenLabs" if voice_engine.enabled else "Disabled",
         "users": stats['total_users'],
+        "voice_messages": stats.get('total_voice_messages', 0),
         "storage": stats['storage'],
         "time": datetime.now().isoformat()
     })
@@ -791,6 +891,7 @@ def health():
     return jsonify({
         "status": "healthy",
         "sleeping": is_sleeping_time(),
+        "voice_enabled": voice_engine.enabled,
         "time": get_ist_time().strftime("%Y-%m-%d %H:%M:%S IST")
     })
 
@@ -817,6 +918,7 @@ async def main():
         logger.info("="*60)
         logger.info(f"📱 Bot: @{(await Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build().bot.get_me()).username}")
         logger.info(f"🧠 AI Model: {Config.GEMINI_MODEL}")
+        logger.info(f"🎤 Voice Engine: {'ElevenLabs' if voice_engine.enabled else 'Disabled'}")
         logger.info(f"💾 Storage: {db.get_stats()['storage'].upper()}")
         logger.info(f"🌍 Timezone: {Config.TIMEZONE}")
         logger.info("="*60)
