@@ -1,6 +1,6 @@
 """
 Niyati - AI Girlfriend Telegram Bot
-Complete Version with Voice Messages (ElevenLabs) + Gemini + Supabase
+Complete Version with Voice, Broadcast & Smart Mention Detection
 """
 
 import os
@@ -17,7 +17,7 @@ from typing import Optional, List, Dict
 from io import BytesIO
 
 from flask import Flask, jsonify
-from telegram import Update, MessageEntity
+from telegram import Update, MessageEntity, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -26,6 +26,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from telegram.constants import ChatAction
+from telegram.error import Forbidden, BadRequest
 from waitress import serve
 import pytz
 import google.generativeai as genai
@@ -283,6 +284,7 @@ class Database:
         self.supabase: Optional[Client] = None
         self.local_db: Dict = {}
         self.use_local = True
+        self.groups_cache = set()  # Cache for group IDs
         
         self._init_supabase()
         self._load_local()
@@ -310,17 +312,40 @@ class Database:
                 with open('local_db.json', 'r', encoding='utf-8') as f:
                     self.local_db = json.load(f)
                 logger.info(f"📂 Loaded {len(self.local_db)} users from local storage")
+            
+            # Load groups cache
+            if os.path.exists('groups_cache.json'):
+                with open('groups_cache.json', 'r', encoding='utf-8') as f:
+                    groups_data = json.load(f)
+                    self.groups_cache = set(groups_data.get('groups', []))
+                logger.info(f"📂 Loaded {len(self.groups_cache)} groups from cache")
+                    
         except Exception as e:
             logger.error(f"❌ Error loading local db: {e}")
             self.local_db = {}
+            self.groups_cache = set()
     
     def _save_local(self):
         """Save local database"""
         try:
             with open('local_db.json', 'w', encoding='utf-8') as f:
                 json.dump(self.local_db, f, ensure_ascii=False, indent=2)
+                
+            # Save groups cache
+            with open('groups_cache.json', 'w', encoding='utf-8') as f:
+                json.dump({'groups': list(self.groups_cache)}, f)
+                
         except Exception as e:
             logger.error(f"❌ Error saving local db: {e}")
+    
+    def add_group(self, group_id: int):
+        """Add group to cache"""
+        self.groups_cache.add(group_id)
+        self._save_local()
+    
+    def get_all_groups(self) -> List[int]:
+        """Get all group IDs where bot is present"""
+        return list(self.groups_cache)
     
     def get_user(self, user_id: int) -> Dict:
         """Get user data"""
@@ -485,6 +510,7 @@ class Database:
             )
             return {
                 "total_users": len(self.local_db),
+                "total_groups": len(self.groups_cache),
                 "total_voice_messages": total_voice,
                 "storage": "local"
             }
@@ -493,10 +519,11 @@ class Database:
                 result = self.supabase.table('user_chats').select("user_id", count='exact').execute()
                 return {
                     "total_users": result.count if hasattr(result, 'count') else 0,
+                    "total_groups": len(self.groups_cache),
                     "storage": "supabase"
                 }
             except:
-                return {"total_users": 0, "storage": "error"}
+                return {"total_users": 0, "total_groups": 0, "storage": "error"}
 
 # Initialize database
 db = Database()
@@ -659,6 +686,22 @@ def calculate_typing_delay(text: str) -> float:
     base_delay = min(3.0, max(0.5, len(text) / 50))
     return base_delay + random.uniform(0.3, 1.0)
 
+def has_user_mention(message: Update.message) -> bool:
+    """
+    Check if message contains user mention (@username)
+    Returns True if another user is mentioned
+    """
+    if not message or not message.entities:
+        return False
+    
+    for entity in message.entities:
+        if entity.type == "mention":  # @username
+            return True
+        if entity.type == "text_mention":  # User without username
+            return True
+    
+    return False
+
 # ==================== BOT HANDLERS ====================
 
 # Global dictionaries to track cooldowns across different chats
@@ -672,6 +715,11 @@ def should_reply_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not update.message or not update.message.text:
         return False
         
+    # Skip if message has user mention (new feature)
+    if has_user_mention(update.message):
+        logger.info("⏭️ Skipped message with user mention")
+        return False
+    
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     message_text = update.message.text.lower()
@@ -737,6 +785,152 @@ Sometimes I'll send you voice messages too! 🎤💕
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
     logger.info(f"✅ User {user_id} ({user.first_name}) started bot")
 
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /broadcast command (owner only)
+    Usage: /broadcast <message> or reply to any message with /broadcast
+    """
+    user_id = update.effective_user.id
+    
+    # Check if user is owner
+    if user_id != Config.OWNER_USER_ID:
+        await update.message.reply_text("⛔ Ye command sirf mere owner use kar sakte hain!")
+        return
+    
+    # Get all group IDs
+    groups = db.get_all_groups()
+    
+    if not groups:
+        await update.message.reply_text("📭 Koi groups nahi mile jahan main hoon.")
+        return
+    
+    # Initialize broadcast stats
+    success_count = 0
+    fail_count = 0
+    failed_groups = []
+    
+    # Check what to broadcast
+    if update.message.reply_to_message:
+        # Forward the replied message
+        source_msg = update.message.reply_to_message
+        
+        await update.message.reply_text(f"📡 Broadcasting to {len(groups)} groups...")
+        
+        for group_id in groups:
+            try:
+                # Forward based on message type
+                if source_msg.text:
+                    await context.bot.send_message(
+                        chat_id=group_id,
+                        text=source_msg.text,
+                        parse_mode='HTML'
+                    )
+                elif source_msg.photo:
+                    await context.bot.send_photo(
+                        chat_id=group_id,
+                        photo=source_msg.photo[-1].file_id,
+                        caption=source_msg.caption
+                    )
+                elif source_msg.video:
+                    await context.bot.send_video(
+                        chat_id=group_id,
+                        video=source_msg.video.file_id,
+                        caption=source_msg.caption
+                    )
+                elif source_msg.document:
+                    await context.bot.send_document(
+                        chat_id=group_id,
+                        document=source_msg.document.file_id,
+                        caption=source_msg.caption
+                    )
+                elif source_msg.voice:
+                    await context.bot.send_voice(
+                        chat_id=group_id,
+                        voice=source_msg.voice.file_id,
+                        caption=source_msg.caption
+                    )
+                elif source_msg.audio:
+                    await context.bot.send_audio(
+                        chat_id=group_id,
+                        audio=source_msg.audio.file_id,
+                        caption=source_msg.caption
+                    )
+                elif source_msg.sticker:
+                    await context.bot.send_sticker(
+                        chat_id=group_id,
+                        sticker=source_msg.sticker.file_id
+                    )
+                else:
+                    continue
+                    
+                success_count += 1
+                await asyncio.sleep(0.5)  # Avoid rate limits
+                
+            except Forbidden:
+                # Bot was removed from group
+                fail_count += 1
+                failed_groups.append(group_id)
+                logger.warning(f"Bot removed from group {group_id}")
+            except BadRequest as e:
+                fail_count += 1
+                logger.error(f"Error broadcasting to {group_id}: {e}")
+            except Exception as e:
+                fail_count += 1
+                logger.error(f"Unexpected error for {group_id}: {e}")
+                
+    else:
+        # Text message after command
+        text = ' '.join(context.args) if context.args else None
+        
+        if not text:
+            await update.message.reply_text(
+                "❓ <b>Usage:</b>\n"
+                "/broadcast <message>\n"
+                "OR\n"
+                "Reply to any message with /broadcast",
+                parse_mode='HTML'
+            )
+            return
+        
+        await update.message.reply_text(f"📡 Broadcasting to {len(groups)} groups...")
+        
+        for group_id in groups:
+            try:
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=text,
+                    parse_mode='HTML'
+                )
+                success_count += 1
+                await asyncio.sleep(0.5)
+                
+            except Forbidden:
+                fail_count += 1
+                failed_groups.append(group_id)
+                logger.warning(f"Bot removed from group {group_id}")
+            except Exception as e:
+                fail_count += 1
+                logger.error(f"Error broadcasting to {group_id}: {e}")
+    
+    # Send broadcast report
+    report = f"""
+📊 <b>Broadcast Report</b>
+
+✅ Success: {success_count}/{len(groups)}
+❌ Failed: {fail_count}
+📢 Total Groups: {len(groups)}
+"""
+    
+    if failed_groups:
+        # Remove failed groups from cache
+        for gid in failed_groups:
+            db.groups_cache.discard(gid)
+        db._save_local()
+        report += f"\n🗑️ Removed {len(failed_groups)} inactive groups from cache"
+    
+    await update.message.reply_text(report, parse_mode='HTML')
+    logger.info(f"📡 Broadcast completed: {success_count}/{len(groups)} success")
+
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command (owner only)"""
     user_id = update.effective_user.id
@@ -752,6 +946,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 <b>Bot Statistics</b>
 
 👥 Total Users: {stats['total_users']}
+👥 Total Groups: {stats.get('total_groups', 0)}
 🎤 Voice Messages Sent: {stats.get('total_voice_messages', 0)}
 💾 Storage: {stats['storage'].upper()}
 🤖 AI Model: {Config.GEMINI_MODEL}
@@ -773,15 +968,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         is_private = update.message.chat.type == "private"
+        chat_id = update.effective_chat.id
         
-        # In GROUPS, use smart filtering
+        # Track groups
         if not is_private:
+            db.add_group(chat_id)
+            
+            # Use smart filtering for groups
             if not should_reply_in_group(update, context):
                 logger.info("⏭️ Skipped group message (smart filter)")
                 return
         
         user_id = update.effective_user.id
-        chat_id = update.effective_chat.id
         user_msg = update.message.text
         now = datetime.now()
 
@@ -832,7 +1030,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Send as voice or text
             if should_be_voice:
                 # Generate and send voice message
-                # Changed from RECORD_AUDIO to RECORD_VOICE (correct constant)
                 await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
                 
                 audio_io = await voice_engine.text_to_speech(response)
@@ -877,10 +1074,11 @@ def home():
     return jsonify({
         "status": "running",
         "bot": "Niyati",
-        "version": "3.0",
+        "version": "4.0",
         "model": Config.GEMINI_MODEL,
         "voice_engine": "ElevenLabs" if voice_engine.enabled else "Disabled",
         "users": stats['total_users'],
+        "groups": stats.get('total_groups', 0),
         "voice_messages": stats.get('total_voice_messages', 0),
         "storage": stats['storage'],
         "time": datetime.now().isoformat()
@@ -930,6 +1128,7 @@ async def main():
         # Add handlers
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("stats", stats_command))
+        app.add_handler(CommandHandler("broadcast", broadcast_command))
         app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
