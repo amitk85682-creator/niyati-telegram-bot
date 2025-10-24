@@ -1035,29 +1035,35 @@ def run_flask():
 
 # ==================== MAIN BOT ====================
 
-def main():
-    """Main bot function - COMPATIBLE VERSION"""
-    try:
-        Config.validate()
-        
-        logger.info("="*60)
-        logger.info("🤖 Starting Niyati AI Girlfriend Bot v5.2")
-        logger.info("="*60)
-        
-        # Build application - MODERN WAY
-        application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-        
+# ==================== This is the NEW code ====================
+        # This function will run group discovery after startup
+        async def post_init(application: Application):
+            bot_info = await application.bot.get_me()
+            logger.info(f"✅ Bot started: @{bot_info.username}")
+            logger.info("🎯 Ready to slay! 💅✨")
+            await discover_groups(application)
+
+        # Build and run the application
+        app = (
+            Application.builder()
+            .token(Config.TELEGRAM_BOT_TOKEN)
+            .post_init(post_init)
+            .build()
+        )
+
         # Add handlers
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("stats", stats_command))
-        application.add_handler(CommandHandler("broadcast", broadcast_command))
-        application.add_handler(CommandHandler("scan", scan_command))
-        application.add_handler(CommandHandler("genz", genz_command))
-        application.add_handler(CommandHandler("normal", normal_command))
-        application.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message
-        ))
+        app.add_handler(CommandHandler("start", start_command))
+        app.add_handler(CommandHandler("stats", stats_command))
+        app.add_handler(CommandHandler("broadcast", broadcast_command))
+        app.add_handler(CommandHandler("scan", scan_groups_command))
+        app.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+        # Run the bot until you press Ctrl-C
+        await app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
         
         # Get bot info
         bot_info = application.bot
