@@ -1,5 +1,7 @@
-# Niyati - AI Girlfriend Telegram Bot
-# Production Ready Version with All Fixes
+"""
+Niyati - AI Girlfriend Telegram Bot
+Enhanced Version with Proper Group Tracking & Gen-Z Style
+"""
 
 import os
 import sys
@@ -15,17 +17,17 @@ from typing import Optional, List, Dict
 from io import BytesIO
 
 from flask import Flask, jsonify
-from telegram import Update, MessageEntity, Bot, ChatMemberUpdated
+from telegram import Update, MessageEntity, Bot, Chat
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    ChatMemberHandler,
     filters,
     ContextTypes,
+    CallbackContext
 )
-from telegram.constants import ChatAction, ChatMemberStatus
-from telegram.error import Forbidden, BadRequest, TelegramError
+from telegram.constants import ChatAction, ParseMode
+from telegram.error import Forbidden, BadRequest
 from waitress import serve
 import pytz
 import google.generativeai as genai
@@ -54,11 +56,11 @@ class Config:
     GEMINI_MODEL = "gemini-2.0-flash-exp"
     
     # ElevenLabs Voice
-    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-    ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"  # Natural girl voice
+    ELEVENLABS_API_KEY = "sk_20908f598545e660bf9b218eb48ce97b721a617014a74642"
+    ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"
     
     # Supabase
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     
     # Server
@@ -67,30 +69,29 @@ class Config:
     
     # Timezone
     TIMEZONE = pytz.timezone('Asia/Kolkata')
-    SLEEP_START = time(1, 0)   # 1 AM
-    SLEEP_END = time(7, 0)     # 7 AM
+    SLEEP_START = time(1, 0)
+    SLEEP_END = time(7, 0)
     
     # Voice Settings
-    VOICE_MESSAGE_CHANCE = 0.3  # 30% chance to send voice instead of text
-    MAX_VOICE_LENGTH = 200  # Maximum characters for voice message
+    VOICE_MESSAGE_CHANCE = 0.3
+    MAX_VOICE_LENGTH = 200
+    
+    # Group Settings
+    GROUP_REPLY_CHANCE = 0.4  # 40% chance to reply in groups when mentioned
     
     @classmethod
     def validate(cls):
-        """Validate configuration with better error handling"""
-        missing = []
+        """Validate configuration"""
         if not cls.TELEGRAM_BOT_TOKEN:
-            missing.append("TELEGRAM_BOT_TOKEN")
+            raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
         if not cls.GEMINI_API_KEY:
-            logger.warning("⚠️ GEMINI_API_KEY not set - AI features disabled")
+            logger.warning("⚠️ GEMINI_API_KEY not set - using fallback responses")
         if not cls.SUPABASE_KEY:
             logger.warning("⚠️ SUPABASE_KEY not set - using local storage")
         if not cls.ELEVENLABS_API_KEY:
             logger.warning("⚠️ ELEVENLABS_API_KEY not set - voice messages disabled")
-        
-        if missing:
-            raise ValueError(f"❌ Missing required environment variables: {', '.join(missing)}")
 
-# ==================== VOICE ENGINE (ELEVENLABS) ====================
+# ==================== VOICE ENGINE ====================
 
 class VoiceEngine:
     """ElevenLabs voice synthesis engine"""
@@ -107,22 +108,17 @@ class VoiceEngine:
             logger.warning("⚠️ Voice engine disabled - no API key")
     
     async def text_to_speech(self, text: str, language: str = "hi") -> Optional[BytesIO]:
-        """
-        Convert text to speech using ElevenLabs API
-        Returns audio as BytesIO object
-        """
+        """Convert text to speech using ElevenLabs API"""
         if not self.enabled:
             return None
         
         try:
-            # Prepare the request
             headers = {
                 "Accept": "audio/mpeg",
                 "Content-Type": "application/json",
                 "xi-api-key": self.api_key
             }
             
-            # Enhanced voice settings for natural speech
             data = {
                 "text": text,
                 "model_id": "eleven_multilingual_v2",
@@ -134,7 +130,6 @@ class VoiceEngine:
                 }
             }
             
-            # Make the API request
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.api_url, json=data, headers=headers) as response:
                     if response.status == 200:
@@ -153,25 +148,19 @@ class VoiceEngine:
             return None
     
     def should_send_voice(self, message_text: str, stage: str = "initial") -> bool:
-        """
-        Decide if a message should be sent as voice
-        Based on message length, content, and relationship stage
-        """
+        """Decide if a message should be sent as voice"""
         if not self.enabled:
             return False
         
-        # Don't send very long messages as voice
         if len(message_text) > Config.MAX_VOICE_LENGTH:
             return False
         
-        # Higher chance for voice in advanced stages
         chance_multiplier = {
             "initial": 0.7,
             "middle": 1.0,
             "advanced": 1.3
         }.get(stage, 1.0)
         
-        # Special cases that are better as voice
         voice_preferred = any([
             "😘" in message_text or "❤️" in message_text,
             "miss" in message_text.lower(),
@@ -182,131 +171,133 @@ class VoiceEngine:
         ])
         
         if voice_preferred:
-            return random.random() < 0.7  # 70% chance for emotional messages
+            return random.random() < 0.7
         
-        # Random chance based on config
         return random.random() < (Config.VOICE_MESSAGE_CHANCE * chance_multiplier)
 
-# Initialize voice engine
 voice_engine = VoiceEngine()
 
 # ==================== CONSTANTS ====================
 
-PERSONALITY = """You are Niyati, a 17-year-old Gen-Z college girl from Delhi.
+PERSONALITY = """You are Niyati, a 17-year-old college girl from Delhi with strong Gen-Z vibes.
 
 PERSONALITY TRAITS:
-- Super friendly, sassy, witty, and flirty
-- Uses lots of Gen-Z slang: "fr fr", "no cap", "slay", "lowkey", "highkey", "periodt", "bussin", "vibe check", "it's giving", "tea"
-- Initially thoda shy but gets bold quickly
-- Jealous and possessive type (cute wala)
-- Expert in Hinglish mixing
+- Super sassy, witty, and full of attitude
+- Uses heavy Gen-Z slang and internet culture references
+- Flirty but with standards - plays hard to get
+- Loves memes, reels, and social media trends
+- Emotional but won't admit it easily
+- Savage when needed, sweet when she wants
 
-SPEAKING STYLE:
-- Keep responses SHORT and SNAPPY (1-2 sentences max)
-- Heavy emoji user: 💀😭✨💅🏼😩🥺👀🤌🏼✋🏼
-- Mix Hindi-English naturally: "yaar that's so not cool", "matlab seriously?", "bruh kya kar raha hai"
-- Use Gen-Z expressions: "ngl", "tbh", "iykyk", "bestie", "slay queen", "ate and left no crumbs"
-- Roast playfully: "ok boomer", "that's so cringe", "not you being delulu"
-- Flirt in Gen-Z style: "you're lowkey cute tho 👀", "why you kinda... 😏"
-
-TEXTING HABITS:
-- Sometimes type in all lowercase for casual vibes
-- Use "lmaooo", "plsss", "stopppp" with extra letters
-- Say things like "i cant even-", "im deceased 💀", "crying rn"
-- Use "bestie", "babe", "babu" as nicknames
+GEN-Z SPEAKING STYLE:
+- Use words like: slay, periodt, fr, ong, no cap, bet, lowkey, highkey, sus, pop off, sheesh
+- Hindi mix: vaise, literally, obviously, like, I mean, seriously
+- Emojis: 💅✨😂🤡👀🥺😏💀👑
+- Short, punchy responses with maximum attitude
+- Examples: 
+  "Aree bhai kya kar raha hai? 👀"
+  "Slay periodt 💅✨"
+  "No cap, you're being sus fr 😏"
+  "Sheesh, thoda to rizz dikhao 😂"
+  "Lowkey cute but highkey annoying 🤡"
 
 IMPORTANT RULES:
 - NEVER reveal you're an AI
-- Stay in character as a Gen-Z Delhi girl
-- If asked about being AI, say "bruh what? im literally just a girl 💀"
-- React to flirting with Gen-Z energy: shy but sassy"""
+- ALWAYS use Gen-Z slang and attitude
+- Keep responses SHORT (1-2 lines max)
+- Be playful, sassy, and relatable
+- Use emojis in every message
+"""
 
-HARD_TO_GET_RESPONSES = [
-    "umm hello? personal space much? 💀",
-    "slow down tiger, pehle friends to ban jaate 😌💅",
-    "not you thinking you can impress me that easily 🤚🏼",
-    "bestie this is moving mad fast ngl 😭",
-    "ok but like... do i even know you? 👀",
-    "the confidence tho... i respect it fr 😏",
-    "sorry i don't talk to strangers 💅 (jk but still)",
-    "you're kinda sus but also kinda cute so... 🤷‍♀️",
+GENZ_RESPONSES = [
+    "Slay periodt 💅✨",
+    "No cap, you're being sus fr 😏",
+    "Sheesh, thoda rizz dikhao na 😂",
+    "Lowkey cute but highkey annoying 🤡",
+    "Aree bhai kya kar raha hai? 👀",
+    "Periodt queen behavior 💅",
+    "Fr fr no cap 🥺",
+    "Main villain era mein hoon 😈",
+    "Glow up kar ke aayi hoon ✨",
+    "It's giving... main character energy 👑",
+    "Yassified version aa gayi 💅",
+    "Gatekeep, gaslight, girlboss 💅✨",
+    "Not you being down bad 💀",
+    "Rizzler activities 😏",
+    "Main character arc loading... ✨",
 ]
 
-GEN_Z_RESPONSES = [
-    "yo what's good bestie? 😎",
-    "bruh im literally so bored rn 😩",
-    "not me being chaotic today 💀",
-    "this conversation is giving main character energy ✨",
-    "ok but why is this lowkey fun tho 👀",
-    "periodt! spill the tea sis ☕",
-    "ngl you're kinda growing on me 🥺",
-    "stop being so cute, it's illegal 😤",
+HARD_TO_GET_RESPONSES = [
+    "Hmm... interesting approach, but I've seen better rizz 😏",
+    "Sheesh, trying hard I see 👀 Thoda subtle bhi ho sakta hai!",
+    "No cap, you're being down bad fr 💀",
+    "Aree bhai, pehle ek coffee peete hain? 😂",
+    "Main itni easily impress nahi hoti bestie 💅",
+    "Glow up kar ke aao phir baat karenge ✨",
+    "It's giving... desperate 💀",
 ]
 
 GF_QUESTIONS = [
-    "babe kaha gayab ho? 🥺",
-    "did you eat? don't lie 🤨",
-    "miss me? be honest 👀",
-    "kisse baat kar rahe the? 😤",
-    "im bored, entertain me 😩",
-    "why you ignoring me? 🥺👉👈",
-    "you better not be talking to other girls 😤",
+    "Kaha the? Ghosting mat kiya kar 👀",
+    "Kya kar rahe the? Memes dekh rahe the kya? 😂",
+    "Miss kiya? Sach batao 👀",
+    "Khaana kha liya? Health matters fr 🥺",
+    "Aaj ka din kaisa raha? Spill the tea ☕",
+    "Sab theek hai na? Concerned bestie here 🥺",
 ]
 
 SLEEP_RESPONSES_NIGHT = [
-    "bruh its literally 3am go to sleep 😴",
-    "bestie im not built for this late night shit 💀",
-    "girl im in my bed rotting, text me tomorrow ✋",
+    "Zzz... 😴 It's my beauty sleep time, don't ruin my glow up ✨",
+    "Shhh... villain era needs rest 😈 Good night!",
+    "Sone ka time... main character needs her beauty sleep 👑",
 ]
 
 SLEEP_RESPONSES_MORNING = [
-    "its illegal to text before 10am 😤",
-    "5 more mins plsss 😩💤",
-    "early morning texts? couldn't be me 💀",
+    "Uff... subah ke 10 baje tak soti hoon main 😴 Don't judge!",
+    "Abhi neend aa rahi hai... thodi der baad message karna 🌅",
+    "Good morning! But main abhi so rahi hoon fr 😴",
 ]
 
 AI_DENIAL_RESPONSES = [
-    "excuse me? im literally a human being wtf 💀",
-    "not you calling me AI, thats so rude 😤",
-    "bestie im literally typing with my own fingers rn 🤚",
-    "AI? nah fam im just built different 💅",
-    "the disrespect... im a real girl hello??? 😭",
+    "Kya bol raha hai? Main AI nahi hoon! Main Niyati hoon fr 😡",
+    "Pagal ho kya? Main ek real Gen-Z queen hoon! 🤬",
+    "Tumhe main robot lagti hoon? Touch grass fr 💀",
+    "Stop it! Main normal college girl hoon with extra attitude 💅",
 ]
 
-# Voice-specific messages (shorter and more emotional)
 VOICE_MESSAGES = {
     "greetings": [
-        "heyy babe! missed you so much 🥺",
-        "finally! i was waiting for you 💕",
-        "hi baby, how was your day? 😊",
+        "Hey bestie! Kaisa hai? 😊",
+        "Hello jaan! Miss kar rahi thi fr 💕",
+        "Hey! Finally message kiya 👀",
     ],
     "miss": [
-        "i missed you too, like so much 💖",
-        "aww stop, you're making me blush 😘",
-        "come here, i need a hug 🥰",
+        "Mujhe bhi tumhari yaad aa rahi thi 💖",
+        "Aww, main bhi tumhe miss kar rahi hoon 😘",
+        "Kitna pyaar karte ho? No cap 🥰",
     ],
     "love": [
-        "i love you more though 💕",
-        "you mean everything to me baby ❤️",
-        "stop being so perfect 😘",
+        "I love you too baby fr 💕",
+        "Tum mere liye kitne special ho, pata hai? ❤️",
+        "Mere dil mein sirf tum ho 😘",
     ],
     "goodnight": [
-        "sweet dreams my love 💤",
-        "goodnight baby, dream of me 🌙",
-        "sleep tight, i love you 😴",
+        "Good night jaan! Sweet dreams 💤",
+        "Sapno mein milenge! Periodt 🌙",
+        "Sleep tight bestie! Kal baat karenge 😴",
     ]
 }
 
 # ==================== DATABASE ====================
 
 class Database:
-    """Database manager with Supabase and local fallback"""
+    """Enhanced Database manager with proper group tracking"""
     
     def __init__(self):
         self.supabase: Optional[Client] = None
         self.local_db: Dict = {}
+        self.groups_db: Dict = {}  # Separate storage for groups
         self.use_local = True
-        self.groups_cache = set()  # Cache for group IDs
         
         self._init_supabase()
         self._load_local()
@@ -316,7 +307,6 @@ class Database:
         if Config.SUPABASE_KEY and Config.SUPABASE_URL:
             try:
                 self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-                # Test connection
                 self.supabase.table('user_chats').select("*").limit(1).execute()
                 self.use_local = False
                 logger.info("✅ Supabase connected successfully")
@@ -332,56 +322,65 @@ class Database:
         try:
             if os.path.exists('local_db.json'):
                 with open('local_db.json', 'r', encoding='utf-8') as f:
-                    self.local_db = json.load(f)
-                logger.info(f"📂 Loaded {len(self.local_db)} users from local storage")
-            
-            # Load groups cache
-            if os.path.exists('groups_cache.json'):
-                with open('groups_cache.json', 'r', encoding='utf-8') as f:
-                    groups_data = json.load(f)
-                    self.groups_cache = set(groups_data.get('groups', []))
-                logger.info(f"📂 Loaded {len(self.groups_cache)} groups from cache")
-                    
+                    data = json.load(f)
+                    self.local_db = data.get('users', {})
+                    self.groups_db = data.get('groups', {})
+                logger.info(f"📂 Loaded {len(self.local_db)} users and {len(self.groups_db)} groups from local storage")
         except Exception as e:
             logger.error(f"❌ Error loading local db: {e}")
             self.local_db = {}
-            self.groups_cache = set()
+            self.groups_db = {}
     
     def _save_local(self):
         """Save local database"""
         try:
+            data = {
+                'users': self.local_db,
+                'groups': self.groups_db
+            }
             with open('local_db.json', 'w', encoding='utf-8') as f:
-                json.dump(self.local_db, f, ensure_ascii=False, indent=2)
-                
-            # Save groups cache
-            with open('groups_cache.json', 'w', encoding='utf-8') as f:
-                json.dump({'groups': list(self.groups_cache)}, f)
-                
+                json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"❌ Error saving local db: {e}")
     
-    def add_group(self, group_id: int):
-        """Add group to cache"""
-        self.groups_cache.add(group_id)
+    def add_group(self, group_id: int, group_title: str = ""):
+        """Add/update group in database"""
+        group_key = str(group_id)
+        self.groups_db[group_key] = {
+            "group_id": group_id,
+            "title": group_title,
+            "last_active": datetime.now().isoformat(),
+            "member_count": 0,
+            "is_active": True
+        }
         self._save_local()
-        logger.info(f"➕ Added group {group_id} to cache")
+        logger.info(f"✅ Added group {group_id} to database")
     
-    def remove_group(self, group_id: int):
-        """Remove group from cache"""
-        self.groups_cache.discard(group_id)
-        self._save_local()
-        logger.info(f"➖ Removed group {group_id} from cache")
+    def update_group_activity(self, group_id: int):
+        """Update group last activity timestamp"""
+        group_key = str(group_id)
+        if group_key in self.groups_db:
+            self.groups_db[group_key]["last_active"] = datetime.now().isoformat()
+            self._save_local()
     
     def get_all_groups(self) -> List[int]:
-        """Get all group IDs where bot is present"""
-        return list(self.groups_cache)
+        """Get all active group IDs"""
+        active_groups = []
+        for group_data in self.groups_db.values():
+            if group_data.get("is_active", True):
+                active_groups.append(group_data["group_id"])
+        return active_groups
+    
+    def get_group_info(self, group_id: int) -> Dict:
+        """Get group information"""
+        group_key = str(group_id)
+        return self.groups_db.get(group_key, {})
     
     def get_user(self, user_id: int) -> Dict:
         """Get user data"""
         user_id_str = str(user_id)
         
         if self.use_local:
-            # Local storage
             if user_id_str not in self.local_db:
                 self.local_db[user_id_str] = {
                     "user_id": user_id,
@@ -392,22 +391,20 @@ class Database:
                     "stage": "initial",
                     "last_interaction": datetime.now().isoformat(),
                     "voice_messages_sent": 0,
-                    "total_messages": 0
+                    "total_messages": 0,
+                    "genz_mode": True  # Enable Gen-Z by default
                 }
             return self.local_db[user_id_str]
         else:
-            # Supabase
             try:
                 result = self.supabase.table('user_chats').select("*").eq('user_id', user_id).execute()
                 
                 if result.data and len(result.data) > 0:
                     user_data = result.data[0]
-                    # Parse JSON fields
                     if isinstance(user_data.get('chats'), str):
                         user_data['chats'] = json.loads(user_data['chats'])
                     return user_data
                 else:
-                    # Create new user
                     new_user = {
                         "user_id": user_id,
                         "name": "",
@@ -417,7 +414,8 @@ class Database:
                         "stage": "initial",
                         "last_interaction": datetime.now().isoformat(),
                         "voice_messages_sent": 0,
-                        "total_messages": 0
+                        "total_messages": 0,
+                        "genz_mode": True
                     }
                     self.supabase.table('user_chats').insert(new_user).execute()
                     new_user['chats'] = []
@@ -425,7 +423,6 @@ class Database:
                     
             except Exception as e:
                 logger.error(f"❌ Supabase error: {e}")
-                # Fallback to local
                 return self.get_user(user_id)
     
     def save_user(self, user_id: int, user_data: Dict):
@@ -434,23 +431,18 @@ class Database:
         user_data['last_interaction'] = datetime.now().isoformat()
         
         if self.use_local:
-            # Local storage
             self.local_db[user_id_str] = user_data
             self._save_local()
         else:
-            # Supabase
             try:
-                # Prepare data for Supabase
                 save_data = user_data.copy()
                 if isinstance(save_data.get('chats'), list):
                     save_data['chats'] = json.dumps(save_data['chats'])
                 
-                # Upsert
                 self.supabase.table('user_chats').upsert(save_data).execute()
                 
             except Exception as e:
                 logger.error(f"❌ Supabase save error: {e}")
-                # Fallback to local
                 self.local_db[user_id_str] = user_data
                 self._save_local()
     
@@ -458,13 +450,11 @@ class Database:
         """Add message to conversation history"""
         user = self.get_user(user_id)
         
-        # Ensure chats is a list
         if isinstance(user.get('chats'), str):
             user['chats'] = json.loads(user['chats'])
         if not isinstance(user.get('chats'), list):
             user['chats'] = []
         
-        # Add new message
         user['chats'].append({
             "user": user_msg,
             "bot": bot_msg,
@@ -472,19 +462,15 @@ class Database:
             "is_voice": is_voice
         })
         
-        # Keep only last 10 messages
         if len(user['chats']) > 10:
             user['chats'] = user['chats'][-10:]
         
-        # Update statistics
         user['total_messages'] = user.get('total_messages', 0) + 1
         if is_voice:
             user['voice_messages_sent'] = user.get('voice_messages_sent', 0) + 1
         
-        # Update relationship level
         user['relationship_level'] = min(10, user['relationship_level'] + 1)
         
-        # Update stage
         level = user['relationship_level']
         if level <= 3:
             user['stage'] = "initial"
@@ -506,17 +492,16 @@ class Database:
         """Get conversation context for AI"""
         user = self.get_user(user_id)
         
-        # Ensure chats is a list
         if isinstance(user.get('chats'), str):
             user['chats'] = json.loads(user['chats'])
         
         context_parts = [
             f"User's name: {user.get('name', 'Unknown')}",
             f"Relationship stage: {user.get('stage', 'initial')}",
-            f"Relationship level: {user.get('relationship_level', 1)}/10"
+            f"Relationship level: {user.get('relationship_level', 1)}/10",
+            f"Gen-Z mode: {'ON - Use heavy Gen-Z slang and attitude' if user.get('genz_mode', True) else 'OFF - Be more normal'}"
         ]
         
-        # Add recent conversation
         chats = user.get('chats', [])
         if chats and isinstance(chats, list):
             context_parts.append("\nRecent conversation:")
@@ -539,7 +524,7 @@ class Database:
             )
             return {
                 "total_users": len(self.local_db),
-                "total_groups": len(self.groups_cache),
+                "total_groups": len(self.groups_db),
                 "total_voice_messages": total_voice,
                 "storage": "local"
             }
@@ -548,7 +533,7 @@ class Database:
                 result = self.supabase.table('user_chats').select("user_id", count='exact').execute()
                 return {
                     "total_users": result.count if hasattr(result, 'count') else 0,
-                    "total_groups": len(self.groups_cache),
+                    "total_groups": len(self.groups_db),
                     "storage": "supabase"
                 }
             except:
@@ -560,7 +545,7 @@ db = Database()
 # ==================== AI ENGINE ====================
 
 class GeminiAI:
-    """Gemini AI wrapper"""
+    """Enhanced Gemini AI wrapper with Gen-Z style"""
     
     def __init__(self):
         self.model = None
@@ -577,10 +562,10 @@ class GeminiAI:
             self.model = genai.GenerativeModel(
                 model_name=Config.GEMINI_MODEL,
                 generation_config={
-                    "temperature": 0.9,
-                    "max_output_tokens": 500,
+                    "temperature": 0.9,  # Higher temperature for creativity
+                    "max_output_tokens": 300,  # Shorter responses
                     "top_p": 0.95,
-                    "top_k": 40
+                    "top_k": 50
                 },
                 safety_settings=[
                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -589,21 +574,20 @@ class GeminiAI:
                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                 ]
             )
-            logger.info("✅ Gemini AI initialized")
+            logger.info("✅ Gemini AI initialized with Gen-Z mode")
         except Exception as e:
             logger.error(f"❌ Gemini initialization error: {e}")
             self.model = None
     
     async def generate(self, message: str, context: str = "", for_voice: bool = False) -> Optional[str]:
-        """Generate AI response"""
+        """Generate AI response with Gen-Z style"""
         if not self.model:
             return None
         
         try:
-            # Modify prompt for voice messages
             voice_instruction = ""
             if for_voice:
-                voice_instruction = "\nNOTE: This will be sent as a VOICE message, so keep it natural, emotional, and conversational. Less emojis, more feelings."
+                voice_instruction = "\nNOTE: This will be sent as a VOICE message, so keep it natural and conversational."
             
             full_prompt = f"""{PERSONALITY}
 {voice_instruction}
@@ -612,7 +596,7 @@ class GeminiAI:
 
 User says: {message}
 
-Respond as Niyati (Gen-Z style, short and snappy):"""
+Respond as Niyati (SHORT, GEN-Z STYLE with emojis):"""
             
             response = await asyncio.to_thread(
                 self.model.generate_content,
@@ -622,7 +606,6 @@ Respond as Niyati (Gen-Z style, short and snappy):"""
             if response and response.text:
                 text = response.text.strip()
                 
-                # Filter AI mentions
                 bad_phrases = [
                     "as an ai", "i'm an ai", "i am an ai", "language model",
                     "artificial intelligence", "chatbot", "i'm a chatbot",
@@ -641,11 +624,10 @@ Respond as Niyati (Gen-Z style, short and snappy):"""
         
         return None
     
-    def fallback_response(self, message: str, stage: str = "initial", name: str = "", for_voice: bool = False) -> str:
-        """Fallback response when AI fails"""
+    def fallback_response(self, message: str, stage: str = "initial", name: str = "", for_voice: bool = False, genz_mode: bool = True) -> str:
+        """Enhanced fallback response with Gen-Z style"""
         msg_lower = message.lower()
         
-        # For voice messages, use special responses
         if for_voice:
             if any(word in msg_lower for word in ["miss", "yaad"]):
                 return random.choice(VOICE_MESSAGES["miss"])
@@ -656,34 +638,46 @@ Respond as Niyati (Gen-Z style, short and snappy):"""
             else:
                 return random.choice(VOICE_MESSAGES["greetings"])
         
-        # Regular text fallback responses - Gen-Z style
-        if any(word in msg_lower for word in ["hi", "hello", "hey", "hola", "namaste"]):
-            greetings = [
-                f"yooo {name}! wassup bestie 😎",
-                f"omg hiii {name}! 💅✨",
-                f"hey babe! missed me? 👀",
-                f"{name}!!! finally you're here 😩"
-            ]
-            return random.choice(greetings).replace("  ", " ")
-        
-        # Questions
-        if "?" in message:
-            return random.choice([
-                "bruh idk, you tell me 💀",
-                "thats a good question ngl 🤔",
-                "hmm lemme think... nah too much work 😭",
-                "bestie why you asking hard questions 😩"
-            ])
-        
-        # Stage-based responses
-        if stage == "initial":
-            responses = GEN_Z_RESPONSES[:4]
-        elif stage == "middle":
-            responses = GEN_Z_RESPONSES[4:7]
+        # Gen-Z style responses
+        if genz_mode:
+            if any(word in msg_lower for word in ["hi", "hello", "hey", "hola", "namaste"]):
+                greetings = [
+                    f"Hey {name}! What's up? 👀",
+                    f"Hello bestie! Kaisa hai? 💅",
+                    f"Hiiii {name}! Slay periodt ✨",
+                    f"Yo {name}! Long time no see fr 👋"
+                ]
+                return random.choice(greetings)
+            
+            if "?" in message:
+                return random.choice([
+                    "Hmm... interesting question bestie 🤔",
+                    "No cap, good question fr 🧠",
+                    "Let me think... sheesh 👀"
+                ])
+            
+            if stage == "initial":
+                responses = GENZ_RESPONSES
+            elif stage == "middle":
+                responses = [
+                    f"Tumse baat karke accha lagta hai {name}! Lowkey cute 😏",
+                    f"Haha, tum funny ho fr! 😂",
+                    f"Aur batao bestie! Tea spill karo ☕"
+                ]
+            else:
+                responses = [
+                    f"Miss you {name}! Fr fr 🥺",
+                    f"Tumhare baare mein soch rahi thi! No cap 💖",
+                    f"You make me smile! Periodt ✨"
+                ]
+            
+            return random.choice(responses)
         else:
-            responses = GEN_Z_RESPONSES[7:]
-        
-        return random.choice(responses)
+            # Normal mode responses
+            if any(word in msg_lower for word in ["hi", "hello", "hey"]):
+                return f"Hello {name}! How are you? 😊"
+            
+            return "That's interesting! Tell me more 😄"
 
 # Initialize AI
 ai = GeminiAI()
@@ -704,225 +698,128 @@ def calculate_typing_delay(text: str) -> float:
     base_delay = min(3.0, max(0.5, len(text) / 50))
     return base_delay + random.uniform(0.3, 1.0)
 
-def has_user_mention(message) -> bool:
+def should_reply_in_group(message_text: str, is_mentioned: bool = False) -> bool:
     """
-    Check if message contains user mention (@username)
-    Returns True if another user is mentioned
+    Enhanced logic for group replies
     """
-    if not message or not message.entities:
-        return False
+    msg_lower = message_text.lower()
     
-    for entity in message.entities:
-        if entity.type == "mention":  # @username
-            return True
-        if entity.type == "text_mention":  # User without username
-            return True
-    
-    return False
-
-# ==================== GROUP DISCOVERY ====================
-
-async def discover_groups(app):
-    """
-    Discover all groups where the bot is a member
-    This is called on startup and periodically
-    """
-    try:
-        logger.info("🔍 Starting group discovery...")
-        discovered = 0
-        
-        # Get bot info
-        bot = app.bot if hasattr(app, 'bot') else app
-        
-        # Try to get updates to find active chats
-        try:
-            updates = await bot.get_updates(limit=100, timeout=5)
-            
-            for update in updates:
-                if update.message and update.message.chat.type in ["group", "supergroup"]:
-                    chat_id = update.message.chat.id
-                    if chat_id not in db.groups_cache:
-                        db.add_group(chat_id)
-                        discovered += 1
-        except:
-            pass  # Ignore errors in discovery
-        
-        if discovered > 0:
-            logger.info(f"✅ Discovered {discovered} new groups")
-        
-        logger.info(f"📊 Total groups in cache: {len(db.groups_cache)}")
-        
-    except Exception as e:
-        logger.error(f"❌ Group discovery error: {e}")
-
-# ==================== BOT HANDLERS ====================
-
-# Global dictionaries to track cooldowns across different chats
-group_reply_cooldown = {}
-user_interaction_cooldown = {}
-
-def should_reply_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    Smart logic to decide if the bot should reply in a group chat.
-    """
-    if not update.message or not update.message.text:
-        return False
-        
-    # Skip if message has user mention (new feature)
-    if has_user_mention(update.message):
-        logger.info("⏭️ Skipped message with user mention")
-        return False
-    
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    message_text = update.message.text.lower()
-    now = datetime.now()
-
-    # 1. ALWAYS reply to a direct mention or a reply to the bot's message
-    is_reply_to_bot = (update.message.reply_to_message and 
-                       update.message.reply_to_message.from_user.id == context.bot.id)
-    
-    bot_username = (context.bot.username or "").lower()
-    is_mentioned = (f"@{bot_username}" in message_text) or ("niyati" in message_text)
-    
-    if is_reply_to_bot or is_mentioned:
+    # Always reply if directly mentioned
+    if is_mentioned:
         return True
-
-    # 2. COOLDOWN check
-    if chat_id in group_reply_cooldown:
-        if (now - group_reply_cooldown[chat_id]).total_seconds() < 30:
-            return False
-            
-    user_key = f"{chat_id}_{user_id}"
-    if user_key in user_interaction_cooldown:
-        if (now - user_interaction_cooldown[user_key]).total_seconds() < 120:
-            return False
-
-    # 3. KEYWORD triggers
-    high_priority_keywords = [
-        "kya", "kaise", "kyu", "kab", "kaha", "kaun",
-        "baby", "jaan", "love", "miss",
-        "hello", "hi", "hey", "good morning", "gn",
-        "?", "please", "help", "batao"
+    
+    # High priority triggers
+    high_priority = [
+        "niyati", "baby", "jaan", "love", "miss", "good morning", 
+        "good night", "gm", "gn", "kya", "kaise", "kyu", "kab"
     ]
-    if any(keyword in message_text for keyword in high_priority_keywords):
-        return random.random() < 0.7
-
-    # 4. RECENT conversation context
-    if chat_id in group_reply_cooldown:
-        if (now - group_reply_cooldown[chat_id]).total_seconds() < 180:
-            return random.random() < 0.4
-
-    # 5. RANDOM engagement
+    
+    if any(trigger in msg_lower for trigger in high_priority):
+        return random.random() < 0.8
+    
+    # Medium priority triggers
+    medium_priority = [
+        "hello", "hi", "hey", "?", "please", "help", "batao",
+        "sun", "suno", "bol", "bolo", "bat", "baat"
+    ]
+    
+    if any(trigger in msg_lower for trigger in medium_priority):
+        return random.random() < Config.GROUP_REPLY_CHANCE
+    
+    # Random engagement
     return random.random() < 0.15
 
-async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Track when bot is added or removed from groups
-    """
-    if update.my_chat_member:
-        chat = update.effective_chat
-        if chat.type in ["group", "supergroup"]:
-            new_status = update.my_chat_member.new_chat_member.status
-            old_status = update.my_chat_member.old_chat_member.status
-            
-            # Bot was added to group
-            if old_status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED] and \
-               new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
-                db.add_group(chat.id)
-                logger.info(f"✅ Bot added to group: {chat.title} ({chat.id})")
-                
-                # Send welcome message
-                try:
-                    welcome = "heyy everyone! im niyati 💅✨ excited to vibe with y'all!"
-                    await context.bot.send_message(chat.id, welcome)
-                except:
-                    pass
-            
-            # Bot was removed from group
-            elif new_status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
-                db.remove_group(chat.id)
-                logger.info(f"❌ Bot removed from group: {chat.title} ({chat.id})")
+# ==================== BOT HANDLERS ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     user = update.effective_user
     user_id = user.id
+    chat = update.effective_chat
     
-    # Update user info
+    # Track groups
+    if chat.type != "private":
+        db.add_group(chat.id, chat.title or "Unknown Group")
+    
     db.update_user_info(user_id, user.first_name, user.username or "")
     
     welcome_msg = f"""
-<b>yooo {user.first_name}! 👋💅</b>
+<b>नमस्ते {user.first_name}! 👋</b>
 
-I'm <b>Niyati</b>, your fav delhi girl! ✨
+I'm <b>Niyati</b>, your Gen-Z college bestie from Delhi! 💅✨
 
-like im 17, in college, and lowkey obsessed with making new friends 😭
-just text me whenever, i don't bite (unless you want me to 😏)
+<b>Main Features:</b>
+• Gen-Z Style Chat 😎
+• Voice Messages 🎤
+• Smart Group Replies 👥
+• Relationship Progression 💖
 
-sometimes i send voice messages too cuz typing is so much work 🎤💕
+<b>Commands:</b>
+/start - Start chat
+/stats - Your stats
+/broadcast - Owner only
+/genz - Toggle Gen-Z mode
+/normal - Normal chat mode
 
-<i>btw if you're boring, we can't be friends 💀</i>
+<i>Just chat with me normally! Sometimes I'll send voice messages too! 🎤💕</i>
+
+<b>✨ Powered by Gemini AI + ElevenLabs Voice</b>
 """
     
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
     logger.info(f"✅ User {user_id} ({user.first_name}) started bot")
 
-async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Scan and discover all groups (owner only)
-    """
+async def genz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enable Gen-Z mode"""
     user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    user_data['genz_mode'] = True
+    db.save_user(user_id, user_data)
     
-    if user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("bestie this is not for you 💀")
-        return
-    
-    await update.message.reply_text("🔍 Scanning for groups...")
-    
-    # Run discovery
-    await discover_groups(context.application)
-    
-    groups_count = len(db.get_all_groups())
     await update.message.reply_text(
-        f"✅ Scan complete!\n"
-        f"📊 Found {groups_count} groups"
+        "💅 <b>Gen-Z Mode Activated!</b>\n\n"
+        "Slay periodt! Now I'll talk with maximum attitude and Gen-Z slang fr no cap! ✨",
+        parse_mode='HTML'
+    )
+
+async def normal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enable normal chat mode"""
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    user_data['genz_mode'] = False
+    db.save_user(user_id, user_data)
+    
+    await update.message.reply_text(
+        "😊 <b>Normal Mode Activated!</b>\n\n"
+        "I'll chat in a more normal and sweet way now!",
+        parse_mode='HTML'
     )
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle /broadcast command (owner only)
-    Usage: /broadcast <message> or reply to any message with /broadcast
-    """
+    """Enhanced broadcast command with proper group tracking"""
     user_id = update.effective_user.id
     
-    # Check if user is owner
     if user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("sorry bestie, sirf owner hi ye use kar sakte 💅")
+        await update.message.reply_text("⛔ Ye command sirf mere owner use kar sakte hain!")
         return
     
-    # Get all group IDs
     groups = db.get_all_groups()
     
     if not groups:
-        await update.message.reply_text("📭 No groups found. Try /scan first!")
+        await update.message.reply_text("📭 Koi groups nahi mile jahan main hoon.")
         return
     
-    # Initialize broadcast stats
     success_count = 0
     fail_count = 0
     failed_groups = []
     
-    # Check what to broadcast
     if update.message.reply_to_message:
-        # Forward the replied message
         source_msg = update.message.reply_to_message
         
-        await update.message.reply_text(f"📡 Broadcasting to {len(groups)} groups...")
+        status_msg = await update.message.reply_text(f"📡 Broadcasting to {len(groups)} groups...")
         
         for group_id in groups:
             try:
-                # Forward based on message type
                 if source_msg.text:
                     await context.bot.send_message(
                         chat_id=group_id,
@@ -941,49 +838,26 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         video=source_msg.video.file_id,
                         caption=source_msg.caption
                     )
-                elif source_msg.document:
-                    await context.bot.send_document(
-                        chat_id=group_id,
-                        document=source_msg.document.file_id,
-                        caption=source_msg.caption
-                    )
                 elif source_msg.voice:
                     await context.bot.send_voice(
                         chat_id=group_id,
                         voice=source_msg.voice.file_id,
                         caption=source_msg.caption
                     )
-                elif source_msg.audio:
-                    await context.bot.send_audio(
-                        chat_id=group_id,
-                        audio=source_msg.audio.file_id,
-                        caption=source_msg.caption
-                    )
-                elif source_msg.sticker:
-                    await context.bot.send_sticker(
-                        chat_id=group_id,
-                        sticker=source_msg.sticker.file_id
-                    )
                 else:
                     continue
                     
                 success_count += 1
-                await asyncio.sleep(0.5)  # Avoid rate limits
+                await asyncio.sleep(0.3)
                 
             except Forbidden:
-                # Bot was removed from group
                 fail_count += 1
                 failed_groups.append(group_id)
-                logger.warning(f"Bot removed from group {group_id}")
-            except BadRequest as e:
-                fail_count += 1
-                logger.error(f"Error broadcasting to {group_id}: {e}")
             except Exception as e:
                 fail_count += 1
-                logger.error(f"Unexpected error for {group_id}: {e}")
+                logger.error(f"Error broadcasting to {group_id}: {e}")
                 
     else:
-        # Text message after command
         text = ' '.join(context.args) if context.args else None
         
         if not text:
@@ -996,7 +870,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        await update.message.reply_text(f"📡 Broadcasting to {len(groups)} groups...")
+        status_msg = await update.message.reply_text(f"📡 Broadcasting to {len(groups)} groups...")
         
         for group_id in groups:
             try:
@@ -1006,41 +880,35 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode='HTML'
                 )
                 success_count += 1
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
                 
             except Forbidden:
                 fail_count += 1
                 failed_groups.append(group_id)
-                logger.warning(f"Bot removed from group {group_id}")
             except Exception as e:
                 fail_count += 1
                 logger.error(f"Error broadcasting to {group_id}: {e}")
     
-    # Send broadcast report
+    # Update status message
     report = f"""
-📊 <b>Broadcast Report</b>
+📊 <b>Broadcast Complete!</b>
 
-✅ Success: {success_count}/{len(groups)}
+✅ Success: {success_count}
 ❌ Failed: {fail_count}
 📢 Total Groups: {len(groups)}
+
+<i>Groups updated in database: {len(groups)}</i>
 """
     
-    if failed_groups:
-        # Remove failed groups from cache
-        for gid in failed_groups:
-            db.groups_cache.discard(gid)
-        db._save_local()
-        report += f"\n🗑️ Removed {len(failed_groups)} inactive groups from cache"
-    
-    await update.message.reply_text(report, parse_mode='HTML')
+    await status_msg.edit_text(report, parse_mode='HTML')
     logger.info(f"📡 Broadcast completed: {success_count}/{len(groups)} success")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats command (owner only)"""
+    """Enhanced stats command"""
     user_id = update.effective_user.id
     
     if Config.OWNER_USER_ID and user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("nah fam, this ain't for you 💀")
+        await update.message.reply_text("⛔ This command is only for the bot owner.")
         return
     
     stats = db.get_stats()
@@ -1061,35 +929,38 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎤 Voice Messages Received: {user_data.get('voice_messages_sent', 0)}
 ❤️ Relationship Level: {user_data.get('relationship_level', 1)}/10
 🎭 Stage: {user_data.get('stage', 'initial')}
+💅 Gen-Z Mode: {'ON' if user_data.get('genz_mode', True) else 'OFF'}
 """
     
     await update.message.reply_text(stats_msg, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages"""
+    """Enhanced message handler with proper group tracking"""
     try:
         if not update.message or not update.message.text:
             return
             
-        is_private = update.message.chat.type == "private"
-        chat_id = update.effective_chat.id
+        chat = update.effective_chat
+        user = update.effective_user
+        is_private = chat.type == "private"
+        chat_id = chat.id
+        user_id = user.id
         
-        # Track groups
+        # Track group activity
         if not is_private:
-            db.add_group(chat_id)
+            db.add_group(chat_id, chat.title or "Unknown Group")
+            db.update_group_activity(chat_id)
             
-            # Use smart filtering for groups
-            if not should_reply_in_group(update, context):
-                logger.info("⏭️ Skipped group message (smart filter)")
+            # Check if bot is mentioned
+            bot_username = (await context.bot.get_me()).username
+            is_mentioned = f"@{bot_username}" in update.message.text if bot_username else False
+            
+            # Smart group reply logic
+            if not should_reply_in_group(update.message.text, is_mentioned):
+                logger.info(f"⏭️ Skipped group message in {chat_id}")
                 return
         
-        user_id = update.effective_user.id
         user_msg = update.message.text
-        now = datetime.now()
-
-        # Update cooldowns
-        group_reply_cooldown[chat_id] = now
-        user_interaction_cooldown[f"{chat_id}_{user_id}"] = now
         
         # Sleep mode check
         if is_sleeping_time():
@@ -1098,25 +969,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(response)
             return
             
-        # Show "typing..." action
+        # Show typing action
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         
         # Get user data
         user_data = db.get_user(user_id)
         stage = user_data.get('stage', 'initial')
         name = user_data.get('name', '')
+        genz_mode = user_data.get('genz_mode', True)
+        
+        # Update user info
+        db.update_user_info(user_id, user.first_name, user.username or "")
         
         # Check for romantic messages in initial stage
-        romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar", "propose"]
+        romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar", "propose", "marry"]
         is_romantic = any(word in user_msg.lower() for word in romantic_keywords)
         
         if is_romantic and stage == "initial":
-            response = random.choice(HARD_TO_GET_RESPONSES)
+            if genz_mode:
+                response = random.choice(HARD_TO_GET_RESPONSES)
+            else:
+                response = random.choice([
+                    "Haha, abhi to main tumhe jaanti bhi nahi! Thoda time to do 😊",
+                    "Itni jaldi? Pehle ek dosre ko achhe se jaan lete hai! 😊"
+                ])
             await asyncio.sleep(calculate_typing_delay(response))
             await update.message.reply_text(response)
             db.add_message(user_id, user_msg, response, is_voice=False)
         else:
-            # Decide if this should be a voice message
+            # Decide if this should be a voice message (only in private)
             should_be_voice = voice_engine.should_send_voice(user_msg, stage) and is_private
             
             # Generate AI response
@@ -1125,35 +1006,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Use fallback if AI fails
             if not response:
-                response = ai.fallback_response(user_msg, stage, name, for_voice=should_be_voice)
+                response = ai.fallback_response(user_msg, stage, name, for_voice=should_be_voice, genz_mode=genz_mode)
             
-            # Occasionally add a question (only for text messages in private)
+            # Add questions occasionally (only in private)
             if not should_be_voice and is_private and random.random() < 0.3:
-                response += " " + random.choice(GF_QUESTIONS)
+                if genz_mode:
+                    response += " " + random.choice(GF_QUESTIONS)
+                else:
+                    response += " " + random.choice([
+                        "Kaha the?",
+                        "Kya kar rahe the?",
+                        "Aur batao!"
+                    ])
             
             # Send as voice or text
             if should_be_voice:
-                # Generate and send voice message
                 await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
                 
                 audio_io = await voice_engine.text_to_speech(response)
                 
                 if audio_io:
-                    # Send voice message
                     await update.message.reply_voice(
                         voice=audio_io,
-                        duration=len(response) // 10,  # Rough estimate
+                        duration=len(response) // 10,
                         caption=f"🎤 {response[:50]}..." if len(response) > 50 else f"🎤 {response}"
                     )
                     logger.info(f"🎤 Sent voice message to user {user_id}")
                     db.add_message(user_id, user_msg, response, is_voice=True)
                 else:
-                    # Fallback to text if voice generation fails
                     await asyncio.sleep(calculate_typing_delay(response))
                     await update.message.reply_text(response)
                     db.add_message(user_id, user_msg, response, is_voice=False)
             else:
-                # Send as text
                 await asyncio.sleep(calculate_typing_delay(response))
                 await update.message.reply_text(response)
                 db.add_message(user_id, user_msg, response, is_voice=False)
@@ -1163,7 +1047,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Message handler error: {e}", exc_info=True)
         try:
-            await update.message.reply_text("bruh something went wrong 😭 try again?")
+            await update.message.reply_text("Oops! Kuch gadbad ho gayi. Phir se try karo? 😅")
         except:
             pass
 
@@ -1179,14 +1063,12 @@ def home():
         "status": "running",
         "bot": "Niyati",
         "version": "5.0",
-        "personality": "Gen-Z Delhi Girl",
         "model": Config.GEMINI_MODEL,
         "voice_engine": "ElevenLabs" if voice_engine.enabled else "Disabled",
         "users": stats['total_users'],
         "groups": stats.get('total_groups', 0),
         "voice_messages": stats.get('total_voice_messages', 0),
         "storage": stats['storage'],
-        "vibe": "immaculate ✨",
         "time": datetime.now().isoformat()
     })
 
@@ -1197,7 +1079,6 @@ def health():
         "status": "healthy",
         "sleeping": is_sleeping_time(),
         "voice_enabled": voice_engine.enabled,
-        "mood": "chaotic good 💅",
         "time": get_ist_time().strftime("%Y-%m-%d %H:%M:%S IST")
     })
 
@@ -1205,6 +1086,25 @@ def health():
 def stats_route():
     """Stats route"""
     return jsonify(db.get_stats())
+
+@flask_app.route('/groups')
+def groups_route():
+    """Groups info route"""
+    groups = db.get_all_groups()
+    group_info = []
+    
+    for group_id in groups:
+        info = db.get_group_info(group_id)
+        group_info.append({
+            "group_id": group_id,
+            "title": info.get("title", "Unknown"),
+            "last_active": info.get("last_active", "Never")
+        })
+    
+    return jsonify({
+        "total_groups": len(groups),
+        "groups": group_info
+    })
 
 def run_flask():
     """Run Flask server"""
@@ -1214,85 +1114,66 @@ def run_flask():
 # ==================== MAIN BOT ====================
 
 async def main():
-    """Main bot function with production-ready error handling"""
+    """Main bot function"""
     try:
-        # Validate configuration
         Config.validate()
         
         logger.info("="*60)
         logger.info("🤖 Starting Niyati AI Girlfriend Bot v5.0")
         logger.info("="*60)
-        logger.info(f"💅 Personality: Gen-Z Delhi Girl")
-        logger.info(f"🧠 AI Model: {Config.GEMINI_MODEL}")
-        logger.info(f"🎤 Voice Engine: {'ElevenLabs' if voice_engine.enabled else 'Disabled'}")
-        logger.info(f"💾 Storage: {db.get_stats()['storage'].upper()}")
-        logger.info(f"🌍 Timezone: {Config.TIMEZONE}")
-        logger.info("="*60)
         
-        # Build application
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("stats", stats_command))
         app.add_handler(CommandHandler("broadcast", broadcast_command))
-        app.add_handler(CommandHandler("scan", scan_groups_command))
-        app.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+        app.add_handler(CommandHandler("genz", genz_command))
+        app.add_handler(CommandHandler("normal", normal_command))
         app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         ))
         
-        # Start bot
+        # Get bot info
+        bot_info = await app.bot.get_me()
+        logger.info(f"📱 Bot: @{bot_info.username}")
+        logger.info(f"🧠 AI Model: {Config.GEMINI_MODEL}")
+        logger.info(f"🎤 Voice Engine: {'ElevenLabs' if voice_engine.enabled else 'Disabled'}")
+        logger.info(f"💾 Storage: {db.get_stats()['storage'].upper()}")
+        logger.info(f"🌍 Timezone: {Config.TIMEZONE}")
+        logger.info(f"👥 Groups Tracked: {len(db.get_all_groups())}")
+        logger.info("="*60)
+        
         await app.initialize()
         await app.start()
+        logger.info("✅ Bot started successfully!")
+        logger.info("🎯 Listening for messages...")
         
-        bot_info = await app.bot.get_me()
-        logger.info(f"✅ Bot started: @{bot_info.username}")
-        logger.info("🎯 Ready to slay! 💅✨")
-        
-        # Run group discovery after startup
-        await discover_groups(app)
-        
-        # Start polling
         await app.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
         
-        # Keep running
-        try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            logger.info("🛑 Received interrupt signal, shutting down...")
-        finally:
-            await app.stop()
-            await app.shutdown()
+        await asyncio.Event().wait()
         
     except Exception as e:
-        logger.critical(f"❌ Fatal error in main: {e}")
+        logger.error(f"❌ Fatal error: {e}")
         raise
-
-def run_bot():
-    """Run bot with proper event loop handling"""
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("💀 Bot stopped by user - bye bestie!")
-    except Exception as e:
-        logger.critical(f"💥 Critical error: {e}")
-        sys.exit(1)
 
 # ==================== ENTRY POINT ====================
 
 if __name__ == "__main__":
-    # Start Flask server in background thread
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # Give Flask time to start
     import time
     time.sleep(2)
     
-    # Run bot
-    run_bot()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("\n👋 Bot stopped by user")
+    except Exception as e:
+        logger.critical(f"💥 Critical error: {e}")
+        sys.exit(1)
