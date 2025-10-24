@@ -721,7 +721,7 @@ def has_user_mention(message: Update.message) -> bool:
 
 # ==================== GROUP DISCOVERY ====================
 
-async def discover_groups(context: ContextTypes.DEFAULT_TYPE):
+async def discover_groups(app):
     """
     Discover all groups where the bot is a member
     This is called on startup and periodically
@@ -731,19 +731,20 @@ async def discover_groups(context: ContextTypes.DEFAULT_TYPE):
         discovered = 0
         
         # Get bot info
-        bot = context.bot
-        bot_id = bot.id
+        bot = app.bot if hasattr(app, 'bot') else app
         
         # Try to get updates to find active chats
-        # Note: This is limited, but helps find recent groups
-        updates = await bot.get_updates(limit=100, timeout=5)
-        
-        for update in updates:
-            if update.message and update.message.chat.type in ["group", "supergroup"]:
-                chat_id = update.message.chat.id
-                if chat_id not in db.groups_cache:
-                    db.add_group(chat_id)
-                    discovered += 1
+        try:
+            updates = await bot.get_updates(limit=100, timeout=5)
+            
+            for update in updates:
+                if update.message and update.message.chat.type in ["group", "supergroup"]:
+                    chat_id = update.message.chat.id
+                    if chat_id not in db.groups_cache:
+                        db.add_group(chat_id)
+                        discovered += 1
+        except:
+            pass  # Ignore errors in discovery
         
         if discovered > 0:
             logger.info(f"✅ Discovered {discovered} new groups")
@@ -1211,12 +1212,6 @@ def run_flask():
 
 # ==================== MAIN BOT ====================
 
-async def post_init(app: Application):
-    """Called after bot initialization"""
-    # Discover groups on startup
-    await discover_groups(app)
-    logger.info("✅ Post-initialization complete")
-
 async def main():
     """Main bot function"""
     try:
@@ -1233,8 +1228,8 @@ async def main():
         logger.info(f"🌍 Timezone: {Config.TIMEZONE}")
         logger.info("="*60)
         
-        # Build application
-        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+        # Build application - Fixed version
+        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
         app.add_handler(CommandHandler("start", start_command))
@@ -1255,13 +1250,20 @@ async def main():
         logger.info(f"✅ Bot started: @{bot_info.username}")
         logger.info("🎯 Ready to slay! 💅✨")
         
+        # Run group discovery after startup
+        await discover_groups(app)
+        
+        # Start polling
         await app.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
         
         # Keep running
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        except:
+            await app.stop()
         
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
