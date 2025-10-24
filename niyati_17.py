@@ -1,8 +1,5 @@
-"""
-Niyati - AI Girlfriend Telegram Bot
-Complete Version with Voice, Broadcast & Smart Mention Detection
-Fixed Group Tracking & Enhanced Gen-Z Personality
-"""
+# Niyati - AI Girlfriend Telegram Bot
+# Production Ready Version with All Fixes
 
 import os
 import sys
@@ -57,11 +54,11 @@ class Config:
     GEMINI_MODEL = "gemini-2.0-flash-exp"
     
     # ElevenLabs Voice
-    ELEVENLABS_API_KEY = "sk_20908f598545e660bf9b218eb48ce97b721a617014a74642"
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
     ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"  # Natural girl voice
     
     # Supabase
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     
     # Server
@@ -79,15 +76,19 @@ class Config:
     
     @classmethod
     def validate(cls):
-        """Validate configuration"""
+        """Validate configuration with better error handling"""
+        missing = []
         if not cls.TELEGRAM_BOT_TOKEN:
-            raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
+            missing.append("TELEGRAM_BOT_TOKEN")
         if not cls.GEMINI_API_KEY:
-            logger.warning("⚠️ GEMINI_API_KEY not set - using fallback responses")
+            logger.warning("⚠️ GEMINI_API_KEY not set - AI features disabled")
         if not cls.SUPABASE_KEY:
             logger.warning("⚠️ SUPABASE_KEY not set - using local storage")
         if not cls.ELEVENLABS_API_KEY:
             logger.warning("⚠️ ELEVENLABS_API_KEY not set - voice messages disabled")
+        
+        if missing:
+            raise ValueError(f"❌ Missing required environment variables: {', '.join(missing)}")
 
 # ==================== VOICE ENGINE (ELEVENLABS) ====================
 
@@ -703,7 +704,7 @@ def calculate_typing_delay(text: str) -> float:
     base_delay = min(3.0, max(0.5, len(text) / 50))
     return base_delay + random.uniform(0.3, 1.0)
 
-def has_user_mention(message: Update.message) -> bool:
+def has_user_mention(message) -> bool:
     """
     Check if message contains user mention (@username)
     Returns True if another user is mentioned
@@ -880,7 +881,7 @@ async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("🔍 Scanning for groups...")
     
     # Run discovery
-    await discover_groups(context)
+    await discover_groups(context.application)
     
     groups_count = len(db.get_all_groups())
     await update.message.reply_text(
@@ -1213,7 +1214,7 @@ def run_flask():
 # ==================== MAIN BOT ====================
 
 async def main():
-    """Main bot function"""
+    """Main bot function with production-ready error handling"""
     try:
         # Validate configuration
         Config.validate()
@@ -1242,7 +1243,7 @@ async def main():
             handle_message
         ))
         
-        # Initialize and start
+        # Start bot
         await app.initialize()
         await app.start()
         
@@ -1253,24 +1254,34 @@ async def main():
         # Run group discovery after startup
         await discover_groups(app)
         
-        # Start polling with proper cleanup
+        # Start polling
+        await app.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+        
+        # Keep running
         try:
-            await app.updater.start_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
-            )
-            
-            # Keep the bot running
-            stop_signal = asyncio.Event()
-            await stop_signal.wait()
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            logger.info("🛑 Received interrupt signal, shutting down...")
         finally:
-            await app.updater.stop()
             await app.stop()
             await app.shutdown()
         
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.critical(f"❌ Fatal error in main: {e}")
         raise
+
+def run_bot():
+    """Run bot with proper event loop handling"""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("💀 Bot stopped by user - bye bestie!")
+    except Exception as e:
+        logger.critical(f"💥 Critical error: {e}")
+        sys.exit(1)
 
 # ==================== ENTRY POINT ====================
 
@@ -1283,17 +1294,5 @@ if __name__ == "__main__":
     import time
     time.sleep(2)
     
-    # Run bot with proper async handling
-    try:
-        import nest_asyncio
-        nest_asyncio.apply()
-    except:
-        pass
-    
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("\n💀 Bot stopped by user - bye bestie!")
-    except Exception as e:
-        logger.critical(f"💥 Critical error: {e}")
-        sys.exit(1)
+    # Run bot
+    run_bot()
