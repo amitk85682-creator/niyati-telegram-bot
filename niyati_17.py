@@ -1,6 +1,6 @@
 """
-Niyati - AI Girlfriend Telegram Bot v5.0
-Enhanced with Group Discovery, Better Personality & Full Features
+Niyati - AI Girlfriend Telegram Bot v5.1
+Fixed Compatibility Issues & Enhanced Features
 """
 
 import os
@@ -31,7 +31,14 @@ from telegram.error import Forbidden, BadRequest, TelegramError
 from waitress import serve
 import pytz
 import google.generativeai as genai
-from supabase import create_client, Client
+
+# Supabase import with error handling
+try:
+    from supabase import create_client, Client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    logging.warning("Supabase not available")
 
 # ==================== LOGGING SETUP ====================
 
@@ -265,23 +272,35 @@ class Database:
     def __init__(self):
         self.supabase: Optional[Client] = None
         self.local_db: Dict = {}
-        self.groups_data: Dict[int, Dict] = {}  # Enhanced group tracking
+        self.groups_data: Dict[int, Dict] = {}
         self.use_local = True
         
         self._init_supabase()
         self._load_local()
     
     def _init_supabase(self):
-        """Initialize Supabase"""
-        if Config.SUPABASE_KEY and Config.SUPABASE_URL:
+        """Initialize Supabase with proper error handling"""
+        if SUPABASE_AVAILABLE and Config.SUPABASE_KEY and Config.SUPABASE_URL:
             try:
-                self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+                # Try different initialization methods
+                try:
+                    self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+                except TypeError:
+                    # Fallback for older versions
+                    self.supabase = create_client(
+                        supabase_url=Config.SUPABASE_URL, 
+                        supabase_key=Config.SUPABASE_KEY
+                    )
+                
+                # Test connection
                 self.supabase.table('user_chats').select("*").limit(1).execute()
                 self.use_local = False
                 logger.info("✅ Supabase connected")
             except Exception as e:
                 logger.warning(f"Supabase failed: {e}")
                 self.use_local = True
+        else:
+            logger.info("📁 Using local storage")
     
     def _load_local(self):
         """Load local database"""
@@ -682,6 +701,10 @@ def should_reply_in_group() -> bool:
 
 # ==================== BOT HANDLERS ====================
 
+# Message cooldown tracking
+last_group_reply = defaultdict(lambda: datetime.min)
+last_user_interaction = defaultdict(lambda: datetime.min)
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     user = update.effective_user
@@ -949,39 +972,6 @@ async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ms = (end - start).microseconds / 1000
     await msg.edit_text(f"🏓 Pong! `{ms:.2f}ms`", parse_mode='Markdown')
 
-async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set Niyati's mood"""
-    user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
-    
-    if not context.args:
-        current_mood = user_data.get('mood', 'happy')
-        await update.message.reply_text(
-            f"my current mood: {current_mood} 😊\n\n"
-            "change it with: /mood [happy/sad/angry/flirty/excited]"
-        )
-        return
-    
-    mood = context.args[0].lower()
-    valid_moods = ['happy', 'sad', 'angry', 'flirty', 'excited']
-    
-    if mood not in valid_moods:
-        await update.message.reply_text(f"bruh... valid moods: {', '.join(valid_moods)}")
-        return
-    
-    user_data['mood'] = mood
-    db.save_user(user_id, user_data)
-    
-    mood_emojis = {
-        'happy': '😊', 'sad': '😔', 'angry': '😤',
-        'flirty': '😏', 'excited': '🤩'
-    }
-    
-    await update.message.reply_text(
-        f"mood changed to {mood} {mood_emojis.get(mood, '😊')}\n"
-        f"ab main {mood} mood me hu!"
-    )
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show help message"""
     user_id = update.effective_user.id
@@ -993,7 +983,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /start - shuru karo conversation
 /help - ye message
 /ping - check response time
-/mood - dekho ya change karo mood
 /stats - statistics (owner only)
 
 <b>Just chat normally!</b>
@@ -1006,14 +995,9 @@ kabhi voice notes bhi bhejungi 🎤"""
 <b>Owner Commands:</b>
 /scan - discover all groups
 /groups - list all groups
-/broadcast - message all groups
-/stats - detailed statistics"""
+/broadcast - message all groups"""
     
     await update.message.reply_text(help_text, parse_mode='HTML')
-
-# Message cooldown tracking
-last_group_reply = defaultdict(lambda: datetime.min)
-last_user_interaction = defaultdict(lambda: datetime.min)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all text messages"""
@@ -1136,7 +1120,7 @@ def home():
     stats = db.get_stats()
     return jsonify({
         "bot": "Niyati",
-        "version": "5.0",
+        "version": "5.1",
         "status": "vibing ✨",
         "users": stats['total_users'],
         "groups": stats['total_groups'],
@@ -1159,72 +1143,86 @@ def run_flask():
 
 # ==================== MAIN BOT ====================
 
+async def post_init(application: Application) -> None:
+    """Post initialization hook"""
+    logger.info("Running post initialization...")
+    
+    # Run initial group scan
+    try:
+        bot = application.bot
+        updates = await bot.get_updates(limit=100)
+        discovered = set()
+        
+        for update_obj in updates:
+            chat = None
+            if update_obj.message:
+                chat = update_obj.message.chat
+            elif update_obj.edited_message:
+                chat = update_obj.edited_message.chat
+            
+            if chat and chat.type in ["group", "supergroup"] and chat.id not in discovered:
+                discovered.add(chat.id)
+                try:
+                    chat_info = await bot.get_chat(chat.id)
+                    db.add_group(chat.id, chat_info.title or "", chat_info.username or "")
+                    logger.info(f"Found group: {chat_info.title}")
+                except:
+                    pass
+        
+        logger.info(f"✅ Initial scan complete: {len(db.get_active_groups())} groups found")
+    except Exception as e:
+        logger.warning(f"Initial scan failed: {e}")
+
 async def main():
     """Main bot function"""
     try:
         Config.validate()
         
         logger.info("="*60)
-        logger.info("🤖 Starting Niyati Bot v5.0")
+        logger.info("🤖 Starting Niyati Bot v5.1")
         logger.info("✨ Gen-Z Girlfriend Experience")
         logger.info("="*60)
         
-        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+        # Build application with proper configuration
+        application = (
+            Application.builder()
+            .token(Config.TELEGRAM_BOT_TOKEN)
+            .post_init(post_init)  # Add post init hook
+            .build()
+        )
         
         # Add handlers
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(CommandHandler("help", help_command))
-        app.add_handler(CommandHandler("stats", stats_command))
-        app.add_handler(CommandHandler("scan", scan_groups_command))
-        app.add_handler(CommandHandler("groups", groups_command))
-        app.add_handler(CommandHandler("broadcast", broadcast_command))
-        app.add_handler(CommandHandler("ping", ping_command))
-        app.add_handler(CommandHandler("mood", mood_command))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("scan", scan_groups_command))
+        application.add_handler(CommandHandler("groups", groups_command))
+        application.add_handler(CommandHandler("broadcast", broadcast_command))
+        application.add_handler(CommandHandler("ping", ping_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        # Start bot
-        await app.initialize()
-        await app.start()
+        # Initialize and start
+        await application.initialize()
+        await application.start()
         
-        bot_info = await app.bot.get_me()
+        bot_info = await application.bot.get_me()
         logger.info(f"✅ Bot started: @{bot_info.username}")
         logger.info("💬 Ready to vibe with users!")
         
-        # Important: Run initial scan to discover existing groups
-        logger.info("🔍 Running initial group scan...")
-        try:
-            updates = await app.bot.get_updates(limit=100)
-            discovered = set()
-            
-            for update_obj in updates:
-                chat = None
-                if update_obj.message:
-                    chat = update_obj.message.chat
-                elif update_obj.edited_message:
-                    chat = update_obj.edited_message.chat
-                
-                if chat and chat.type in ["group", "supergroup"] and chat.id not in discovered:
-                    discovered.add(chat.id)
-                    try:
-                        chat_info = await app.bot.get_chat(chat.id)
-                        db.add_group(chat.id, chat_info.title or "", chat_info.username or "")
-                        logger.info(f"Found group: {chat_info.title}")
-                    except:
-                        pass
-            
-            logger.info(f"✅ Initial scan complete: {len(db.get_active_groups())} groups found")
-        except Exception as e:
-            logger.warning(f"Initial scan failed: {e}")
-        
-        await app.updater.start_polling(
+        # Start polling with proper parameters
+        await application.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
+            drop_pending_updates=True,
+            poll_interval=0.5,
+            timeout=10
         )
         
-        await asyncio.Event().wait()
+        # Keep bot running
+        stop_event = asyncio.Event()
+        await stop_event.wait()
         
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.error(f"Fatal error: {e}", exc_info=True)
         raise
 
 if __name__ == "__main__":
