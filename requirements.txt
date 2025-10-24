@@ -35,10 +35,3 @@ coloredlogs==15.0.1
 
 # Type hints support
 typing-extensions==4.12.2
-
-
-# On Windows:
-venv\Scripts\activate
-
-# On Linux/Mac:
-source venv/bin/activate
