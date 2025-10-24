@@ -33,3 +33,4 @@ coloredlogs==15.0.1
 
 # Type hints support
 typing-extensions==4.12.2
+supabase
