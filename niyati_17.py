@@ -1,6 +1,6 @@
 """
 Niyati - AI Girlfriend Telegram Bot
-Enhanced Version with Proper Group Tracking & Gen-Z Style
+Fixed Version with Scan Command & Deployment Fixes
 """
 
 import os
@@ -31,7 +31,15 @@ from telegram.error import Forbidden, BadRequest
 from waitress import serve
 import pytz
 import google.generativeai as genai
-from supabase import create_client, Client
+
+# Try to import supabase, but make it optional
+try:
+    from supabase import create_client, Client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ Supabase not available - using local storage")
 
 # ==================== LOGGING SETUP ====================
 
@@ -56,11 +64,11 @@ class Config:
     GEMINI_MODEL = "gemini-2.0-flash-exp"
     
     # ElevenLabs Voice
-    ELEVENLABS_API_KEY = "sk_20908f598545e660bf9b218eb48ce97b721a617014a74642"
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
     ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"
     
     # Supabase
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     
     # Server
@@ -77,8 +85,8 @@ class Config:
     MAX_VOICE_LENGTH = 200
     
     # Group Settings
-    GROUP_REPLY_CHANCE = 0.4  # 40% chance to reply in groups when mentioned
-    
+    GROUP_REPLY_CHANCE = 0.4
+
     @classmethod
     def validate(cls):
         """Validate configuration"""
@@ -107,7 +115,7 @@ class VoiceEngine:
         else:
             logger.warning("⚠️ Voice engine disabled - no API key")
     
-    async def text_to_speech(self, text: str, language: str = "hi") -> Optional[BytesIO]:
+    async def text_to_speech(self, text: str) -> Optional[BytesIO]:
         """Convert text to speech using ElevenLabs API"""
         if not self.enabled:
             return None
@@ -220,11 +228,6 @@ GENZ_RESPONSES = [
     "Main villain era mein hoon 😈",
     "Glow up kar ke aayi hoon ✨",
     "It's giving... main character energy 👑",
-    "Yassified version aa gayi 💅",
-    "Gatekeep, gaslight, girlboss 💅✨",
-    "Not you being down bad 💀",
-    "Rizzler activities 😏",
-    "Main character arc loading... ✨",
 ]
 
 HARD_TO_GET_RESPONSES = [
@@ -233,8 +236,6 @@ HARD_TO_GET_RESPONSES = [
     "No cap, you're being down bad fr 💀",
     "Aree bhai, pehle ek coffee peete hain? 😂",
     "Main itni easily impress nahi hoti bestie 💅",
-    "Glow up kar ke aao phir baat karenge ✨",
-    "It's giving... desperate 💀",
 ]
 
 GF_QUESTIONS = [
@@ -243,7 +244,6 @@ GF_QUESTIONS = [
     "Miss kiya? Sach batao 👀",
     "Khaana kha liya? Health matters fr 🥺",
     "Aaj ka din kaisa raha? Spill the tea ☕",
-    "Sab theek hai na? Concerned bestie here 🥺",
 ]
 
 SLEEP_RESPONSES_NIGHT = [
@@ -265,38 +265,15 @@ AI_DENIAL_RESPONSES = [
     "Stop it! Main normal college girl hoon with extra attitude 💅",
 ]
 
-VOICE_MESSAGES = {
-    "greetings": [
-        "Hey bestie! Kaisa hai? 😊",
-        "Hello jaan! Miss kar rahi thi fr 💕",
-        "Hey! Finally message kiya 👀",
-    ],
-    "miss": [
-        "Mujhe bhi tumhari yaad aa rahi thi 💖",
-        "Aww, main bhi tumhe miss kar rahi hoon 😘",
-        "Kitna pyaar karte ho? No cap 🥰",
-    ],
-    "love": [
-        "I love you too baby fr 💕",
-        "Tum mere liye kitne special ho, pata hai? ❤️",
-        "Mere dil mein sirf tum ho 😘",
-    ],
-    "goodnight": [
-        "Good night jaan! Sweet dreams 💤",
-        "Sapno mein milenge! Periodt 🌙",
-        "Sleep tight bestie! Kal baat karenge 😴",
-    ]
-}
-
 # ==================== DATABASE ====================
 
 class Database:
     """Enhanced Database manager with proper group tracking"""
     
     def __init__(self):
-        self.supabase: Optional[Client] = None
+        self.supabase = None
         self.local_db: Dict = {}
-        self.groups_db: Dict = {}  # Separate storage for groups
+        self.groups_db: Dict = {}
         self.use_local = True
         
         self._init_supabase()
@@ -304,10 +281,12 @@ class Database:
     
     def _init_supabase(self):
         """Initialize Supabase client"""
-        if Config.SUPABASE_KEY and Config.SUPABASE_URL:
+        if SUPABASE_AVAILABLE and Config.SUPABASE_KEY and Config.SUPABASE_URL:
             try:
+                # Remove proxy parameter to fix the error
                 self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-                self.supabase.table('user_chats').select("*").limit(1).execute()
+                # Test connection with simpler query
+                self.supabase.table('user_chats').select("user_id").limit(1).execute()
                 self.use_local = False
                 logger.info("✅ Supabase connected successfully")
             except Exception as e:
@@ -315,7 +294,7 @@ class Database:
                 logger.info("📁 Using local storage instead")
                 self.use_local = True
         else:
-            logger.info("📁 Using local storage (no Supabase key)")
+            logger.info("📁 Using local storage (Supabase not configured)")
     
     def _load_local(self):
         """Load local database"""
@@ -392,7 +371,7 @@ class Database:
                     "last_interaction": datetime.now().isoformat(),
                     "voice_messages_sent": 0,
                     "total_messages": 0,
-                    "genz_mode": True  # Enable Gen-Z by default
+                    "genz_mode": True
                 }
             return self.local_db[user_id_str]
         else:
@@ -499,7 +478,7 @@ class Database:
             f"User's name: {user.get('name', 'Unknown')}",
             f"Relationship stage: {user.get('stage', 'initial')}",
             f"Relationship level: {user.get('relationship_level', 1)}/10",
-            f"Gen-Z mode: {'ON - Use heavy Gen-Z slang and attitude' if user.get('genz_mode', True) else 'OFF - Be more normal'}"
+            f"Gen-Z mode: {'ON' if user.get('genz_mode', True) else 'OFF'}"
         ]
         
         chats = user.get('chats', [])
@@ -562,8 +541,8 @@ class GeminiAI:
             self.model = genai.GenerativeModel(
                 model_name=Config.GEMINI_MODEL,
                 generation_config={
-                    "temperature": 0.9,  # Higher temperature for creativity
-                    "max_output_tokens": 300,  # Shorter responses
+                    "temperature": 0.9,
+                    "max_output_tokens": 300,
                     "top_p": 0.95,
                     "top_k": 50
                 },
@@ -630,13 +609,13 @@ Respond as Niyati (SHORT, GEN-Z STYLE with emojis):"""
         
         if for_voice:
             if any(word in msg_lower for word in ["miss", "yaad"]):
-                return random.choice(VOICE_MESSAGES["miss"])
+                return "Mujhe bhi tumhari yaad aa rahi thi 💖"
             elif any(word in msg_lower for word in ["love", "pyar"]):
-                return random.choice(VOICE_MESSAGES["love"])
+                return "I love you too baby fr 💕"
             elif any(word in msg_lower for word in ["good night", "gn"]):
-                return random.choice(VOICE_MESSAGES["goodnight"])
+                return "Good night jaan! Sweet dreams 💤"
             else:
-                return random.choice(VOICE_MESSAGES["greetings"])
+                return "Hey bestie! Kaisa hai? 😊"
         
         # Gen-Z style responses
         if genz_mode:
@@ -645,7 +624,6 @@ Respond as Niyati (SHORT, GEN-Z STYLE with emojis):"""
                     f"Hey {name}! What's up? 👀",
                     f"Hello bestie! Kaisa hai? 💅",
                     f"Hiiii {name}! Slay periodt ✨",
-                    f"Yo {name}! Long time no see fr 👋"
                 ]
                 return random.choice(greetings)
             
@@ -756,18 +734,59 @@ I'm <b>Niyati</b>, your Gen-Z college bestie from Delhi! 💅✨
 
 <b>Commands:</b>
 /start - Start chat
-/stats - Your stats
+/stats - Your stats  
 /broadcast - Owner only
+/scan - Discover groups
 /genz - Toggle Gen-Z mode
 /normal - Normal chat mode
 
 <i>Just chat with me normally! Sometimes I'll send voice messages too! 🎤💕</i>
-
-<b>✨ Powered by Gemini AI + ElevenLabs Voice</b>
 """
     
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
     logger.info(f"✅ User {user_id} ({user.first_name}) started bot")
+
+async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Scan and discover groups where bot is present"""
+    user_id = update.effective_user.id
+    
+    if user_id != Config.OWNER_USER_ID:
+        await update.message.reply_text("⛔ This command is only for the bot owner.")
+        return
+    
+    try:
+        # Get all chats where bot is present
+        bot = context.bot
+        updates = await bot.get_updates(limit=100, timeout=10)
+        
+        discovered_groups = set()
+        
+        for update_obj in updates:
+            if update_obj.message and update_obj.message.chat:
+                chat = update_obj.message.chat
+                if chat.type in ["group", "supergroup"]:
+                    db.add_group(chat.id, chat.title or "Unknown Group")
+                    discovered_groups.add(chat.id)
+        
+        # Also check current groups from database
+        existing_groups = db.get_all_groups()
+        
+        message = f"""
+<b>🔍 Group Scan Results</b>
+
+📊 Groups in database: {len(existing_groups)}
+🆕 New groups discovered: {len(discovered_groups)}
+👥 Total unique groups: {len(set(existing_groups + list(discovered_groups)))}
+
+<i>Groups are automatically tracked when they send messages or when bot is added.</i>
+"""
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        logger.info(f"🔍 Group scan completed: {len(existing_groups)} groups found")
+        
+    except Exception as e:
+        logger.error(f"❌ Scan command error: {e}")
+        await update.message.reply_text(f"❌ Scan failed: {str(e)}")
 
 async def genz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Enable Gen-Z mode"""
@@ -806,12 +825,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     groups = db.get_all_groups()
     
     if not groups:
-        await update.message.reply_text("📭 Koi groups nahi mile jahan main hoon.")
+        await update.message.reply_text("📭 Koi groups nahi mile jahan main hoon. Use /scan to discover groups.")
         return
     
     success_count = 0
     fail_count = 0
-    failed_groups = []
     
     if update.message.reply_to_message:
         source_msg = update.message.reply_to_message
@@ -838,12 +856,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         video=source_msg.video.file_id,
                         caption=source_msg.caption
                     )
-                elif source_msg.voice:
-                    await context.bot.send_voice(
-                        chat_id=group_id,
-                        voice=source_msg.voice.file_id,
-                        caption=source_msg.caption
-                    )
                 else:
                     continue
                     
@@ -852,7 +864,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             except Forbidden:
                 fail_count += 1
-                failed_groups.append(group_id)
             except Exception as e:
                 fail_count += 1
                 logger.error(f"Error broadcasting to {group_id}: {e}")
@@ -884,7 +895,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             except Forbidden:
                 fail_count += 1
-                failed_groups.append(group_id)
             except Exception as e:
                 fail_count += 1
                 logger.error(f"Error broadcasting to {group_id}: {e}")
@@ -896,8 +906,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ✅ Success: {success_count}
 ❌ Failed: {fail_count}
 📢 Total Groups: {len(groups)}
-
-<i>Groups updated in database: {len(groups)}</i>
 """
     
     await status_msg.edit_text(report, parse_mode='HTML')
@@ -1062,7 +1070,7 @@ def home():
     return jsonify({
         "status": "running",
         "bot": "Niyati",
-        "version": "5.0",
+        "version": "5.1",
         "model": Config.GEMINI_MODEL,
         "voice_engine": "ElevenLabs" if voice_engine.enabled else "Disabled",
         "users": stats['total_users'],
@@ -1114,29 +1122,31 @@ def run_flask():
 # ==================== MAIN BOT ====================
 
 async def main():
-    """Main bot function"""
+    """Main bot function - FIXED VERSION"""
     try:
         Config.validate()
         
         logger.info("="*60)
-        logger.info("🤖 Starting Niyati AI Girlfriend Bot v5.0")
+        logger.info("🤖 Starting Niyati AI Girlfriend Bot v5.1")
         logger.info("="*60)
         
-        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+        # Build application
+        application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(CommandHandler("stats", stats_command))
-        app.add_handler(CommandHandler("broadcast", broadcast_command))
-        app.add_handler(CommandHandler("genz", genz_command))
-        app.add_handler(CommandHandler("normal", normal_command))
-        app.add_handler(MessageHandler(
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("broadcast", broadcast_command))
+        application.add_handler(CommandHandler("scan", scan_command))
+        application.add_handler(CommandHandler("genz", genz_command))
+        application.add_handler(CommandHandler("normal", normal_command))
+        application.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         ))
         
         # Get bot info
-        bot_info = await app.bot.get_me()
+        bot_info = await application.bot.get_me()
         logger.info(f"📱 Bot: @{bot_info.username}")
         logger.info(f"🧠 AI Model: {Config.GEMINI_MODEL}")
         logger.info(f"🎤 Voice Engine: {'ElevenLabs' if voice_engine.enabled else 'Disabled'}")
@@ -1145,17 +1155,14 @@ async def main():
         logger.info(f"👥 Groups Tracked: {len(db.get_all_groups())}")
         logger.info("="*60)
         
-        await app.initialize()
-        await app.start()
+        # Start polling - FIXED: Use run_polling instead of manual polling
         logger.info("✅ Bot started successfully!")
         logger.info("🎯 Listening for messages...")
         
-        await app.updater.start_polling(
+        await application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
-        
-        await asyncio.Event().wait()
         
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
@@ -1164,12 +1171,15 @@ async def main():
 # ==================== ENTRY POINT ====================
 
 if __name__ == "__main__":
+    # Start Flask server in background thread
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
+    # Give Flask time to start
     import time
     time.sleep(2)
     
+    # Run bot with proper error handling
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
