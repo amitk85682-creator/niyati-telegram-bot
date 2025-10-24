@@ -1228,7 +1228,7 @@ async def main():
         logger.info(f"🌍 Timezone: {Config.TIMEZONE}")
         logger.info("="*60)
         
-        # Build application - Fixed version
+        # Build application
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
@@ -1242,7 +1242,7 @@ async def main():
             handle_message
         ))
         
-        # Start bot
+        # Initialize and start
         await app.initialize()
         await app.start()
         
@@ -1253,17 +1253,20 @@ async def main():
         # Run group discovery after startup
         await discover_groups(app)
         
-        # Start polling
-        await app.updater.start_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
-        
-        # Keep running
+        # Start polling with proper cleanup
         try:
-            await asyncio.Event().wait()
-        except:
+            await app.updater.start_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
+            
+            # Keep the bot running
+            stop_signal = asyncio.Event()
+            await stop_signal.wait()
+        finally:
+            await app.updater.stop()
             await app.stop()
+            await app.shutdown()
         
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
@@ -1280,7 +1283,13 @@ if __name__ == "__main__":
     import time
     time.sleep(2)
     
-    # Run bot
+    # Run bot with proper async handling
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+    except:
+        pass
+    
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
