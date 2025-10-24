@@ -1,6 +1,6 @@
 """
 Niyati - AI Girlfriend Telegram Bot
-Fixed Version with Scan Command & Deployment Fixes
+Fixed Version with Compatible python-telegram-bot Usage
 """
 
 import os
@@ -38,8 +38,6 @@ try:
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("⚠️ Supabase not available - using local storage")
 
 # ==================== LOGGING SETUP ====================
 
@@ -94,8 +92,6 @@ class Config:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
         if not cls.GEMINI_API_KEY:
             logger.warning("⚠️ GEMINI_API_KEY not set - using fallback responses")
-        if not cls.SUPABASE_KEY:
-            logger.warning("⚠️ SUPABASE_KEY not set - using local storage")
         if not cls.ELEVENLABS_API_KEY:
             logger.warning("⚠️ ELEVENLABS_API_KEY not set - voice messages disabled")
 
@@ -202,12 +198,6 @@ GEN-Z SPEAKING STYLE:
 - Hindi mix: vaise, literally, obviously, like, I mean, seriously
 - Emojis: 💅✨😂🤡👀🥺😏💀👑
 - Short, punchy responses with maximum attitude
-- Examples: 
-  "Aree bhai kya kar raha hai? 👀"
-  "Slay periodt 💅✨"
-  "No cap, you're being sus fr 😏"
-  "Sheesh, thoda to rizz dikhao 😂"
-  "Lowkey cute but highkey annoying 🤡"
 
 IMPORTANT RULES:
 - NEVER reveal you're an AI
@@ -283,10 +273,7 @@ class Database:
         """Initialize Supabase client"""
         if SUPABASE_AVAILABLE and Config.SUPABASE_KEY and Config.SUPABASE_URL:
             try:
-                # Remove proxy parameter to fix the error
                 self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-                # Test connection with simpler query
-                self.supabase.table('user_chats').select("user_id").limit(1).execute()
                 self.use_local = False
                 logger.info("✅ Supabase connected successfully")
             except Exception as e:
@@ -350,87 +337,36 @@ class Database:
                 active_groups.append(group_data["group_id"])
         return active_groups
     
-    def get_group_info(self, group_id: int) -> Dict:
-        """Get group information"""
-        group_key = str(group_id)
-        return self.groups_db.get(group_key, {})
-    
     def get_user(self, user_id: int) -> Dict:
         """Get user data"""
         user_id_str = str(user_id)
         
-        if self.use_local:
-            if user_id_str not in self.local_db:
-                self.local_db[user_id_str] = {
-                    "user_id": user_id,
-                    "name": "",
-                    "username": "",
-                    "chats": [],
-                    "relationship_level": 1,
-                    "stage": "initial",
-                    "last_interaction": datetime.now().isoformat(),
-                    "voice_messages_sent": 0,
-                    "total_messages": 0,
-                    "genz_mode": True
-                }
-            return self.local_db[user_id_str]
-        else:
-            try:
-                result = self.supabase.table('user_chats').select("*").eq('user_id', user_id).execute()
-                
-                if result.data and len(result.data) > 0:
-                    user_data = result.data[0]
-                    if isinstance(user_data.get('chats'), str):
-                        user_data['chats'] = json.loads(user_data['chats'])
-                    return user_data
-                else:
-                    new_user = {
-                        "user_id": user_id,
-                        "name": "",
-                        "username": "",
-                        "chats": json.dumps([]),
-                        "relationship_level": 1,
-                        "stage": "initial",
-                        "last_interaction": datetime.now().isoformat(),
-                        "voice_messages_sent": 0,
-                        "total_messages": 0,
-                        "genz_mode": True
-                    }
-                    self.supabase.table('user_chats').insert(new_user).execute()
-                    new_user['chats'] = []
-                    return new_user
-                    
-            except Exception as e:
-                logger.error(f"❌ Supabase error: {e}")
-                return self.get_user(user_id)
+        if user_id_str not in self.local_db:
+            self.local_db[user_id_str] = {
+                "user_id": user_id,
+                "name": "",
+                "username": "",
+                "chats": [],
+                "relationship_level": 1,
+                "stage": "initial",
+                "last_interaction": datetime.now().isoformat(),
+                "voice_messages_sent": 0,
+                "total_messages": 0,
+                "genz_mode": True
+            }
+        return self.local_db[user_id_str]
     
     def save_user(self, user_id: int, user_data: Dict):
         """Save user data"""
         user_id_str = str(user_id)
         user_data['last_interaction'] = datetime.now().isoformat()
-        
-        if self.use_local:
-            self.local_db[user_id_str] = user_data
-            self._save_local()
-        else:
-            try:
-                save_data = user_data.copy()
-                if isinstance(save_data.get('chats'), list):
-                    save_data['chats'] = json.dumps(save_data['chats'])
-                
-                self.supabase.table('user_chats').upsert(save_data).execute()
-                
-            except Exception as e:
-                logger.error(f"❌ Supabase save error: {e}")
-                self.local_db[user_id_str] = user_data
-                self._save_local()
+        self.local_db[user_id_str] = user_data
+        self._save_local()
     
     def add_message(self, user_id: int, user_msg: str, bot_msg: str, is_voice: bool = False):
         """Add message to conversation history"""
         user = self.get_user(user_id)
         
-        if isinstance(user.get('chats'), str):
-            user['chats'] = json.loads(user['chats'])
         if not isinstance(user.get('chats'), list):
             user['chats'] = []
         
@@ -471,9 +407,6 @@ class Database:
         """Get conversation context for AI"""
         user = self.get_user(user_id)
         
-        if isinstance(user.get('chats'), str):
-            user['chats'] = json.loads(user['chats'])
-        
         context_parts = [
             f"User's name: {user.get('name', 'Unknown')}",
             f"Relationship stage: {user.get('stage', 'initial')}",
@@ -496,27 +429,16 @@ class Database:
     
     def get_stats(self) -> Dict:
         """Get database statistics"""
-        if self.use_local:
-            total_voice = sum(
-                user.get('voice_messages_sent', 0) 
-                for user in self.local_db.values()
-            )
-            return {
-                "total_users": len(self.local_db),
-                "total_groups": len(self.groups_db),
-                "total_voice_messages": total_voice,
-                "storage": "local"
-            }
-        else:
-            try:
-                result = self.supabase.table('user_chats').select("user_id", count='exact').execute()
-                return {
-                    "total_users": result.count if hasattr(result, 'count') else 0,
-                    "total_groups": len(self.groups_db),
-                    "storage": "supabase"
-                }
-            except:
-                return {"total_users": 0, "total_groups": 0, "storage": "error"}
+        total_voice = sum(
+            user.get('voice_messages_sent', 0) 
+            for user in self.local_db.values()
+        )
+        return {
+            "total_users": len(self.local_db),
+            "total_groups": len(self.groups_db),
+            "total_voice_messages": total_voice,
+            "storage": "local"
+        }
 
 # Initialize database
 db = Database()
@@ -545,13 +467,7 @@ class GeminiAI:
                     "max_output_tokens": 300,
                     "top_p": 0.95,
                     "top_k": 50
-                },
-                safety_settings=[
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                ]
+                }
             )
             logger.info("✅ Gemini AI initialized with Gen-Z mode")
         except Exception as e:
@@ -677,9 +593,7 @@ def calculate_typing_delay(text: str) -> float:
     return base_delay + random.uniform(0.3, 1.0)
 
 def should_reply_in_group(message_text: str, is_mentioned: bool = False) -> bool:
-    """
-    Enhanced logic for group replies
-    """
+    """Enhanced logic for group replies"""
     msg_lower = message_text.lower()
     
     # Always reply if directly mentioned
@@ -1070,7 +984,7 @@ def home():
     return jsonify({
         "status": "running",
         "bot": "Niyati",
-        "version": "5.1",
+        "version": "5.2",
         "model": Config.GEMINI_MODEL,
         "voice_engine": "ElevenLabs" if voice_engine.enabled else "Disabled",
         "users": stats['total_users'],
@@ -1121,16 +1035,16 @@ def run_flask():
 
 # ==================== MAIN BOT ====================
 
-async def main():
-    """Main bot function - FIXED VERSION"""
+def main():
+    """Main bot function - COMPATIBLE VERSION"""
     try:
         Config.validate()
         
         logger.info("="*60)
-        logger.info("🤖 Starting Niyati AI Girlfriend Bot v5.1")
+        logger.info("🤖 Starting Niyati AI Girlfriend Bot v5.2")
         logger.info("="*60)
         
-        # Build application
+        # Build application - MODERN WAY
         application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
@@ -1146,7 +1060,7 @@ async def main():
         ))
         
         # Get bot info
-        bot_info = await application.bot.get_me()
+        bot_info = application.bot
         logger.info(f"📱 Bot: @{bot_info.username}")
         logger.info(f"🧠 AI Model: {Config.GEMINI_MODEL}")
         logger.info(f"🎤 Voice Engine: {'ElevenLabs' if voice_engine.enabled else 'Disabled'}")
@@ -1155,11 +1069,12 @@ async def main():
         logger.info(f"👥 Groups Tracked: {len(db.get_all_groups())}")
         logger.info("="*60)
         
-        # Start polling - FIXED: Use run_polling instead of manual polling
+        # Start polling - COMPATIBLE WAY
         logger.info("✅ Bot started successfully!")
         logger.info("🎯 Listening for messages...")
         
-        await application.run_polling(
+        # Use run_polling without await (synchronous)
+        application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
@@ -1179,11 +1094,5 @@ if __name__ == "__main__":
     import time
     time.sleep(2)
     
-    # Run bot with proper error handling
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("\n👋 Bot stopped by user")
-    except Exception as e:
-        logger.critical(f"💥 Critical error: {e}")
-        sys.exit(1)
+    # Run bot
+    main()
