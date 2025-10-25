@@ -28,7 +28,6 @@ from telegram.ext import (
 )
 from telegram.constants import ChatAction
 from telegram.error import Forbidden, BadRequest, TelegramError
-from telegram.request import HTTPXRequest
 from waitress import serve
 import pytz
 import google.generativeai as genai
@@ -718,16 +717,17 @@ async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     errors = 0
     
     try:
+        # Get bot info
         bot = context.bot
+        updates = await bot.get_updates(limit=100)
         
-        # Get updates in smaller batches with timeout
-        updates = await bot.get_updates(limit=30, timeout=5)
-        
+        # Process each update to find unique chats
         processed_chats = set()
         
         for update_obj in updates:
             chat = None
             
+            # Extract chat from different update types
             if update_obj.message:
                 chat = update_obj.message.chat
             elif update_obj.edited_message:
@@ -738,11 +738,10 @@ async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             if chat and chat.id not in processed_chats:
                 processed_chats.add(chat.id)
                 
+                # Only process groups and supergroups
                 if chat.type in ["group", "supergroup"]:
                     try:
-                        # Add delay between API calls to prevent rate limiting
-                        await asyncio.sleep(0.1)
-                        
+                        # Try to get chat info
                         chat_info = await bot.get_chat(chat.id)
                         db.add_group(
                             chat.id,
@@ -752,12 +751,14 @@ async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                         discovered += 1
                         logger.info(f"Discovered group: {chat_info.title}")
                     except (Forbidden, BadRequest):
+                        # Bot was removed from this group
                         db.remove_group(chat.id)
                         errors += 1
                     except Exception as e:
                         logger.error(f"Error checking chat {chat.id}: {e}")
                         errors += 1
         
+        # Report results
         active_groups = db.get_active_groups()
         report = f"""<b>📊 Group Scan Complete</b>
 
@@ -841,43 +842,33 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
         
         for group_id in active_groups:
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    # Forward based on type
-                    if source_msg.text:
-                        await context.bot.send_message(group_id, source_msg.text, parse_mode='HTML')
-                    elif source_msg.photo:
-                        await context.bot.send_photo(
-                            group_id,
-                            source_msg.photo[-1].file_id,
-                            caption=source_msg.caption
-                        )
-                    elif source_msg.voice:
-                        await context.bot.send_voice(
-                            group_id,
-                            source_msg.voice.file_id,
-                            caption=source_msg.caption
-                        )
-                    
-                    success += 1
-                    await asyncio.sleep(0.5)  # Rate limiting
-                    break
-                    
-                except (Forbidden, BadRequest):
-                    failed += 1
-                    removed_groups.append(group_id)
-                    db.remove_group(group_id)
-                    break
-                except Exception as e:
-                    retry_count += 1
-                    if retry_count >= max_retries:
-                        failed += 1
-                        logger.error(f"Broadcast error after {max_retries} retries: {e}")
-                    else:
-                        await asyncio.sleep(1)  # Wait before retry
+            try:
+                # Forward based on type
+                if source_msg.text:
+                    await context.bot.send_message(group_id, source_msg.text, parse_mode='HTML')
+                elif source_msg.photo:
+                    await context.bot.send_photo(
+                        group_id,
+                        source_msg.photo[-1].file_id,
+                        caption=source_msg.caption
+                    )
+                elif source_msg.voice:
+                    await context.bot.send_voice(
+                        group_id,
+                        source_msg.voice.file_id,
+                        caption=source_msg.caption
+                    )
+                
+                success += 1
+                await asyncio.sleep(0.5)
+                
+            except (Forbidden, BadRequest):
+                failed += 1
+                removed_groups.append(group_id)
+                db.remove_group(group_id)
+            except Exception as e:
+                failed += 1
+                logger.error(f"Broadcast error: {e}")
     
     else:
         text = ' '.join(context.args) if context.args else None
@@ -893,27 +884,17 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
         
         for group_id in active_groups:
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    await context.bot.send_message(group_id, text, parse_mode='HTML')
-                    success += 1
-                    await asyncio.sleep(0.5)  # Rate limiting
-                    break
-                except (Forbidden, BadRequest):
-                    failed += 1
-                    removed_groups.append(group_id)
-                    db.remove_group(group_id)
-                    break
-                except Exception as e:
-                    retry_count += 1
-                    if retry_count >= max_retries:
-                        failed += 1
-                        logger.error(f"Broadcast error after {max_retries} retries: {e}")
-                    else:
-                        await asyncio.sleep(1)  # Wait before retry
+            try:
+                await context.bot.send_message(group_id, text, parse_mode='HTML')
+                success += 1
+                await asyncio.sleep(0.5)
+            except (Forbidden, BadRequest):
+                failed += 1
+                removed_groups.append(group_id)
+                db.remove_group(group_id)
+            except Exception as e:
+                failed += 1
+                logger.error(f"Broadcast error: {e}")
     
     # Report
     report = f"""<b>📊 Broadcast Complete</b>
@@ -1188,16 +1169,7 @@ async def main():
         logger.info("✨ Gen-Z Girlfriend Experience")
         logger.info("="*60)
         
-        # Configure connection pool for better handling
-        request = HTTPXRequest(
-            connection_pool_size=20,  # Increased pool size
-            pool_timeout=30.0,        # Increased timeout
-            read_timeout=20.0,
-            write_timeout=20.0,
-            connect_timeout=20.0
-        )
-        
-        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).request(request).build()
+        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
         app.add_handler(CommandHandler("start", start_command))
@@ -1221,7 +1193,7 @@ async def main():
         # Important: Run initial scan to discover existing groups
         logger.info("🔍 Running initial group scan...")
         try:
-            updates = await app.bot.get_updates(limit=30, timeout=5)
+            updates = await app.bot.get_updates(limit=100)
             discovered = set()
             
             for update_obj in updates:
@@ -1234,7 +1206,6 @@ async def main():
                 if chat and chat.type in ["group", "supergroup"] and chat.id not in discovered:
                     discovered.add(chat.id)
                     try:
-                        await asyncio.sleep(0.05)  # Small delay between requests
                         chat_info = await app.bot.get_chat(chat.id)
                         db.add_group(chat.id, chat_info.title or "", chat_info.username or "")
                         logger.info(f"Found group: {chat_info.title}")
