@@ -1,6 +1,6 @@
 """
-Niyati - AI Girlfriend Telegram Bot v5.1
-Fixed Connection Pool and Group Discovery
+Niyati - AI Girlfriend Telegram Bot v5.0
+Enhanced with Group Discovery, Better Personality & Full Features
 """
 
 import os
@@ -27,8 +27,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from telegram.constants import ChatAction
-from telegram.error import Forbidden, BadRequest, TelegramError, NetworkError, TimedOut
-from telegram.request import HTTPXRequest
+from telegram.error import Forbidden, BadRequest, TelegramError
 from waitress import serve
 import pytz
 import google.generativeai as genai
@@ -705,111 +704,62 @@ btw im totally real okay, not some bot or whatever 🙄💖
     logger.info(f"User {user_id} started bot")
 
 async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Improved group scanning with better error handling"""
+    """Scan and discover all groups where bot is present"""
     user_id = update.effective_user.id
     
     if user_id != Config.OWNER_USER_ID:
         await update.message.reply_text("⛔ sirf owner hi ye command use kar sakte hai!")
         return
     
-    status_msg = await update.message.reply_text("🔍 Scanning all chats... please wait")
+    await update.message.reply_text("🔍 Scanning all chats... please wait")
     
     discovered = 0
     errors = 0
     
     try:
-        # Alternative approach: use direct bot instance from context
+        # Get bot info
         bot = context.bot
+        updates = await bot.get_updates(limit=100)
         
-        # First, try to clear any pending updates
-        try:
-            await bot.delete_webhook(drop_pending_updates=True)
-        except:
-            pass
-        
-        # Get updates with proper error handling
-        try:
-            # Use smaller limit and add proper timeout
-            updates = await asyncio.wait_for(
-                bot.get_updates(limit=10, timeout=3),
-                timeout=10.0
-            )
-        except asyncio.TimeoutError:
-            updates = []
-            logger.warning("Get updates timed out, trying alternative method")
-        except Exception as e:
-            updates = []
-            logger.error(f"Failed to get updates: {e}")
-        
+        # Process each update to find unique chats
         processed_chats = set()
         
-        # Process updates if we got any
         for update_obj in updates:
-            try:
-                chat = None
+            chat = None
+            
+            # Extract chat from different update types
+            if update_obj.message:
+                chat = update_obj.message.chat
+            elif update_obj.edited_message:
+                chat = update_obj.edited_message.chat
+            elif update_obj.channel_post:
+                chat = update_obj.channel_post.chat
+            
+            if chat and chat.id not in processed_chats:
+                processed_chats.add(chat.id)
                 
-                if update_obj.message:
-                    chat = update_obj.message.chat
-                elif update_obj.edited_message:
-                    chat = update_obj.edited_message.chat
-                elif update_obj.channel_post:
-                    chat = update_obj.channel_post.chat
-                
-                if chat and chat.id not in processed_chats:
-                    processed_chats.add(chat.id)
-                    
-                    if chat.type in ["group", "supergroup"]:
-                        try:
-                            # Wait longer between requests
-                            await asyncio.sleep(0.3)
-                            
-                            # Get chat info with timeout
-                            chat_info = await asyncio.wait_for(
-                                bot.get_chat(chat.id),
-                                timeout=5.0
-                            )
-                            
-                            db.add_group(
-                                chat.id,
-                                chat_info.title or "",
-                                chat_info.username or ""
-                            )
-                            discovered += 1
-                            logger.info(f"Discovered group: {chat_info.title}")
-                            
-                        except (Forbidden, BadRequest):
-                            db.remove_group(chat.id)
-                            errors += 1
-                        except asyncio.TimeoutError:
-                            errors += 1
-                            logger.warning(f"Timeout getting chat {chat.id}")
-                        except Exception as e:
-                            errors += 1
-                            logger.error(f"Error checking chat {chat.id}: {e}")
-            except Exception as e:
-                logger.error(f"Error processing update: {e}")
+                # Only process groups and supergroups
+                if chat.type in ["group", "supergroup"]:
+                    try:
+                        # Try to get chat info
+                        chat_info = await bot.get_chat(chat.id)
+                        db.add_group(
+                            chat.id,
+                            chat_info.title or "",
+                            chat_info.username or ""
+                        )
+                        discovered += 1
+                        logger.info(f"Discovered group: {chat_info.title}")
+                    except (Forbidden, BadRequest):
+                        # Bot was removed from this group
+                        db.remove_group(chat.id)
+                        errors += 1
+                    except Exception as e:
+                        logger.error(f"Error checking chat {chat.id}: {e}")
+                        errors += 1
         
-        # Also check for any groups already in database
-        existing_groups = db.get_active_groups()
-        for group_id in existing_groups[:5]:  # Check first 5 existing groups
-            try:
-                await asyncio.sleep(0.3)
-                chat_info = await asyncio.wait_for(
-                    bot.get_chat(group_id),
-                    timeout=5.0
-                )
-                db.add_group(
-                    group_id,
-                    chat_info.title or "",
-                    chat_info.username or ""
-                )
-            except (Forbidden, BadRequest, TelegramError):
-                db.remove_group(group_id)
-            except:
-                pass
-        
+        # Report results
         active_groups = db.get_active_groups()
-        
         report = f"""<b>📊 Group Scan Complete</b>
 
 🔍 Discovered: {discovered} new groups
@@ -818,16 +768,12 @@ async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 Groups list saved! Use /groups to see all."""
         
-        await status_msg.edit_text(report, parse_mode='HTML')
+        await update.message.reply_text(report, parse_mode='HTML')
         logger.info(f"Group scan complete: {discovered} discovered, {len(active_groups)} total")
         
     except Exception as e:
         logger.error(f"Scan error: {e}")
-        await status_msg.edit_text(
-            f"⚠️ Scan partially completed\n"
-            f"Found: {discovered} groups\n"
-            f"Error: {str(e)[:100]}"
-        )
+        await update.message.reply_text(f"❌ Scan failed: {str(e)}")
 
 async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all groups"""
@@ -869,7 +815,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(msg_parts), parse_mode='HTML')
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all groups with better error handling"""
+    """Broadcast message to all groups"""
     user_id = update.effective_user.id
     
     if user_id != Config.OWNER_USER_ID:
@@ -893,45 +839,33 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.reply_to_message:
         source_msg = update.message.reply_to_message
         
-        status_msg = await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
+        await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
         
         for group_id in active_groups:
             try:
-                # Add timeout to prevent hanging
+                # Forward based on type
                 if source_msg.text:
-                    await asyncio.wait_for(
-                        context.bot.send_message(group_id, source_msg.text, parse_mode='HTML'),
-                        timeout=5.0
-                    )
+                    await context.bot.send_message(group_id, source_msg.text, parse_mode='HTML')
                 elif source_msg.photo:
-                    await asyncio.wait_for(
-                        context.bot.send_photo(
-                            group_id,
-                            source_msg.photo[-1].file_id,
-                            caption=source_msg.caption
-                        ),
-                        timeout=5.0
+                    await context.bot.send_photo(
+                        group_id,
+                        source_msg.photo[-1].file_id,
+                        caption=source_msg.caption
                     )
                 elif source_msg.voice:
-                    await asyncio.wait_for(
-                        context.bot.send_voice(
-                            group_id,
-                            source_msg.voice.file_id,
-                            caption=source_msg.caption
-                        ),
-                        timeout=5.0
+                    await context.bot.send_voice(
+                        group_id,
+                        source_msg.voice.file_id,
+                        caption=source_msg.caption
                     )
                 
                 success += 1
-                await asyncio.sleep(0.7)  # Longer delay between messages
+                await asyncio.sleep(0.5)
                 
             except (Forbidden, BadRequest):
                 failed += 1
                 removed_groups.append(group_id)
                 db.remove_group(group_id)
-            except asyncio.TimeoutError:
-                failed += 1
-                logger.warning(f"Broadcast timeout for group {group_id}")
             except Exception as e:
                 failed += 1
                 logger.error(f"Broadcast error: {e}")
@@ -947,23 +881,17 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        status_msg = await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
+        await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
         
         for group_id in active_groups:
             try:
-                await asyncio.wait_for(
-                    context.bot.send_message(group_id, text, parse_mode='HTML'),
-                    timeout=5.0
-                )
+                await context.bot.send_message(group_id, text, parse_mode='HTML')
                 success += 1
-                await asyncio.sleep(0.7)
+                await asyncio.sleep(0.5)
             except (Forbidden, BadRequest):
                 failed += 1
                 removed_groups.append(group_id)
                 db.remove_group(group_id)
-            except asyncio.TimeoutError:
-                failed += 1
-                logger.warning(f"Broadcast timeout for group {group_id}")
             except Exception as e:
                 failed += 1
                 logger.error(f"Broadcast error: {e}")
@@ -977,7 +905,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if removed_groups:
         report += f"\n🗑️ Removed {len(removed_groups)} inactive groups"
     
-    await status_msg.edit_text(report, parse_mode='HTML')
+    await update.message.reply_text(report, parse_mode='HTML')
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show bot statistics"""
@@ -1208,7 +1136,7 @@ def home():
     stats = db.get_stats()
     return jsonify({
         "bot": "Niyati",
-        "version": "5.1",
+        "version": "5.0",
         "status": "vibing ✨",
         "users": stats['total_users'],
         "groups": stats['total_groups'],
@@ -1232,33 +1160,16 @@ def run_flask():
 # ==================== MAIN BOT ====================
 
 async def main():
-    """Main bot function with improved connection handling"""
+    """Main bot function"""
     try:
         Config.validate()
         
         logger.info("="*60)
-        logger.info("🤖 Starting Niyati Bot v5.1")
+        logger.info("🤖 Starting Niyati Bot v5.0")
         logger.info("✨ Gen-Z Girlfriend Experience")
         logger.info("="*60)
         
-        # Configure HTTPXRequest with better settings
-        request = HTTPXRequest(
-            connection_pool_size=40,     # Even larger pool
-            pool_timeout=60.0,           # Longer timeout
-            read_timeout=30.0,
-            write_timeout=30.0,
-            connect_timeout=30.0,
-        )
-        
-        # Build application with custom request handler
-        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).request(request).build()
-        
-        # Configure job queue settings
-        app.job_queue.scheduler.configure(
-            jobstores={'default': None},
-            executors={'default': {'type': 'threadpool', 'max_workers': 10}},
-            job_defaults={'coalesce': True, 'max_instances': 3}
-        )
+        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
         app.add_handler(CommandHandler("start", start_command))
@@ -1279,24 +1190,41 @@ async def main():
         logger.info(f"✅ Bot started: @{bot_info.username}")
         logger.info("💬 Ready to vibe with users!")
         
-        # Skip initial scan to avoid startup issues
-        logger.info("🔍 Skipping initial scan - use /scan command instead")
+        # Important: Run initial scan to discover existing groups
+        logger.info("🔍 Running initial group scan...")
+        try:
+            updates = await app.bot.get_updates(limit=100)
+            discovered = set()
+            
+            for update_obj in updates:
+                chat = None
+                if update_obj.message:
+                    chat = update_obj.message.chat
+                elif update_obj.edited_message:
+                    chat = update_obj.edited_message.chat
+                
+                if chat and chat.type in ["group", "supergroup"] and chat.id not in discovered:
+                    discovered.add(chat.id)
+                    try:
+                        chat_info = await app.bot.get_chat(chat.id)
+                        db.add_group(chat.id, chat_info.title or "", chat_info.username or "")
+                        logger.info(f"Found group: {chat_info.title}")
+                    except:
+                        pass
+            
+            logger.info(f"✅ Initial scan complete: {len(db.get_active_groups())} groups found")
+        except Exception as e:
+            logger.warning(f"Initial scan failed: {e}")
         
-        # Start polling with better settings
         await app.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            read_timeout=30,
-            write_timeout=30,
-            connect_timeout=30,
-            pool_timeout=60
+            drop_pending_updates=True
         )
         
-        # Keep running
         await asyncio.Event().wait()
         
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        logger.error(f"Fatal error: {e}")
         raise
 
 if __name__ == "__main__":
