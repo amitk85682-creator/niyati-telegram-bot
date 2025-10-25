@@ -1,6 +1,6 @@
 """
-Niyati - AI Girlfriend Telegram Bot v5.0
-Enhanced with Group Discovery, Better Personality & Full Features
+Niyati - AI Girlfriend Telegram Bot v5.1
+Enhanced with TTS, Group Discovery, Better Personality & Full Features
 """
 
 import os
@@ -32,6 +32,7 @@ from waitress import serve
 import pytz
 import google.generativeai as genai
 from supabase import create_client, Client
+from gtts import gTTS
 
 # ==================== LOGGING SETUP ====================
 
@@ -703,6 +704,106 @@ btw im totally real okay, not some bot or whatever 🙄💖
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
     logger.info(f"User {user_id} started bot")
 
+async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Convert text to speech using gTTS"""
+    user_id = update.effective_user.id
+    
+    # Check if there's text to convert
+    if not context.args:
+        # Check if replying to a message
+        if update.message.reply_to_message and update.message.reply_to_message.text:
+            text = update.message.reply_to_message.text
+        else:
+            await update.message.reply_text(
+                "💬 <b>Text to Speech</b>\n\n"
+                "Usage:\n"
+                "/tts <text> - Convert text to speech\n"
+                "OR reply to any message with /tts\n\n"
+                "Example: /tts Hello, this is a test",
+                parse_mode='HTML'
+            )
+            return
+    else:
+        text = ' '.join(context.args)
+    
+    # Limit text length
+    if len(text) > 500:
+        await update.message.reply_text("❌ Text too long! Maximum 500 characters allowed.")
+        return
+    
+    try:
+        # Send typing action
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.RECORD_VOICE)
+        
+        # Generate TTS
+        tts = gTTS(text=text, lang='hi', slow=False)  # 'hi' for Hindi, change to 'en' for English
+        
+        # Use BytesIO instead of temp file
+        audio_io = BytesIO()
+        tts.write_to_fp(audio_io)
+        audio_io.seek(0)
+        
+        # Send as voice note
+        await update.message.reply_voice(
+            voice=audio_io,
+            caption=f"🎤 TTS: {text[:50]}..." if len(text) > 50 else f"🎤 TTS: {text}"
+        )
+        
+        logger.info(f"TTS generated for user {user_id}")
+        
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        await update.message.reply_text("❌ oops! TTS generation failed... try again later 😅")
+
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Make Niyati speak any text in her voice"""
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    if not context.args:
+        await update.message.reply_text(
+            "arey kya bolna hai mujhe? 🎤\n"
+            "usage: /voice <text>\n"
+            "example: /voice hey bestie kya haal hai"
+        )
+        return
+    
+    text = ' '.join(context.args)
+    
+    # Add Niyati's personality to the text
+    niyati_style_text = f"{text} {random.choice(['na', '✨', '💖', 'yaar'])}"
+    
+    try:
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.RECORD_VOICE
+        )
+        
+        # Try ElevenLabs first if available
+        if voice_engine.enabled:
+            audio_io = await voice_engine.text_to_speech(niyati_style_text)
+            if audio_io:
+                await update.message.reply_voice(
+                    voice=audio_io,
+                    caption="🎤 Niyati's voice note ✨"
+                )
+                return
+        
+        # Fallback to gTTS
+        tts = gTTS(text=text, lang='hi', slow=False)
+        audio_io = BytesIO()
+        tts.write_to_fp(audio_io)
+        audio_io.seek(0)
+        
+        await update.message.reply_voice(
+            voice=audio_io,
+            caption="🎤 meri awaaz kaisi lagi? 😊"
+        )
+        
+    except Exception as e:
+        logger.error(f"Voice command error: {e}")
+        await update.message.reply_text("uff... voice note bhejne me problem ho rahi hai 😅")
+
 async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Scan and discover all groups where bot is present"""
     user_id = update.effective_user.id
@@ -994,6 +1095,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /help - ye message
 /ping - check response time
 /mood - dekho ya change karo mood
+/tts <text> - convert any text to speech
+/voice <text> - make me speak in voice note
 /stats - statistics (owner only)
 
 <b>Just chat normally!</b>
@@ -1136,7 +1239,7 @@ def home():
     stats = db.get_stats()
     return jsonify({
         "bot": "Niyati",
-        "version": "5.0",
+        "version": "5.1",
         "status": "vibing ✨",
         "users": stats['total_users'],
         "groups": stats['total_groups'],
@@ -1165,8 +1268,8 @@ async def main():
         Config.validate()
         
         logger.info("="*60)
-        logger.info("🤖 Starting Niyati Bot v5.0")
-        logger.info("✨ Gen-Z Girlfriend Experience")
+        logger.info("🤖 Starting Niyati Bot v5.1")
+        logger.info("✨ Gen-Z Girlfriend Experience with TTS")
         logger.info("="*60)
         
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
@@ -1180,6 +1283,8 @@ async def main():
         app.add_handler(CommandHandler("broadcast", broadcast_command))
         app.add_handler(CommandHandler("ping", ping_command))
         app.add_handler(CommandHandler("mood", mood_command))
+        app.add_handler(CommandHandler("tts", tts_command))
+        app.add_handler(CommandHandler("voice", voice_command))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         # Start bot
@@ -1189,6 +1294,7 @@ async def main():
         bot_info = await app.bot.get_me()
         logger.info(f"✅ Bot started: @{bot_info.username}")
         logger.info("💬 Ready to vibe with users!")
+        logger.info("🎤 TTS enabled with gTTS")
         
         # Important: Run initial scan to discover existing groups
         logger.info("🔍 Running initial group scan...")
