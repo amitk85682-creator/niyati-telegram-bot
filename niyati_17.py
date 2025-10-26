@@ -79,7 +79,7 @@ class Config:
     MAX_VOICE_LENGTH = 200
     
     
-@classmethod
+    @classmethod
     def validate(cls):
         """Validate configuration"""
         if not cls.TELEGRAM_BOT_TOKEN:
