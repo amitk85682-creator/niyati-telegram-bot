@@ -194,69 +194,284 @@ AI_DENIAL_RESPONSES = [
     "blocked for calling me AI. bye felicia 😒",
 ]
 
-# ==================== VOICE ENGINE ====================
+# ==================== ENHANCED VOICE ENGINE ====================
 
 class VoiceEngine:
-    """ElevenLabs voice synthesis engine"""
+    """ElevenLabs voice synthesis engine with better quality"""
     
     def __init__(self):
         self.api_key = Config.ELEVENLABS_API_KEY
         self.voice_id = Config.ELEVENLABS_VOICE_ID
         self.api_url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}"
         self.enabled = bool(self.api_key)
+        self.working = False
         
         if self.enabled:
-            logger.info("🎤 Voice engine initialized")
+            self._test_connection()
     
-    async def text_to_speech(self, text: str) -> Optional[BytesIO]:
-        """Convert text to speech"""
-        if not self.enabled:
-            return None
+    def _test_connection(self):
+        """Test ElevenLabs connection on startup"""
+        try:
+            import requests
+            headers = {"xi-api-key": self.api_key}
+            response = requests.get("https://api.elevenlabs.io/v1/voices", headers=headers)
+            if response.status_code == 200:
+                self.working = True
+                logger.info("✅ ElevenLabs API connected and working!")
+                voices = response.json().get('voices', [])
+                logger.info(f"📢 Available voices: {len(voices)}")
+            else:
+                logger.error(f"❌ ElevenLabs API error: {response.status_code}")
+                self.working = False
+        except Exception as e:
+            logger.error(f"❌ ElevenLabs connection failed: {e}")
+            self.working = False
+    
+    async def text_to_speech(self, text: str, use_genz_voice: bool = True) -> Optional[BytesIO]:
+        """Convert text to speech using ElevenLabs"""
+        if not self.enabled or not self.working:
+            logger.warning("⚠️ ElevenLabs not available, using fallback")
+            return await self.fallback_tts(text)
         
         try:
+            # Clean text for better pronunciation
+            clean_text = self._prepare_text_for_voice(text)
+            
             headers = {
                 "Accept": "audio/mpeg",
                 "Content-Type": "application/json",
                 "xi-api-key": self.api_key
             }
             
+            # Enhanced voice settings for natural speech
             data = {
-                "text": text,
-                "model_id": "eleven_multilingual_v2",
+                "text": clean_text,
+                "model_id": "eleven_multilingual_v2",  # Best model for natural speech
                 "voice_settings": {
-                    "stability": 0.5,
-                    "similarity_boost": 0.75,
-                    "style": 0.3,
-                    "use_speaker_boost": True
+                    "stability": 0.75,  # Higher for consistent voice
+                    "similarity_boost": 0.85,  # Higher for voice accuracy
+                    "style": 0.35,  # Moderate style for natural emotion
+                    "use_speaker_boost": True,
+                    "speaking_rate": 1.0  # Normal speaking speed
                 }
             }
             
+            # Optional: Use turbo model for faster generation
+            if len(text) < 100:
+                data["model_id"] = "eleven_turbo_v2"
+            
+            logger.info(f"🎤 Generating ElevenLabs voice for: {text[:50]}...")
+            
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, json=data, headers=headers) as response:
+                async with session.post(
+                    self.api_url, 
+                    json=data, 
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
                     if response.status == 200:
                         audio_data = await response.read()
                         audio_io = BytesIO(audio_data)
                         audio_io.seek(0)
+                        logger.info("✅ ElevenLabs voice generated successfully!")
                         return audio_io
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ ElevenLabs API error {response.status}: {error_text}")
+                        return await self.fallback_tts(text)
                         
+        except asyncio.TimeoutError:
+            logger.error("⏱️ ElevenLabs timeout - using fallback")
+            return await self.fallback_tts(text)
         except Exception as e:
-            logger.error(f"Voice generation error: {e}")
-        return None
+            logger.error(f"❌ ElevenLabs generation error: {e}")
+            return await self.fallback_tts(text)
+    
+    async def fallback_tts(self, text: str) -> Optional[BytesIO]:
+        """Fallback to gTTS when ElevenLabs fails"""
+        try:
+            logger.info("📢 Using gTTS fallback")
+            tts = gTTS(text=text, lang='hi', slow=False)
+            audio_io = BytesIO()
+            tts.write_to_fp(audio_io)
+            audio_io.seek(0)
+            return audio_io
+        except Exception as e:
+            logger.error(f"❌ gTTS fallback also failed: {e}")
+            return None
+    
+    def _prepare_text_for_voice(self, text: str) -> str:
+        """Prepare text for better voice synthesis"""
+        # Remove excessive emojis but keep a few for context
+        import re
+        text = re.sub(r'(\s*[^\s\w]+\s*)+', ' ', text)  # Reduce multiple emojis
+        
+        # Fix common abbreviations for better pronunciation
+        replacements = {
+            "u": "you",
+            "ur": "your",
+            "r": "are",
+            "n": "and",
+            "pls": "please",
+            "thx": "thanks",
+            "btw": "by the way",
+            "omg": "oh my god",
+            "lol": "haha",
+            "fr": "for real",
+            "ngl": "not gonna lie"
+        }
+        
+        words = text.split()
+        for i, word in enumerate(words):
+            lower_word = word.lower()
+            if lower_word in replacements:
+                words[i] = replacements[lower_word]
+        
+        return ' '.join(words)
     
     def should_send_voice(self, message: str, stage: str = "initial") -> bool:
         """Decide if message should be voice"""
-        if not self.enabled or len(message) > Config.MAX_VOICE_LENGTH:
+        # Only use voice if ElevenLabs is working
+        if not self.working:
+            return False
+            
+        if len(message) > Config.MAX_VOICE_LENGTH:
             return False
         
-        emotional_keywords = ["miss", "love", "yaad", "baby", "jaan"]
+        emotional_keywords = ["miss", "love", "yaad", "baby", "jaan", "❤", "💕", "😘"]
         if any(word in message.lower() for word in emotional_keywords):
-            return random.random() < 0.6
+            return random.random() < 0.7  # Higher chance for emotional messages
         
-        stage_chance = {"initial": 0.2, "middle": 0.3, "advanced": 0.4}
-        return random.random() < stage_chance.get(stage, 0.3)
+        stage_chance = {
+            "initial": 0.15,  # Less voice initially
+            "middle": 0.25,   # Moderate
+            "advanced": 0.35  # More voice when close
+        }
+        return random.random() < stage_chance.get(stage, 0.2)
 
-# Initialize voice engine
-voice_engine = VoiceEngine()
+# ==================== PREMIUM INDIAN FEMALE VOICES ====================
+
+ELEVENLABS_INDIAN_VOICES = {
+    "Niyati": "ni6cdqyS9wBvic5LPA7M",  # Young Indian female
+    "Priya": "21m00Tcm4TlvDq8ikWAM",   # Rachel - can work for Indian accent
+    "Ananya": "MF3mGyEYCl7XYWbV9V6O",  # Elli - youthful voice
+    "Kavya": "XrExE9yKIg1WjnnlVkGX",   # Lily - soft voice
+    "Sara": "pNInz6obpgDQGcFmaJgB"      # Adam - but request female version
+}
+
+# ==================== ENHANCED VOICE COMMAND ====================
+
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Make Niyati speak with high-quality ElevenLabs voice"""
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    if not context.args:
+        status = "✅ Working!" if voice_engine.working else "❌ Not configured"
+        await update.message.reply_text(
+            f"🎤 <b>Voice Command</b>\n\n"
+            f"ElevenLabs Status: {status}\n\n"
+            "Usage: /voice <text>\n"
+            "Example: /voice hey bestie kya haal hai\n\n"
+            "Note: High-quality AI voice when ElevenLabs is configured!",
+            parse_mode='HTML'
+        )
+        return
+    
+    text = ' '.join(context.args)
+    
+    if len(text) > 300:
+        await update.message.reply_text("arey itna lamba text? thoda short karo na 😅")
+        return
+    
+    # Add Niyati's personality touch
+    personality_endings = [
+        " na", " yaar", " 💕", " hehe", " 😊", 
+        "... okay?", "... samjhe?", " hai na?"
+    ]
+    enhanced_text = text + random.choice(personality_endings)
+    
+    try:
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.RECORD_VOICE
+        )
+        
+        # Always try ElevenLabs first
+        audio_io = await voice_engine.text_to_speech(enhanced_text)
+        
+        if audio_io:
+            # Check audio size to determine quality
+            audio_io.seek(0, 2)  # Seek to end
+            file_size = audio_io.tell()
+            audio_io.seek(0)  # Reset to beginning
+            
+            quality_indicator = "🎵 HD Voice" if file_size > 10000 else "🔊 Voice Note"
+            
+            await update.message.reply_voice(
+                voice=audio_io,
+                caption=f"{quality_indicator} | Niyati's message ✨",
+                duration=len(text) // 10
+            )
+            
+            # Log which engine was used
+            engine_used = "ElevenLabs" if voice_engine.working else "gTTS"
+            logger.info(f"Voice sent using {engine_used} for user {user_id}")
+        else:
+            await update.message.reply_text("uff... voice generation me problem ho gyi 😅")
+        
+    except Exception as e:
+        logger.error(f"Voice command error: {e}")
+        await update.message.reply_text("sorry yaar, voice note nahi ban paya 😔")
+
+# ==================== CHECK VOICE STATUS COMMAND ====================
+
+async def voice_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check voice engine status"""
+    user_id = update.effective_user.id
+    
+    if user_id != Config.OWNER_USER_ID:
+        await update.message.reply_text("⛔ Owner only command!")
+        return
+    
+    # Test ElevenLabs
+    elevenlabs_status = "❌ Not configured"
+    if Config.ELEVENLABS_API_KEY:
+        try:
+            import requests
+            headers = {"xi-api-key": Config.ELEVENLABS_API_KEY}
+            response = requests.get("https://api.elevenlabs.io/v1/user", headers=headers)
+            
+            if response.status_code == 200:
+                user_info = response.json()
+                character_count = user_info.get('subscription', {}).get('character_count', 0)
+                character_limit = user_info.get('subscription', {}).get('character_limit', 0)
+                
+                elevenlabs_status = f"""✅ Active
+├ Characters Used: {character_count:,}/{character_limit:,}
+├ Voice Model: eleven_multilingual_v2
+└ Voice ID: {Config.ELEVENLABS_VOICE_ID}"""
+            else:
+                elevenlabs_status = f"❌ API Error: {response.status_code}"
+        except Exception as e:
+            elevenlabs_status = f"❌ Connection Error: {str(e)[:50]}"
+    
+    status_msg = f"""<b>🎤 Voice Engine Status</b>
+
+<b>ElevenLabs AI Voice:</b>
+{elevenlabs_status}
+
+<b>Fallback (gTTS):</b>
+✅ Always available
+
+<b>Current Config:</b>
+├ Primary: {'ElevenLabs' if voice_engine.working else 'gTTS'}
+├ Voice Quality: {'HD Natural' if voice_engine.working else 'Basic TTS'}
+└ Auto-fallback: Enabled
+
+<i>Tip: ElevenLabs provides natural, emotional AI voices!</i>"""
+    
+    await update.message.reply_text(status_msg, parse_mode='HTML')
 
 # ==================== ENHANCED DATABASE ====================
 
