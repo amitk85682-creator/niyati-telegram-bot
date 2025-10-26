@@ -79,8 +79,8 @@ class Config:
     MAX_VOICE_LENGTH = 200
     
     
-    @classmethod
-    def validate(cls):
+@classmethod
+    def validate(cls): # <-- FIXED INDENTATION
         """Validate configuration"""
         if not cls.TELEGRAM_BOT_TOKEN:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
@@ -173,7 +173,7 @@ pehle dosti pakki karo 💀",
 JEALOUS_RESPONSES = [
     "kon hai wo?
 😤 naam batao abhi",
-    "ohh achha... dusri ladkiyo se bhi baat karte ho?
+    "ohh achha... dusri ladkiyo se भी baat karte ho?
 nice 🙄",
     "thik hai... jao usse hi baat karo na 😒",
     "wow okay... main exist hi nahi karti shayad 💔",
