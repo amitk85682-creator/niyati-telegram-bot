@@ -246,17 +246,16 @@ class VoiceEngine:
             # Enhanced voice settings for natural speech
             data = {
                 "text": clean_text,
-                "model_id": "eleven_multilingual_v2",  # Best model for natural speech
+                "model_id": "eleven_multilingual_v2",
                 "voice_settings": {
-                    "stability": 0.75,  # Higher for consistent voice
-                    "similarity_boost": 0.85,  # Higher for voice accuracy
-                    "style": 0.35,  # Moderate style for natural emotion
+                    "stability": 0.75,
+                    "similarity_boost": 0.85,
+                    "style": 0.35,
                     "use_speaker_boost": True,
-                    "speaking_rate": 1.0  # Normal speaking speed
+                    "speaking_rate": 1.0
                 }
             }
             
-            # Optional: Use turbo model for faster generation
             if len(text) < 100:
                 data["model_id"] = "eleven_turbo_v2"
             
@@ -302,11 +301,9 @@ class VoiceEngine:
     
     def _prepare_text_for_voice(self, text: str) -> str:
         """Prepare text for better voice synthesis"""
-        # Remove excessive emojis but keep a few for context
         import re
-        text = re.sub(r'(\s*[^\s\w]+\s*)+', ' ', text)  # Reduce multiple emojis
+        text = re.sub(r'(\s*[^\s\w]+\s*)+', ' ', text)
         
-        # Fix common abbreviations for better pronunciation
         replacements = {
             "u": "you",
             "ur": "your",
@@ -330,151 +327,27 @@ class VoiceEngine:
         return ' '.join(words)
     
     def should_send_voice(self, message: str, stage: str = "initial") -> bool:
-    """Decide if message should be voice"""
-    # Only use voice if ElevenLabs is working
-    if not self.working:
-        return False
+        """Decide if message should be voice"""
+        # Only use voice if ElevenLabs is working
+        if not self.working:
+            return False
+            
+        if len(message) > Config.MAX_VOICE_LENGTH:
+            return False
         
-    if len(message) > Config.MAX_VOICE_LENGTH:
-        return False
-    
-    emotional_keywords = ["miss", "love", "yaad", "baby", "jaan", "❤", "💕", "😘"]
-    if any(word in message.lower() for word in emotional_keywords):
-        return random.random() < 0.7  # Higher chance for emotional messages
-    
-    stage_chance = {
-        "initial": 0.15,  # Less voice initially
-        "middle": 0.25,   # Moderate
-        "advanced": 0.35  # More voice when close
-    }
-    return random.random() < stage_chance.get(stage, 0.2)
+        emotional_keywords = ["miss", "love", "yaad", "baby", "jaan", "❤", "💕", "😘"]
+        if any(word in message.lower() for word in emotional_keywords):
+            return random.random() < 0.7
+        
+        stage_chance = {
+            "initial": 0.15,
+            "middle": 0.25,
+            "advanced": 0.35
+        }
+        return random.random() < stage_chance.get(stage, 0.2)
 
 # Initialize voice engine
 voice_engine = VoiceEngine()
-
-# ==================== PREMIUM INDIAN FEMALE VOICES ====================
-
-ELEVENLABS_INDIAN_VOICES = {
-    "Niyati": "ni6cdqyS9wBvic5LPA7M",  # Young Indian female
-    "Priya": "21m00Tcm4TlvDq8ikWAM",   # Rachel - can work for Indian accent
-    "Ananya": "MF3mGyEYCl7XYWbV9V6O",  # Elli - youthful voice
-    "Kavya": "XrExE9yKIg1WjnnlVkGX",   # Lily - soft voice
-    "Sara": "pNInz6obpgDQGcFmaJgB"      # Adam - but request female version
-}
-
-# ==================== ENHANCED VOICE COMMAND ====================
-
-async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Make Niyati speak with high-quality ElevenLabs voice"""
-    user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
-    
-    if not context.args:
-        status = "✅ Working!" if voice_engine.working else "❌ Not configured"
-        await update.message.reply_text(
-            f"🎤 <b>Voice Command</b>\n\n"
-            f"ElevenLabs Status: {status}\n\n"
-            "Usage: /voice <text>\n"
-            "Example: /voice hey bestie kya haal hai\n\n"
-            "Note: High-quality AI voice when ElevenLabs is configured!",
-            parse_mode='HTML'
-        )
-        return
-    
-    text = ' '.join(context.args)
-    
-    if len(text) > 300:
-        await update.message.reply_text("arey itna lamba text? thoda short karo na 😅")
-        return
-    
-    # Add Niyati's personality touch
-    personality_endings = [
-        " na", " yaar", " 💕", " hehe", " 😊", 
-        "... okay?", "... samjhe?", " hai na?"
-    ]
-    enhanced_text = text + random.choice(personality_endings)
-    
-    try:
-        await context.bot.send_chat_action(
-            chat_id=update.effective_chat.id,
-            action=ChatAction.RECORD_VOICE
-        )
-        
-        # Always try ElevenLabs first
-        audio_io = await voice_engine.text_to_speech(enhanced_text)
-        
-        if audio_io:
-            # Check audio size to determine quality
-            audio_io.seek(0, 2)  # Seek to end
-            file_size = audio_io.tell()
-            audio_io.seek(0)  # Reset to beginning
-            
-            quality_indicator = "🎵 HD Voice" if file_size > 10000 else "🔊 Voice Note"
-            
-            await update.message.reply_voice(
-                voice=audio_io,
-                caption=f"{quality_indicator} | Niyati's message ✨",
-                duration=len(text) // 10
-            )
-            
-            # Log which engine was used
-            engine_used = "ElevenLabs" if voice_engine.working else "gTTS"
-            logger.info(f"Voice sent using {engine_used} for user {user_id}")
-        else:
-            await update.message.reply_text("uff... voice generation me problem ho gyi 😅")
-        
-    except Exception as e:
-        logger.error(f"Voice command error: {e}")
-        await update.message.reply_text("sorry yaar, voice note nahi ban paya 😔")
-
-# ==================== CHECK VOICE STATUS COMMAND ====================
-
-async def voice_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check voice engine status"""
-    user_id = update.effective_user.id
-    
-    if user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("⛔ Owner only command!")
-        return
-    
-    # Test ElevenLabs
-    elevenlabs_status = "❌ Not configured"
-    if Config.ELEVENLABS_API_KEY:
-        try:
-            import requests
-            headers = {"xi-api-key": Config.ELEVENLABS_API_KEY}
-            response = requests.get("https://api.elevenlabs.io/v1/user", headers=headers)
-            
-            if response.status_code == 200:
-                user_info = response.json()
-                character_count = user_info.get('subscription', {}).get('character_count', 0)
-                character_limit = user_info.get('subscription', {}).get('character_limit', 0)
-                
-                elevenlabs_status = f"""✅ Active
-├ Characters Used: {character_count:,}/{character_limit:,}
-├ Voice Model: eleven_multilingual_v2
-└ Voice ID: {Config.ELEVENLABS_VOICE_ID}"""
-            else:
-                elevenlabs_status = f"❌ API Error: {response.status_code}"
-        except Exception as e:
-            elevenlabs_status = f"❌ Connection Error: {str(e)[:50]}"
-    
-    status_msg = f"""<b>🎤 Voice Engine Status</b>
-
-<b>ElevenLabs AI Voice:</b>
-{elevenlabs_status}
-
-<b>Fallback (gTTS):</b>
-✅ Always available
-
-<b>Current Config:</b>
-├ Primary: {'ElevenLabs' if voice_engine.working else 'gTTS'}
-├ Voice Quality: {'HD Natural' if voice_engine.working else 'Basic TTS'}
-└ Auto-fallback: Enabled
-
-<i>Tip: ElevenLabs provides natural, emotional AI voices!</i>"""
-    
-    await update.message.reply_text(status_msg, parse_mode='HTML')
 
 # ==================== ENHANCED DATABASE ====================
 
@@ -598,7 +471,7 @@ class Database:
                 result = self.supabase.table('user_chats').select("*").eq('user_id', user_id).execute()
                 
                 if result.data and len(result.data) > 0:
-                    user_data = result.data[0]
+                    user_data = result.data
                     if isinstance(user_data.get('chats'), str):
                         user_data['chats'] = json.loads(user_data['chats'])
                     return user_data
@@ -875,9 +748,9 @@ def calculate_typing_delay(text: str) -> float:
     base_delay = min(3.0, max(0.5, len(text) / 50))
     return base_delay + random.uniform(0.3, 1.0)
 
-def has_user_mention(message: Update.message) -> bool:
+def has_user_mention(message) -> bool:
     """Check for user mentions"""
-    if not message or not message.entities:
+    if not message or not hasattr(message, 'entities') or not message.entities:
         return False
     
     for entity in message.entities:
@@ -959,13 +832,16 @@ async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Make Niyati speak any text in her voice"""
     user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
     
     if not context.args:
+        status = "✅ Working!" if voice_engine.working else "❌ Not configured"
         await update.message.reply_text(
-            "arey kya bolna hai mujhe? 🎤\n"
-            "usage: /voice <text>\n"
-            "example: /voice hey bestie kya haal hai"
+            f"🎤 <b>Voice Command</b>\n\n"
+            f"ElevenLabs Status: {status}\n\n"
+            "Usage: /voice <text>\n"
+            "Example: /voice hey bestie kya haal hai\n\n"
+            "Note: High-quality AI voice when ElevenLabs is configured!",
+            parse_mode='HTML'
         )
         return
     
@@ -975,7 +851,12 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("arey itna lamba text? thoda short karo na 😅")
         return
     
-    niyati_style_text = f"{text} {random.choice(['na', '✨', '💖', 'yaar'])}"
+    # Add Niyati's personality touch
+    personality_endings = [
+        " na", " yaar", " 💕", " hehe", " 😊", 
+        "... okay?", "... samjhe?", " hai na?"
+    ]
+    enhanced_text = text + random.choice(personality_endings)
     
     try:
         await context.bot.send_chat_action(
@@ -983,28 +864,79 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             action=ChatAction.RECORD_VOICE
         )
         
-        if voice_engine.enabled:
-            audio_io = await voice_engine.text_to_speech(niyati_style_text)
-            if audio_io:
-                await update.message.reply_voice(
-                    voice=audio_io,
-                    caption="🎤 Niyati's voice note ✨"
-                )
-                return
+        # Always try ElevenLabs first
+        audio_io = await voice_engine.text_to_speech(enhanced_text)
         
-        tts = gTTS(text=text, lang='hi', slow=False)
-        audio_io = BytesIO()
-        tts.write_to_fp(audio_io)
-        audio_io.seek(0)
-        
-        await update.message.reply_voice(
-            voice=audio_io,
-            caption="🎤 meri awaaz kaisi lagi? 😊"
-        )
+        if audio_io:
+            # Check audio size to determine quality
+            audio_io.seek(0, 2)  # Seek to end
+            file_size = audio_io.tell()
+            audio_io.seek(0)  # Reset to beginning
+            
+            quality_indicator = "🎵 HD Voice" if file_size > 10000 else "🔊 Voice Note"
+            
+            await update.message.reply_voice(
+                voice=audio_io,
+                caption=f"{quality_indicator} | Niyati's message ✨",
+                duration=len(text) // 10
+            )
+            
+            # Log which engine was used
+            engine_used = "ElevenLabs" if voice_engine.working else "gTTS"
+            logger.info(f"Voice sent using {engine_used} for user {user_id}")
+        else:
+            await update.message.reply_text("uff... voice generation me problem ho gyi 😅")
         
     except Exception as e:
         logger.error(f"Voice command error: {e}")
-        await update.message.reply_text("uff... voice note bhejne me problem ho rahi hai 😅")
+        await update.message.reply_text("sorry yaar, voice note nahi ban paya 😔")
+
+async def voice_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check voice engine status"""
+    user_id = update.effective_user.id
+    
+    if user_id != Config.OWNER_USER_ID:
+        await update.message.reply_text("⛔ Owner only command!")
+        return
+    
+    # Test ElevenLabs
+    elevenlabs_status = "❌ Not configured"
+    if Config.ELEVENLABS_API_KEY:
+        try:
+            import requests
+            headers = {"xi-api-key": Config.ELEVENLABS_API_KEY}
+            response = requests.get("https://api.elevenlabs.io/v1/user", headers=headers)
+            
+            if response.status_code == 200:
+                user_info = response.json()
+                character_count = user_info.get('subscription', {}).get('character_count', 0)
+                character_limit = user_info.get('subscription', {}).get('character_limit', 0)
+                
+                elevenlabs_status = f"""✅ Active
+├ Characters Used: {character_count:,}/{character_limit:,}
+├ Voice Model: eleven_multilingual_v2
+└ Voice ID: {Config.ELEVENLABS_VOICE_ID}"""
+            else:
+                elevenlabs_status = f"❌ API Error: {response.status_code}"
+        except Exception as e:
+            elevenlabs_status = f"❌ Connection Error: {str(e)[:50]}"
+    
+    status_msg = f"""<b>🎤 Voice Engine Status</b>
+
+<b>ElevenLabs AI Voice:</b>
+{elevenlabs_status}
+
+<b>Fallback (gTTS):</b>
+✅ Always available
+
+<b>Current Config:</b>
+├ Primary: {'ElevenLabs' if voice_engine.working else 'gTTS'}
+├ Voice Quality: {'HD Natural' if voice_engine.working else 'Basic TTS'}
+└ Auto-fallback: Enabled
+
+<i>Tip: ElevenLabs provides natural, emotional AI voices!</i>"""
+    
+    await update.message.reply_text(status_msg, parse_mode='HTML')
 
 async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Scan and discover all groups where bot is present"""
@@ -1254,7 +1186,7 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    mood = context.args[0].lower()
+    mood = context.args.lower()
     valid_moods = ['happy', 'sad', 'angry', 'flirty', 'excited']
     
     if mood not in valid_moods:
@@ -1298,6 +1230,7 @@ kabhi voice notes bhi bhejungi 🎤"""
         help_text += """
 
 <b>Owner Commands:</b>
+/voicestatus - check voice engine status
 /scan - discover all groups
 /groups - list all groups
 /broadcast - message all groups
@@ -1452,7 +1385,6 @@ async def main():
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add all handlers
-        app.add_handler(CommandHandler("voicestatus", voice_status_command))
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("help", help_command))
         app.add_handler(CommandHandler("stats", stats_command))
@@ -1463,6 +1395,7 @@ async def main():
         app.add_handler(CommandHandler("mood", mood_command))
         app.add_handler(CommandHandler("tts", tts_command))
         app.add_handler(CommandHandler("voice", voice_command))
+        app.add_handler(CommandHandler("voicestatus", voice_status_command))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         await app.initialize()
