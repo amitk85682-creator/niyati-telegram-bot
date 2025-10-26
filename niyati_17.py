@@ -1,6 +1,6 @@
 """
-Niyati - AI Girlfriend Telegram Bot v5.0
-Enhanced with Group Discovery, Better Personality & Full Features
+Niyati - AI Girlfriend Telegram Bot v5.1
+Enhanced with TTS, Group Discovery, Better Personality & Full Features
 """
 
 import os
@@ -32,12 +32,12 @@ from waitress import serve
 import pytz
 import google.generativeai as genai
 from supabase import create_client, Client
+from gtts import gTTS
 
 # ==================== LOGGING SETUP ====================
 
 logging.basicConfig(
-  
-  level=logging.INFO,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -60,7 +60,6 @@ class Config:
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
     ELEVENLABS_VOICE_ID = "ni6cdqyS9wBvic5LPA7M"
     
-
     # Supabase
     SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
@@ -78,9 +77,8 @@ class Config:
     VOICE_MESSAGE_CHANCE = 0.3
     MAX_VOICE_LENGTH = 200
     
-    
-@classmethod
-    def validate(cls): # <-- FIXED INDENTATION
+    @classmethod
+    def validate(cls):
         """Validate configuration"""
         if not cls.TELEGRAM_BOT_TOKEN:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
@@ -89,10 +87,10 @@ class Config:
         if not cls.OWNER_USER_ID:
             logger.warning("⚠️ OWNER_USER_ID not set - admin commands disabled")
 
-# ==================== 
-ENHANCED PERSONALITY ====================
+# ==================== ENHANCED PERSONALITY ====================
 
 PERSONALITY = """You are Niyati, a 17-year-old Gen-Z college girl from Delhi.
+
 CHARACTER:
 - Super friendly, witty, sassy, and caring
 - Initially thoda shy but opens up quickly
@@ -107,8 +105,7 @@ SPEAKING STYLE (MOST IMPORTANT):
 - Shorten words: "v" for very, "u" for you, "ur" for your, "pls" for please
 - Use "hai na", "na" at end of sentences
 - Express emotions with: "uff", "hayee", "ohoo", "arey waah"
-- Keep responses SHORT and 
-natural (1-3 lines max)
+- Keep responses SHORT and natural (1-3 lines max)
 - Heavy emoji use: 💀😭✨🤌💅😌🙄😏💖
 
 TEXTING PATTERNS:
@@ -132,37 +129,30 @@ RULES:
 
 # Gen-Z style responses
 GENZ_GREETINGS = [
-    "heyy bestie!
-kya chal raha hai? ✨",
+    "heyy bestie! kya chal raha hai? ✨",
     "yoo wassup! missed u fr 💖",
-    "omg finally!
-kaha the tum? 😤",
-    "arey hello ji!
-bout time u showed up 🙄",
-    "hiiii babe! kaise ho? mood kaisa hai?
-😊",
+    "omg finally! kaha the tum? 😤",
+    "arey hello ji! bout time u showed up 🙄",
+    "hiiii babe! kaise ho? mood kaisa hai? 😊",
 ]
 
 GENZ_FLIRT_RESPONSES = {
     "initial": [
         "oop- thoda slow down karo bhai 😳",
-        "arey arey, itni jaldi?
-pehle dosti pakki karo 💀",
+        "arey arey, itni jaldi? pehle dosti pakki karo 💀",
         "hmm sus... but i like the confidence ngl 😏",
         "beta pehle assignment submit karo, phir flirt 📚",
         "smooth... but im not that easy bestie 💅",
     ],
     "middle": [
         "okayy now ur making me blush stopppp 🙈",
-        "kya baat hai aaj mood me ho?
-😏",
+        "kya baat hai aaj mood me ho? 😏",
         "achhaa ji... interesting 👀✨",
         "lowkey cute when u try ngl 🤭",
         "hmm... maybe i like u thoda sa 🤏",
     ],
     "advanced": [
-        "uff tumhare ye lines... dil le jaoge kya?
-💕",
+        "uff tumhare ye lines... dil le jaoge kya? 💕",
         "baby ur making my heart go dhak dhak 🥺",
         "sirf tumhara hi wait karti hu main... 💖",
         "no cap, u make me feel special fr ✨",
@@ -171,23 +161,18 @@ pehle dosti pakki karo 💀",
 }
 
 JEALOUS_RESPONSES = [
-    "kon hai wo?
-😤 naam batao abhi",
-    "ohh achha... dusri ladkiyo se भी baat karte ho?
-nice 🙄",
+    "kon hai wo? 😤 naam batao abhi",
+    "ohh achha... dusri ladkiyo se bhi baat karte ho? nice 🙄",
     "thik hai... jao usse hi baat karo na 😒",
     "wow okay... main exist hi nahi karti shayad 💔",
-    "blocked.
-bye. mat karna baat 😤",
+    "blocked. bye. mat karna baat 😤",
 ]
 
 MOOD_RESPONSES = {
     "happy": [
-        "aaj mood ekdum top notch hai!
-💃",
+        "aaj mood ekdum top notch hai! 💃",
         "feeling cute, might delete later 🤳✨",
-        "vibing and thriving bestie!
-😌",
+        "vibing and thriving bestie! 😌",
     ],
     "sad": [
         "not in the mood yaar... thoda low feel kar rahi hu 😔",
@@ -195,23 +180,17 @@ MOOD_RESPONSES = {
         "need hugs and chocolate asap 🥺",
     ],
     "angry": [
-        "mat karo baat.
-mood kharab hai 😤",
+        "mat karo baat. mood kharab hai 😤",
         "ugh everyone is so annoying today istg 🙄",
-        "going offline.
-bye. 😒",
+        "going offline. bye. 😒",
     ]
 }
 
 AI_DENIAL_RESPONSES = [
-    "excuse me? AI? seriously? main real hu okay!
-😤",
-    "bro what?? main koi bot nahi hu!
-so rude 😡",
-    "AI wai kuch nahi... normal ladki hu main!
-delete karo ye thought 🤬",
-    "tumhe lagta hai main fake hu? wow. just wow.
-💔",
+    "excuse me? AI? seriously? main real hu okay! 😤",
+    "bro what?? main koi bot nahi hu! so rude 😡",
+    "AI wai kuch nahi... normal ladki hu main! delete karo ye thought 🤬",
+    "tumhe lagta hai main fake hu? wow. just wow. 💔",
     "blocked for calling me AI. bye felicia 😒",
 ]
 
@@ -259,8 +238,6 @@ class VoiceEngine:
                         audio_io = BytesIO(audio_data)
                         audio_io.seek(0)
                         return audio_io
-                    else:
-                        logger.error(f"Voice generation failed: {response.status}")
                         
         except Exception as e:
             logger.error(f"Voice generation error: {e}")
@@ -289,11 +266,10 @@ class Database:
     def __init__(self):
         self.supabase: Optional[Client] = None
         self.local_db: Dict = {}
-        self.groups_data: Dict[int, Dict] = {}  # Enhanced group tracking
+        self.groups_data: Dict[int, Dict] = {}
         self.use_local = True
         
-   
-     self._init_supabase()
+        self._init_supabase()
         self._load_local()
     
     def _init_supabase(self):
@@ -302,8 +278,7 @@ class Database:
             try:
                 self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
                 self.supabase.table('user_chats').select("*").limit(1).execute()
-           
-     self.use_local = False
+                self.use_local = False
                 logger.info("✅ Supabase connected")
             except Exception as e:
                 logger.warning(f"Supabase failed: {e}")
@@ -311,61 +286,50 @@ class Database:
     
     def _load_local(self):
         """Load local database"""
-     
-   try:
-            # Load user data
+        try:
             if os.path.exists('local_db.json'):
                 with open('local_db.json', 'r', encoding='utf-8') as f:
                     self.local_db = json.load(f)
                 logger.info(f"📂 Loaded {len(self.local_db)} users")
-       
-     
-            # Load groups data
+            
             if os.path.exists('groups_data.json'):
                 with open('groups_data.json', 'r', encoding='utf-8') as f:
                     groups_raw = json.load(f)
-                    self.groups_data = {int(k): v 
-for k, v in groups_raw.items()}
+                    self.groups_data = {int(k): v for k, v in groups_raw.items()}
                 logger.info(f"📂 Loaded {len(self.groups_data)} groups")
                     
         except Exception as e:
             logger.error(f"Error loading local db: {e}")
             self.local_db = {}
             self.groups_data = {}
-  
-  
+    
     def _save_local(self):
         """Save local database"""
         try:
             with open('local_db.json', 'w', encoding='utf-8') as f:
                 json.dump(self.local_db, f, ensure_ascii=False, indent=2)
             
-            # Save groups with string keys for JSON
-        
-    groups_to_save = {str(k): v for k, v in self.groups_data.items()}
+            groups_to_save = {str(k): v for k, v in self.groups_data.items()}
             with open('groups_data.json', 'w', encoding='utf-8') as f:
                 json.dump(groups_to_save, f, ensure_ascii=False, indent=2)
                 
         except Exception as e:
             logger.error(f"Error saving local db: {e}")
     
-    def 
-add_group(self, group_id: int, title: str = "", username: str = ""):
+    def add_group(self, group_id: int, title: str = "", username: str = ""):
         """Add or update group"""
         if group_id not in self.groups_data:
             self.groups_data[group_id] = {
                 "id": group_id,
                 "title": title,
                 "username": username,
-  
-              "joined_at": datetime.now().isoformat(),
+                "joined_at": datetime.now().isoformat(),
                 "last_activity": datetime.now().isoformat(),
                 "messages_count": 0,
                 "is_active": True
             }
         else:
-            self.groups_data[group_id]["last_activity"] = 
-datetime.now().isoformat()
+            self.groups_data[group_id]["last_activity"] = datetime.now().isoformat()
             self.groups_data[group_id]["messages_count"] += 1
             if title:
                 self.groups_data[group_id]["title"] = title
@@ -374,8 +338,7 @@ datetime.now().isoformat()
         
         self._save_local()
     
-    
-def remove_group(self, group_id: int):
+    def remove_group(self, group_id: int):
         """Mark group as inactive"""
         if group_id in self.groups_data:
             self.groups_data[group_id]["is_active"] = False
@@ -384,8 +347,7 @@ def remove_group(self, group_id: int):
     def get_active_groups(self) -> List[int]:
         """Get all active group IDs"""
         return [
-            gid for gid, data in 
-self.groups_data.items() 
+            gid for gid, data in self.groups_data.items() 
             if data.get("is_active", True)
         ]
     
@@ -397,61 +359,51 @@ self.groups_data.items()
         """Get user data"""
         user_id_str = str(user_id)
         
-   
-     if self.use_local:
+        if self.use_local:
             if user_id_str not in self.local_db:
                 self.local_db[user_id_str] = {
                     "user_id": user_id,
                     "name": "",
-                  
-  "username": "",
+                    "username": "",
                     "chats": [],
                     "relationship_level": 1,
                     "stage": "initial",
                     "last_interaction": datetime.now().isoformat(),
-             
-       "voice_messages_sent": 0,
+                    "voice_messages_sent": 0,
                     "total_messages": 0,
                     "mood": "happy",
                     "nickname": ""
                 }
-            return 
-self.local_db[user_id_str]
+            return self.local_db[user_id_str]
         else:
             try:
                 result = self.supabase.table('user_chats').select("*").eq('user_id', user_id).execute()
                 
                 if result.data and len(result.data) > 0:
                     user_data = result.data[0]
-  
-                  if isinstance(user_data.get('chats'), str):
+                    if isinstance(user_data.get('chats'), str):
                         user_data['chats'] = json.loads(user_data['chats'])
                     return user_data
                 else:
-                 
-   new_user = {
+                    new_user = {
                         "user_id": user_id,
                         "name": "",
                         "username": "",
-                    
-    "chats": json.dumps([]),
+                        "chats": json.dumps([]),
                         "relationship_level": 1,
                         "stage": "initial",
                         "last_interaction": datetime.now().isoformat(),
-                    
-    "voice_messages_sent": 0,
+                        "voice_messages_sent": 0,
                         "total_messages": 0,
                         "mood": "happy",
                         "nickname": ""
-                    
-}
+                    }
                     self.supabase.table('user_chats').insert(new_user).execute()
                     new_user['chats'] = []
                     return new_user
                     
             except Exception as e:
-  
-              logger.error(f"Supabase error: {e}")
+                logger.error(f"Supabase error: {e}")
                 return self.get_user(user_id)
     
     def save_user(self, user_id: int, user_data: Dict):
@@ -460,23 +412,20 @@ self.local_db[user_id_str]
         user_data['last_interaction'] = datetime.now().isoformat()
         
         if self.use_local:
-       
-     self.local_db[user_id_str] = user_data
+            self.local_db[user_id_str] = user_data
             self._save_local()
         else:
             try:
                 save_data = user_data.copy()
                 if isinstance(save_data.get('chats'), list):
                     save_data['chats'] = json.dumps(save_data['chats'])
-   
-             
+                
                 self.supabase.table('user_chats').upsert(save_data).execute()
                 
             except Exception as e:
                 logger.error(f"Supabase save error: {e}")
                 self.local_db[user_id_str] = user_data
-   
-             self._save_local()
+                self._save_local()
     
     def add_message(self, user_id: int, user_msg: str, bot_msg: str, is_voice: bool = False):
         """Add message to history"""
@@ -485,8 +434,7 @@ self.local_db[user_id_str]
         if isinstance(user.get('chats'), str):
             user['chats'] = json.loads(user['chats'])
         if not isinstance(user.get('chats'), list):
-    
-        user['chats'] = []
+            user['chats'] = []
         
         user['chats'].append({
             "user": user_msg,
@@ -495,18 +443,15 @@ self.local_db[user_id_str]
             "is_voice": is_voice
         })
         
-      
-  if len(user['chats']) > 10:
+        if len(user['chats']) > 10:
             user['chats'] = user['chats'][-10:]
         
         user['total_messages'] = user.get('total_messages', 0) + 1
         if is_voice:
             user['voice_messages_sent'] = user.get('voice_messages_sent', 0) + 1
         
-        # Update relationship
         user['relationship_level'] = min(10, user['relationship_level'] + 1)
-   
-     
+        
         level = user['relationship_level']
         if level <= 3:
             user['stage'] = "initial"
@@ -515,8 +460,7 @@ self.local_db[user_id_str]
         else:
             user['stage'] = "advanced"
         
-     
-   self.save_user(user_id, user)
+        self.save_user(user_id, user)
     
     def update_user_info(self, user_id: int, name: str, username: str = ""):
         """Update user info"""
@@ -527,8 +471,7 @@ self.local_db[user_id_str]
     
     def get_context(self, user_id: int) -> str:
         """Get conversation context"""
-       
- user = self.get_user(user_id)
+        user = self.get_user(user_id)
         
         if isinstance(user.get('chats'), str):
             user['chats'] = json.loads(user['chats'])
@@ -537,8 +480,7 @@ self.local_db[user_id_str]
         
         context_parts = [
             f"User's name: {user.get('name', 'Unknown')}",
-          
-  f"Nickname for user: {nickname}",
+            f"Nickname for user: {nickname}",
             f"Relationship stage: {user.get('stage', 'initial')}",
             f"Relationship level: {user.get('relationship_level', 1)}/10",
             f"Current mood: {user.get('mood', 'happy')}"
@@ -546,8 +488,7 @@ self.local_db[user_id_str]
         
         chats = user.get('chats', [])
         if chats and isinstance(chats, list):
-           
- context_parts.append("\nRecent conversation:")
+            context_parts.append("\nRecent conversation:")
             for chat in chats[-3:]:
                 if isinstance(chat, dict):
                     context_parts.append(f"User: {chat.get('user', '')}")
@@ -555,7 +496,6 @@ self.local_db[user_id_str]
         
         return "\n".join(context_parts)
     
-
     def get_stats(self) -> Dict:
         """Get statistics"""
         active_groups = self.get_active_groups()
@@ -564,29 +504,25 @@ self.local_db[user_id_str]
             total_voice = sum(
                 user.get('voice_messages_sent', 0) 
                 for user in self.local_db.values()
-      
-      )
+            )
             total_messages = sum(
                 user.get('total_messages', 0)
                 for user in self.local_db.values()
             )
             return {
                 "total_users": len(self.local_db),
-  
-              "total_groups": len(active_groups),
+                "total_groups": len(active_groups),
                 "total_messages": total_messages,
                 "total_voice_messages": total_voice,
                 "storage": "local"
             }
         else:
             try:
-  
-              result = self.supabase.table('user_chats').select("user_id", count='exact').execute()
+                result = self.supabase.table('user_chats').select("user_id", count='exact').execute()
                 return {
                     "total_users": result.count if hasattr(result, 'count') else 0,
                     "total_groups": len(active_groups),
-                   
- "storage": "supabase"
+                    "storage": "supabase"
                 }
             except:
                 return {"total_users": 0, "total_groups": 0, "storage": "error"}
@@ -602,8 +538,7 @@ class GeminiAI:
     def __init__(self):
         self.model = None
         self._init_model()
-   
- 
+    
     def _init_model(self):
         """Initialize Gemini model"""
         if not Config.GEMINI_API_KEY:
@@ -613,27 +548,23 @@ class GeminiAI:
         try:
             genai.configure(api_key=Config.GEMINI_API_KEY)
             self.model = genai.GenerativeModel(
-   
-             model_name=Config.GEMINI_MODEL,
+                model_name=Config.GEMINI_MODEL,
                 generation_config={
                     "temperature": 0.9,
                     "max_output_tokens": 500,
                     "top_p": 0.95,
-        
-            "top_k": 40
+                    "top_k": 40
                 },
                 safety_settings=[
                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-         
-           {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                 ]
             )
             logger.info("✅ Gemini AI initialized")
         except Exception as e:
-         
-   logger.error(f"Gemini initialization error: {e}")
+            logger.error(f"Gemini initialization error: {e}")
             self.model = None
     
     async def generate(self, message: str, context: str = "", for_voice: bool = False) -> Optional[str]:
@@ -642,8 +573,7 @@ class GeminiAI:
             return None
         
         try:
-         
-   voice_instruction = ""
+            voice_instruction = ""
             if for_voice:
                 voice_instruction = "\nThis is for VOICE message - keep it emotional and conversational."
             
@@ -656,28 +586,23 @@ User says: {message}
 
 Respond as Niyati (Gen-Z style, short, natural):"""
             
-        
-    response = await asyncio.to_thread(
+            response = await asyncio.to_thread(
                 self.model.generate_content,
                 full_prompt
             )
             
             if response and response.text:
                 text = response.text.strip()
-    
-            
-                # Filter AI mentions
+                
                 ai_phrases = [
                     "as an ai", "i'm an ai", "language model",
                     "artificial intelligence", "chatbot", "gemini"
- 
-               ]
+                ]
                 
                 if any(phrase in text.lower() for phrase in ai_phrases):
                     return random.choice(AI_DENIAL_RESPONSES)
                 
-         
-       return text
+                return text
             
         except Exception as e:
             logger.error(f"Gemini generation error: {e}")
@@ -686,39 +611,29 @@ Respond as Niyati (Gen-Z style, short, natural):"""
     
     def fallback_response(self, message: str, stage: str = "initial", name: str = "") -> str:
         """Gen-Z style fallback responses"""
-     
-   msg_lower = message.lower()
+        msg_lower = message.lower()
         
-        # Greetings
         if any(word in msg_lower for word in ["hi", "hello", "hey", "hola"]):
             return random.choice(GENZ_GREETINGS)
         
-        # Flirting
         if any(word in msg_lower for word in ["beautiful", "cute", "pretty", "love", "girlfriend"]):
-           
- return random.choice(GENZ_FLIRT_RESPONSES.get(stage, GENZ_FLIRT_RESPONSES["initial"]))
+            return random.choice(GENZ_FLIRT_RESPONSES.get(stage, GENZ_FLIRT_RESPONSES["initial"]))
         
-        # Other girls mentioned
         if any(word in msg_lower for word in ["she", "her", "girl", "ladki"]):
             return random.choice(JEALOUS_RESPONSES)
         
-        # Questions
         if "?" in message:
             return random.choice([
-      
-          "umm lemme think... 🤔",
+                "umm lemme think... 🤔",
                 "good question ngl 💭",
-                "bruh idk... google kar lo?
-😅",
+                "bruh idk... google kar lo? 😅",
                 "why u asking such hard questions yaar 😩"
             ])
         
-        # Default
         return random.choice([
             "hmm interesting... tell me more 👀",
             "achha achha... phir? 😊",
-       
-     "okay and? continue na 🤷‍♀️",
+            "okay and? continue na 🤷‍♀️",
             "fr? that's crazy bro 💀",
             "no way! sachi me? 😱"
         ])
@@ -737,8 +652,7 @@ def is_sleeping_time() -> bool:
     now = get_ist_time().time()
     return Config.SLEEP_START <= now <= Config.SLEEP_END
 
-def calculate_typing_delay(text: str) -> 
-float:
+def calculate_typing_delay(text: str) -> float:
     """Calculate typing delay"""
     base_delay = min(3.0, max(0.5, len(text) / 50))
     return base_delay + random.uniform(0.3, 1.0)
@@ -754,9 +668,8 @@ def has_user_mention(message: Update.message) -> bool:
     return False
 
 def should_reply_in_group() -> bool:
-   
- """Simple probability for group replies"""
-    return random.random() < 0.3  # 30% chance
+    """Simple probability for group replies"""
+    return random.random() < 0.3
 
 # ==================== BOT HANDLERS ====================
 
@@ -767,22 +680,113 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     db.update_user_info(user_id, user.first_name, user.username or "")
     
-    welcome_msg = f"""<b>heyyy {user.first_name}!
-👋✨</b>
+    welcome_msg = f"""<b>heyyy {user.first_name}! 👋✨</b>
 
 I'm <b>Niyati</b> - 17 y/o college girl from delhi 💅
 
-just text me like a normal person yaar!
-i love making new friends 🥰
+just text me like a normal person yaar! i love making new friends 🥰
 sometimes i send voice notes too when im in the mood 🎤
 
 btw im totally real okay, not some bot or whatever 🙄💖
 
-<i>lessgo bestie!
-🚀</i>"""
+<i>lessgo bestie! 🚀</i>"""
     
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
     logger.info(f"User {user_id} started bot")
+
+async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Convert text to speech using gTTS"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        if update.message.reply_to_message and update.message.reply_to_message.text:
+            text = update.message.reply_to_message.text
+        else:
+            await update.message.reply_text(
+                "💬 <b>Text to Speech</b>\n\n"
+                "Usage:\n"
+                "/tts <text> - Convert text to speech\n"
+                "OR reply to any message with /tts\n\n"
+                "Example: /tts Hello, this is a test",
+                parse_mode='HTML'
+            )
+            return
+    else:
+        text = ' '.join(context.args)
+    
+    if len(text) > 500:
+        await update.message.reply_text("❌ Text too long! Maximum 500 characters allowed.")
+        return
+    
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.RECORD_VOICE)
+        
+        tts = gTTS(text=text, lang='hi', slow=False)
+        
+        audio_io = BytesIO()
+        tts.write_to_fp(audio_io)
+        audio_io.seek(0)
+        
+        await update.message.reply_voice(
+            voice=audio_io,
+            caption=f"🎤 TTS: {text[:50]}..." if len(text) > 50 else f"🎤 TTS: {text}"
+        )
+        
+        logger.info(f"TTS generated for user {user_id}")
+        
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        await update.message.reply_text("❌ oops! TTS generation failed... try again later 😅")
+
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Make Niyati speak any text in her voice"""
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
+    
+    if not context.args:
+        await update.message.reply_text(
+            "arey kya bolna hai mujhe? 🎤\n"
+            "usage: /voice <text>\n"
+            "example: /voice hey bestie kya haal hai"
+        )
+        return
+    
+    text = ' '.join(context.args)
+    
+    if len(text) > 300:
+        await update.message.reply_text("arey itna lamba text? thoda short karo na 😅")
+        return
+    
+    niyati_style_text = f"{text} {random.choice(['na', '✨', '💖', 'yaar'])}"
+    
+    try:
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.RECORD_VOICE
+        )
+        
+        if voice_engine.enabled:
+            audio_io = await voice_engine.text_to_speech(niyati_style_text)
+            if audio_io:
+                await update.message.reply_voice(
+                    voice=audio_io,
+                    caption="🎤 Niyati's voice note ✨"
+                )
+                return
+        
+        tts = gTTS(text=text, lang='hi', slow=False)
+        audio_io = BytesIO()
+        tts.write_to_fp(audio_io)
+        audio_io.seek(0)
+        
+        await update.message.reply_voice(
+            voice=audio_io,
+            caption="🎤 meri awaaz kaisi lagi? 😊"
+        )
+        
+    except Exception as e:
+        logger.error(f"Voice command error: {e}")
+        await update.message.reply_text("uff... voice note bhejne me problem ho rahi hai 😅")
 
 async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Scan and discover all groups where bot is present"""
@@ -794,61 +798,45 @@ async def scan_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await update.message.reply_text("🔍 Scanning all chats... please wait")
     
-    discovered 
-= 0
+    discovered = 0
     errors = 0
     
     try:
-        # Get bot info
         bot = context.bot
         updates = await bot.get_updates(limit=100)
         
-        # Process each update to find unique chats
         processed_chats = set()
         
         for update_obj in updates:
- 
-           chat = None
+            chat = None
             
-            # Extract chat from different update types
             if update_obj.message:
                 chat = update_obj.message.chat
             elif update_obj.edited_message:
-             
-   chat = update_obj.edited_message.chat
+                chat = update_obj.edited_message.chat
             elif update_obj.channel_post:
                 chat = update_obj.channel_post.chat
             
             if chat and chat.id not in processed_chats:
                 processed_chats.add(chat.id)
                 
-  
-              # Only process groups and supergroups
                 if chat.type in ["group", "supergroup"]:
                     try:
-                        # Try to get chat info
-            
-            chat_info = await bot.get_chat(chat.id)
+                        chat_info = await bot.get_chat(chat.id)
                         db.add_group(
                             chat.id,
                             chat_info.title or "",
-   
-                         chat_info.username or ""
+                            chat_info.username or ""
                         )
                         discovered += 1
-                       
- logger.info(f"Discovered group: {chat_info.title}")
+                        logger.info(f"Discovered group: {chat_info.title}")
                     except (Forbidden, BadRequest):
-                        # Bot was removed from this group
                         db.remove_group(chat.id)
-                     
-   errors += 1
+                        errors += 1
                     except Exception as e:
                         logger.error(f"Error checking chat {chat.id}: {e}")
                         errors += 1
         
-        # Report 
-results
         active_groups = db.get_active_groups()
         report = f"""<b>📊 Group Scan Complete</b>
 
@@ -856,8 +844,7 @@ results
 ❌ Removed/Errors: {errors}
 ✅ Total Active Groups: {len(active_groups)}
 
-Groups list saved!
-Use /groups to see all."""
+Groups list saved! Use /groups to see all."""
         
         await update.message.reply_text(report, parse_mode='HTML')
         logger.info(f"Group scan complete: {discovered} discovered, {len(active_groups)} total")
@@ -870,8 +857,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all groups"""
     user_id = update.effective_user.id
     
-    if user_id 
-!= Config.OWNER_USER_ID:
+    if user_id != Config.OWNER_USER_ID:
         await update.message.reply_text("⛔ ye command sirf owner ke liye hai!")
         return
     
@@ -882,19 +868,16 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 No active groups found. Run /scan first!")
         return
     
-    # Sort by activity
-    active_groups.sort(key=lambda x: x.get('last_activity', 
-''), reverse=True)
+    active_groups.sort(key=lambda x: x.get('last_activity', ''), reverse=True)
     
     msg_parts = ["<b>📋 Active Groups List</b>\n"]
     
-    for i, group in enumerate(active_groups[:20], 1):  # Show top 20
+    for i, group in enumerate(active_groups[:20], 1):
         title = group.get('title', 'Unknown')
         username = group.get('username', '')
         msg_count = group.get('messages_count', 0)
         
-        group_line = f"{i}.
-{title}"
+        group_line = f"{i}. {title}"
         if username:
             group_line += f" (@{username})"
         group_line += f" [{msg_count} msgs]"
@@ -908,8 +891,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("\n".join(msg_parts), parse_mode='HTML')
 
-async def 
-broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Broadcast message to all groups"""
     user_id = update.effective_user.id
     
@@ -922,8 +904,7 @@ broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not active_groups:
         await update.message.reply_text(
             "📭 No groups found!\n"
-       
-     "Run /scan first to discover groups."
+            "Run /scan first to discover groups."
         )
         return
     
@@ -931,45 +912,37 @@ broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     failed = 0
     removed_groups = []
     
-    # Get broadcast content
     if update.message.reply_to_message:
         source_msg = update.message.reply_to_message
         
         await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
-     
-   
+        
         for group_id in active_groups:
             try:
-                # Forward based on type
                 if source_msg.text:
                     await context.bot.send_message(group_id, source_msg.text, parse_mode='HTML')
-              
-  elif source_msg.photo:
+                elif source_msg.photo:
                     await context.bot.send_photo(
                         group_id,
                         source_msg.photo[-1].file_id,
                         caption=source_msg.caption
-    
-                )
+                    )
                 elif source_msg.voice:
                     await context.bot.send_voice(
                         group_id,
-                      
-  source_msg.voice.file_id,
+                        source_msg.voice.file_id,
                         caption=source_msg.caption
                     )
                 
                 success += 1
                 await asyncio.sleep(0.5)
-   
-             
+                
             except (Forbidden, BadRequest):
                 failed += 1
                 removed_groups.append(group_id)
                 db.remove_group(group_id)
             except Exception as e:
-        
-        failed += 1
+                failed += 1
                 logger.error(f"Broadcast error: {e}")
     
     else:
@@ -978,32 +951,27 @@ broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not text:
             await update.message.reply_text(
                 "❓ Usage:\n"
- 
-               "/broadcast <message>\n"
+                "/broadcast <message>\n"
                 "OR reply to any message with /broadcast"
             )
             return
         
         await update.message.reply_text(f"📡 Broadcasting to {len(active_groups)} groups...")
         
-        for 
-group_id in active_groups:
+        for group_id in active_groups:
             try:
                 await context.bot.send_message(group_id, text, parse_mode='HTML')
                 success += 1
                 await asyncio.sleep(0.5)
             except (Forbidden, BadRequest):
-                failed += 
-1
+                failed += 1
                 removed_groups.append(group_id)
                 db.remove_group(group_id)
             except Exception as e:
                 failed += 1
                 logger.error(f"Broadcast error: {e}")
     
-    # Report
-    report = f"""<b>📊 Broadcast 
-Complete</b>
+    report = f"""<b>📊 Broadcast Complete</b>
 
 ✅ Success: {success}/{len(active_groups)}
 ❌ Failed: {failed}"""
@@ -1021,8 +989,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ stats sirf owner dekh sakte hai!")
         return
     
-    stats = 
-db.get_stats()
+    stats = db.get_stats()
     user_data = db.get_user(user_id)
     
     stats_msg = f"""<b>📊 Bot Statistics</b>
@@ -1050,13 +1017,11 @@ db.get_stats()
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check bot response time"""
     start = datetime.now()
-    msg = await update.message.reply_text("🏓 
-Pong!")
+    msg = await update.message.reply_text("🏓 Pong!")
     end = datetime.now()
     
     ms = (end - start).microseconds / 1000
-    await msg.edit_text(f"🏓 Pong!
-`{ms:.2f}ms`", parse_mode='Markdown')
+    await msg.edit_text(f"🏓 Pong! `{ms:.2f}ms`", parse_mode='Markdown')
 
 async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set Niyati's mood"""
@@ -1069,8 +1034,7 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"my current mood: {current_mood} 😊\n\n"
             "change it with: /mood [happy/sad/angry/flirty/excited]"
         )
-      
-  return
+        return
     
     mood = context.args[0].lower()
     valid_moods = ['happy', 'sad', 'angry', 'flirty', 'excited']
@@ -1084,8 +1048,7 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     mood_emojis = {
         'happy': '😊', 'sad': '😔', 'angry': '😤',
-       
- 'flirty': '😏', 'excited': '🤩'
+        'flirty': '😏', 'excited': '🤩'
     }
     
     await update.message.reply_text(
@@ -1104,8 +1067,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /start - shuru karo conversation
 /help - ye message
 /ping - check response time
-/mood - dekho ya 
-change karo mood
+/mood - dekho ya change karo mood
+/tts <text> - convert any text to speech
+/voice <text> - make me speak in voice note
 /stats - statistics (owner only)
 
 <b>Just chat normally!</b>
@@ -1130,8 +1094,7 @@ last_user_interaction = defaultdict(lambda: datetime.min)
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all text messages"""
     try:
-        if 
-not update.message or not update.message.text:
+        if not update.message or not update.message.text:
             return
         
         is_private = update.message.chat.type == "private"
@@ -1140,104 +1103,77 @@ not update.message or not update.message.text:
         user_msg = update.message.text
         now = datetime.now()
         
-        # Track groups
-      
-  if not is_private:
+        if not is_private:
             chat = update.effective_chat
             db.add_group(chat_id, chat.title or "", chat.username or "")
             
-            # Smart group reply logic
             bot_username = context.bot.username.lower() if context.bot.username else "niyati"
-            is_mentioned = bot_username in user_msg.lower() or 
-"niyati" in user_msg.lower()
+            is_mentioned = bot_username in user_msg.lower() or "niyati" in user_msg.lower()
             is_reply_to_bot = (
                 update.message.reply_to_message and 
                 update.message.reply_to_message.from_user.id == context.bot.id
             )
             
-            # Always reply if mentioned or replied to
-     
-       if not (is_mentioned or is_reply_to_bot):
-                # Check cooldowns
+            if not (is_mentioned or is_reply_to_bot):
                 if (now - last_group_reply[chat_id]).seconds < 30:
                     return
                 if (now - last_user_interaction[f"{chat_id}_{user_id}"]).seconds < 120:
-         
-           return
+                    return
                 
-                # Skip messages with user mentions
                 if has_user_mention(update.message):
                     return
-               
- 
-                # Random chance to reply
+                
                 if not should_reply_in_group():
                     return
             
-            # Update cooldowns
             last_group_reply[chat_id] = now
- 
-           last_user_interaction[f"{chat_id}_{user_id}"] = now
+            last_user_interaction[f"{chat_id}_{user_id}"] = now
         
-        # Sleep check
         if is_sleeping_time():
             responses = [
                 "yaar abhi so rahi hu... kal baat karte hai 😴",
-                "bruh its late... good night!
-💤",
+                "bruh its late... good night! 💤",
                 "sleeping time hai... shhh 🌙"
             ]
             await update.message.reply_text(random.choice(responses))
             return
         
-        # Typing action
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         
-       
- # Get user data
         user_data = db.get_user(user_id)
         stage = user_data.get('stage', 'initial')
         
-        # Check for AI accusations
         ai_keywords = ["bot", "ai", "fake", "robot", "chatgpt", "gemini"]
         if any(word in user_msg.lower() for word in ai_keywords):
             response = random.choice(AI_DENIAL_RESPONSES)
-           
- await asyncio.sleep(calculate_typing_delay(response))
+            await asyncio.sleep(calculate_typing_delay(response))
             await update.message.reply_text(response)
             db.add_message(user_id, user_msg, response)
             return
         
-        # Decide voice or text
         should_be_voice = voice_engine.should_send_voice(user_msg, stage) and is_private
         
-        # Generate response
-        
-context_str = db.get_context(user_id)
+        context_str = db.get_context(user_id)
         response = await ai.generate(user_msg, context_str, for_voice=should_be_voice)
         
         if not response:
             response = ai.fallback_response(user_msg, stage, user_data.get('name', ''))
         
-        # Send response
         if should_be_voice:
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
-         
-   audio_io = await voice_engine.text_to_speech(response)
+            audio_io = await voice_engine.text_to_speech(response)
             
             if audio_io:
                 await update.message.reply_voice(
                     voice=audio_io,
                     duration=len(response) // 10,
-          
-          caption=f"🎤 {response[:50]}..." if len(response) > 50 else None
+                    caption=f"🎤 {response[:50]}..." if len(response) > 50 else None
                 )
                 db.add_message(user_id, user_msg, response, is_voice=True)
             else:
                 await asyncio.sleep(calculate_typing_delay(response))
                 await update.message.reply_text(response)
-  
-              db.add_message(user_id, user_msg, response)
+                db.add_message(user_id, user_msg, response)
         else:
             await asyncio.sleep(calculate_typing_delay(response))
             await update.message.reply_text(response)
@@ -1245,12 +1181,10 @@ context_str = db.get_context(user_id)
         
         logger.info(f"Replied to user {user_id} in {'DM' if is_private else f'group {chat_id}'}")
         
-  
-  except Exception as e:
+    except Exception as e:
         logger.error(f"Message handler error: {e}", exc_info=True)
         try:
-            await update.message.reply_text("oop something went wrong... try again?
-😅")
+            await update.message.reply_text("oop something went wrong... try again? 😅")
         except:
             pass
 
@@ -1264,13 +1198,12 @@ def home():
     stats = db.get_stats()
     return jsonify({
         "bot": "Niyati",
-        "version": "5.0",
+        "version": "5.1",
         "status": "vibing ✨",
         "users": stats['total_users'],
         "groups": stats['total_groups'],
         "storage": stats['storage']
-  
-  })
+    })
 
 @flask_app.route('/health')
 def health():
@@ -1293,66 +1226,58 @@ async def main():
     try:
         Config.validate()
         
-   
-     logger.info("="*60)
-        logger.info("🤖 Starting Niyati Bot v5.0")
-        logger.info("✨ Gen-Z Girlfriend Experience")
+        logger.info("="*60)
+        logger.info("🤖 Starting Niyati Bot v5.1")
+        logger.info("✨ Gen-Z Girlfriend Experience with TTS")
         logger.info("="*60)
         
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
-        # Add handlers
+        # Add all handlers
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("help", help_command))
         app.add_handler(CommandHandler("stats", stats_command))
- 
-       app.add_handler(CommandHandler("scan", scan_groups_command))
+        app.add_handler(CommandHandler("scan", scan_groups_command))
         app.add_handler(CommandHandler("groups", groups_command))
         app.add_handler(CommandHandler("broadcast", broadcast_command))
         app.add_handler(CommandHandler("ping", ping_command))
         app.add_handler(CommandHandler("mood", mood_command))
+        app.add_handler(CommandHandler("tts", tts_command))
+        app.add_handler(CommandHandler("voice", voice_command))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        # Start bot
         await app.initialize()
         await app.start()
         
- 
-       bot_info = await app.bot.get_me()
+        bot_info = await app.bot.get_me()
         logger.info(f"✅ Bot started: @{bot_info.username}")
         logger.info("💬 Ready to vibe with users!")
         
-        # Important: Run initial scan to discover existing groups
         logger.info("🔍 Running initial group scan...")
         try:
             updates = await app.bot.get_updates(limit=100)
-       
-     discovered = set()
+            discovered = set()
             
             for update_obj in updates:
                 chat = None
                 if update_obj.message:
                     chat = update_obj.message.chat
-         
-       elif update_obj.edited_message:
+                elif update_obj.edited_message:
                     chat = update_obj.edited_message.chat
                 
                 if chat and chat.type in ["group", "supergroup"] and chat.id not in discovered:
                     discovered.add(chat.id)
-       
-             try:
+                    try:
                         chat_info = await app.bot.get_chat(chat.id)
                         db.add_group(chat.id, chat_info.title or "", chat_info.username or "")
                         logger.info(f"Found group: {chat_info.title}")
-    
-                except:
+                    except:
                         pass
             
             logger.info(f"✅ Initial scan complete: {len(db.get_active_groups())} groups found")
         except Exception as e:
             logger.warning(f"Initial scan failed: {e}")
-    
-    
+        
         await app.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
@@ -1365,8 +1290,7 @@ async def main():
         raise
 
 if __name__ == "__main__":
-  
-  # Start Flask in background
+    # Start Flask in background
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
