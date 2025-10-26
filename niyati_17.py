@@ -330,24 +330,24 @@ class VoiceEngine:
         return ' '.join(words)
     
     def should_send_voice(self, message: str, stage: str = "initial") -> bool:
-        """Decide if message should be voice"""
-        # Only use voice if ElevenLabs is working
-        if not self.working:
-            return False
-            
-        if len(message) > Config.MAX_VOICE_LENGTH:
-            return False
+    """Decide if message should be voice"""
+    # Only use voice if ElevenLabs is working
+    if not self.working:
+        return False
         
-        emotional_keywords = ["miss", "love", "yaad", "baby", "jaan", "❤", "💕", "😘"]
-        if any(word in message.lower() for word in emotional_keywords):
-            return random.random() < 0.7  # Higher chance for emotional messages
-        
-        stage_chance = {
-    "initial": 0.15,  # Less voice initially
-    "middle": 0.25,   # Moderate
-    "advanced": 0.35  # More voice when close
-}
-return random.random() < stage_chance.get(stage, 0.2)
+    if len(message) > Config.MAX_VOICE_LENGTH:
+        return False
+    
+    emotional_keywords = ["miss", "love", "yaad", "baby", "jaan", "❤", "💕", "😘"]
+    if any(word in message.lower() for word in emotional_keywords):
+        return random.random() < 0.7  # Higher chance for emotional messages
+    
+    stage_chance = {
+        "initial": 0.15,  # Less voice initially
+        "middle": 0.25,   # Moderate
+        "advanced": 0.35  # More voice when close
+    }
+    return random.random() < stage_chance.get(stage, 0.2)
 
 # Initialize voice engine
 voice_engine = VoiceEngine()
@@ -1452,6 +1452,7 @@ async def main():
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add all handlers
+        app.add_handler(CommandHandler("voicestatus", voice_status_command))
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("help", help_command))
         app.add_handler(CommandHandler("stats", stats_command))
