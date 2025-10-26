@@ -343,11 +343,11 @@ class VoiceEngine:
             return random.random() < 0.7  # Higher chance for emotional messages
         
         stage_chance = {
-            "initial": 0.15,  # Less voice initially
-            "middle": 0.25,   # Moderate
-            "advanced": 0.35  # More voice when close
-        }
-         return random.random() < stage_chance.get(stage, 0.2)
+    "initial": 0.15,  # Less voice initially
+    "middle": 0.25,   # Moderate
+    "advanced": 0.35  # More voice when close
+}
+return random.random() < stage_chance.get(stage, 0.2)
 
 # Initialize voice engine  <-- ADD THIS LINE
 voice_engine = VoiceEngine()  <-- ADD THIS LINE
