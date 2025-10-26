@@ -347,7 +347,10 @@ class VoiceEngine:
             "middle": 0.25,   # Moderate
             "advanced": 0.35  # More voice when close
         }
-        return random.random() < stage_chance.get(stage, 0.2)
+         return random.random() < stage_chance.get(stage, 0.2)
+
+# Initialize voice engine  <-- ADD THIS LINE
+voice_engine = VoiceEngine()  <-- ADD THIS LINE
 
 # ==================== PREMIUM INDIAN FEMALE VOICES ====================
 
