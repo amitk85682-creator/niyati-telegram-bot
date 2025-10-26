@@ -349,8 +349,8 @@ class VoiceEngine:
 }
 return random.random() < stage_chance.get(stage, 0.2)
 
-# Initialize voice engine  <-- ADD THIS LINE
-voice_engine = VoiceEngine()  <-- ADD THIS LINE
+# Initialize voice engine
+voice_engine = VoiceEngine()
 
 # ==================== PREMIUM INDIAN FEMALE VOICES ====================
 
