@@ -304,7 +304,7 @@ class VoiceEngine:
         self.fallback_active = False
         
         if self.enabled:
-            asyncio.create_task(self._test_connection())
+            asyncio.get_event_loop().create_task(self._test_connection())
     
     async def _test_connection(self) -> None:
         """Test ElevenLabs API connection"""
