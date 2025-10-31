@@ -1,6 +1,6 @@
 """
-Niyati - AI Girlfriend Telegram Bot v5.2
-Fixed & Enhanced with Reliable TTS, Better Personality & Full Features
+Niyati - AI Girlfriend Telegram Bot v5.1
+Enhanced with TTS, Group Discovery, Better Personality & Full Features
 """
 
 import os
@@ -54,7 +54,7 @@ class Config:
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-2.5-flash"  # Changed to a more stable model
+    GEMINI_MODEL = "gemini-2.0-flash-exp"
     
     # ElevenLabs Voice
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
@@ -202,6 +202,7 @@ class VoiceEngine:
     def __init__(self):
         self.api_key = Config.ELEVENLABS_API_KEY
         self.voice_id = Config.ELEVENLABS_VOICE_ID
+        self.api_url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}"
         self.enabled = bool(self.api_key)
         self.working = False
         
@@ -262,7 +263,7 @@ class VoiceEngine:
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}", 
+                    self.api_url, 
                     json=data, 
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=30)
@@ -470,7 +471,7 @@ class Database:
                 result = self.supabase.table('user_chats').select("*").eq('user_id', user_id).execute()
                 
                 if result.data and len(result.data) > 0:
-                    user_data = result.data[0]
+                    user_data = result.data
                     if isinstance(user_data.get('chats'), str):
                         user_data['chats'] = json.loads(user_data['chats'])
                     return user_data
@@ -1157,7 +1158,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎤 Voice Messages: {user_data.get('voice_messages_sent', 0)}
 
 <b>System:</b>
-🤖 AI Model: {Config.GEMINI_MODEL}
+🤖 AI Model: Gemini 2.0
 🎙️ Voice: {'Enabled' if voice_engine.enabled else 'Disabled'}
 ⏰ Time: {get_ist_time().strftime('%H:%M IST')}"""
     
@@ -1185,7 +1186,7 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    mood = context.args[0].lower()
+    mood = context.args.lower()
     valid_moods = ['happy', 'sad', 'angry', 'flirty', 'excited']
     
     if mood not in valid_moods:
@@ -1348,7 +1349,7 @@ def home():
     stats = db.get_stats()
     return jsonify({
         "bot": "Niyati",
-        "version": "5.2",
+        "version": "5.1",
         "status": "vibing ✨",
         "users": stats['total_users'],
         "groups": stats['total_groups'],
@@ -1377,7 +1378,7 @@ async def main():
         Config.validate()
         
         logger.info("="*60)
-        logger.info("🤖 Starting Niyati Bot v5.2")
+        logger.info("🤖 Starting Niyati Bot v5.1")
         logger.info("✨ Gen-Z Girlfriend Experience with TTS")
         logger.info("="*60)
         
