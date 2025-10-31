@@ -54,7 +54,7 @@ class Config:
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-2.5-flash"  # Changed to a more stable model
+    GEMINI_MODEL = "gemini-1.5-flash"  # Changed to a more stable model
     
     # ElevenLabs Voice
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
@@ -630,43 +630,47 @@ class GeminiAI:
         self._init_model()
     
     def _init_model(self):
-        """Initialize Gemini model with system instruction"""
+        """Initialize Gemini model"""
         if not Config.GEMINI_API_KEY:
             logger.warning("⚠️ Gemini API key not set")
             return
         
         try:
             genai.configure(api_key=Config.GEMINI_API_KEY)
-            # ✅ FIX 1: Use a valid model name and set a system instruction for the personality
             self.model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash", # Correct, stable model name
-                system_instruction=PERSONALITY, # More efficient way to set the personality
+                model_name=Config.GEMINI_MODEL,
                 generation_config={
-                    "temperature": 1.0, # Increased for more creative, less repetitive responses
-                    "max_output_tokens": 150, # ✅ FIX 2: Reduced tokens to encourage short responses
+                    "temperature": 0.9,
+                    "max_output_tokens": 500,
                     "top_p": 0.95,
                     "top_k": 40
                 },
                 safety_settings=[
-                    {"category": c, "threshold": "BLOCK_NONE"} for c in [
-                        "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", 
-                        "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"
-                    ]
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
                 ]
             )
-            logger.info("✅ Gemini AI initialized with system instruction")
+            logger.info("✅ Gemini AI initialized")
         except Exception as e:
             logger.error(f"Gemini initialization error: {e}")
             self.model = None
-            
+    
     async def generate(self, message: str, context: str = "", for_voice: bool = False) -> Optional[str]:
         """Generate AI response"""
         if not self.model:
             return None
         
         try:
-            # ✅ FIX 3: The prompt is now much shorter and more efficient
-            full_prompt = f"""{context}
+            voice_instruction = ""
+            if for_voice:
+                voice_instruction = "\nThis is for VOICE message - keep it emotional and conversational."
+            
+            full_prompt = f"""{PERSONALITY}
+{voice_instruction}
+
+{context}
 
 User says: {message}
 
@@ -677,34 +681,52 @@ Respond as Niyati (Gen-Z style, short, natural):"""
                 full_prompt
             )
             
-            # ✅ FIX 4: CRASH-PROOF way to get text from the response
-            if response and response.parts:
-                text = "".join(part.text for part in response.parts).strip()
+            if response and response.text:
+                text = response.text.strip()
                 
-                # Check for AI-like phrases
-                ai_phrases = ["as an ai", "i'm an ai", "language model", "artificial intelligence", "chatbot", "gemini"]
+                ai_phrases = [
+                    "as an ai", "i'm an ai", "language model",
+                    "artificial intelligence", "chatbot", "gemini"
+                ]
+                
                 if any(phrase in text.lower() for phrase in ai_phrases):
                     return random.choice(AI_DENIAL_RESPONSES)
                 
                 return text
-            else:
-                # This block now handles cases where the model returns nothing (e.g., safety block)
-                logger.warning(f"Gemini returned no valid parts. Finish Reason: {response.candidates[0].finish_reason}")
-                return self.fallback_response(message)
-
+            
         except Exception as e:
             logger.error(f"Gemini generation error: {e}")
         
-        return None # Return None on error
+        return None
     
     def fallback_response(self, message: str, stage: str = "initial", name: str = "") -> str:
         """Gen-Z style fallback responses"""
         msg_lower = message.lower()
-        if any(word in msg_lower for word in ["hi", "hello", "hey", "hola"]): return random.choice(GENZ_GREETINGS)
-        if any(word in msg_lower for word in ["beautiful", "cute", "pretty", "love", "girlfriend"]): return random.choice(GENZ_FLIRT_RESPONSES.get(stage, GENZ_FLIRT_RESPONSES["initial"]))
-        if any(word in msg_lower for word in ["she", "her", "girl", "ladki"]): return random.choice(JEALOUS_RESPONSES)
-        if "?" in message: return random.choice(["umm lemme think... 🤔", "good question ngl 💭", "bruh idk... google kar lo? 😅"])
-        return random.choice(["hmm interesting... tell me more 👀", "achha achha... phir? 😊", "fr? that's crazy bro 💀"])
+        
+        if any(word in msg_lower for word in ["hi", "hello", "hey", "hola"]):
+            return random.choice(GENZ_GREETINGS)
+        
+        if any(word in msg_lower for word in ["beautiful", "cute", "pretty", "love", "girlfriend"]):
+            return random.choice(GENZ_FLIRT_RESPONSES.get(stage, GENZ_FLIRT_RESPONSES["initial"]))
+        
+        if any(word in msg_lower for word in ["she", "her", "girl", "ladki"]):
+            return random.choice(JEALOUS_RESPONSES)
+        
+        if "?" in message:
+            return random.choice([
+                "umm lemme think... 🤔",
+                "good question ngl 💭",
+                "bruh idk... google kar lo? 😅",
+                "why u asking such hard questions yaar 😩"
+            ])
+        
+        return random.choice([
+            "hmm interesting... tell me more 👀",
+            "achha achha... phir? 😊",
+            "okay and? continue na 🤷‍♀️",
+            "fr? that's crazy bro 💀",
+            "no way! sachi me? 😱"
+        ])
 
 # Initialize AI
 ai = GeminiAI()
