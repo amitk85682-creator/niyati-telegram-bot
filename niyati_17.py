@@ -54,7 +54,7 @@ class Config:
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-1.5-flash"  # Changed to a more stable model
+    GEMINI_MODEL = "gemini-2.5-flash"  # Changed to a more stable model
     
     # ElevenLabs Voice
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
@@ -639,7 +639,7 @@ class GeminiAI:
             genai.configure(api_key=Config.GEMINI_API_KEY)
             # ✅ FIX 1: Use a valid model name and set a system instruction for the personality
             self.model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash", # Correct, stable model name
+                model_name="gemini-2.5-flash", # Correct, stable model name
                 system_instruction=PERSONALITY, # More efficient way to set the personality
                 generation_config={
                     "temperature": 1.0, # Increased for more creative, less repetitive responses
