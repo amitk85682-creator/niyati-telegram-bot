@@ -54,7 +54,7 @@ class Config:
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-1.5-flash"  # Changed to a more stable model
+    GEMINI_MODEL = "gemini-2.5-flash"  # Changed to a more stable model
     
     # ElevenLabs Voice
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
