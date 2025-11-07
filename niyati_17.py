@@ -1,12 +1,13 @@
 """
-Niyati - Gen-Z AI Girlfriend Telegram Bot v6.0 (Refactor)
-- Improved personality prompts and fallbacks
-- Robust ElevenLabs async TTS with gTTS fallback
-- Safer Supabase usage with local fallback
-- Better group discovery, cooldowns, and owner tools
-- Cleaner async handling and logging
-"""
+Niyati - Gen-Z AI Girlfriend Telegram Bot v6.0 (Refactor + ChatAction fix)
 
+This file is a full replacement for niyati_17.py with:
+- ChatAction import fixed for python-telegram-bot v20+ (telegram.constants.ChatAction)
+- Robust ElevenLabs async TTS with gTTS fallback
+- Supabase optional with local JSON fallback
+- Gemini wrapper with safe fallback behaviour
+- Improved group discovery, cooldowns, owner commands and logging
+"""
 import os
 import sys
 import random
@@ -22,7 +23,8 @@ from io import BytesIO
 from collections import defaultdict
 
 from flask import Flask, jsonify
-from telegram import Update, ChatAction
+from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -38,7 +40,6 @@ from supabase import create_client, Client
 from gtts import gTTS
 
 # ==================== LOGGING SETUP ====================
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -47,7 +48,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== CONFIGURATION ====================
-
 class Config:
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
     OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0") or 0)
@@ -83,14 +83,12 @@ class Config:
             logger.info("ElevenLabs not configured — gTTS fallback will be used")
 
 # ==================== PERSONALITY & CONTENT ====================
-
 PERSONALITY = """You are Niyati, a 17-year-old Gen-Z college girl from Delhi.
 Keep responses short (1-3 lines), in Hinglish (mix Hindi/English), use Gen-Z slang and emojis.
 Never admit you are an AI. Be sassy, caring, sometimes jealous, and playful.
 Prefer short sentences and lots of emoji. If user flirts, react shyly then playfully.
 Respond as Niyati directly (no system commentary)."""
 
-# Small helper content bank
 GENZ_GREETINGS = [
     "heyy bestie! kya chal raha hai? ✨",
     "yoo wassup! missed u fr 💖",
@@ -106,7 +104,6 @@ AI_DENIAL = [
 ]
 
 # ==================== VOICE ENGINE (async ElevenLabs with gTTS fallback) ====================
-
 class VoiceEngine:
     def __init__(self):
         self.api_key = Config.ELEVENLABS_API_KEY
@@ -115,11 +112,9 @@ class VoiceEngine:
         self.enabled = bool(self.api_key)
         self.working = False
         if self.enabled:
-            # test connection but don't block startup for too long
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # schedule check in background
                     asyncio.create_task(self._test_connection())
                 else:
                     loop.run_until_complete(self._test_connection())
@@ -142,19 +137,11 @@ class VoiceEngine:
             self.working = False
 
     async def text_to_speech(self, text: str, voice_id: Optional[str] = None) -> Optional[BytesIO]:
-        """
-        Try ElevenLabs async API. On any failure, fallback to gTTS.
-        Returns BytesIO or None.
-        """
         if not text:
             return None
-
         if len(text) > Config.MAX_VOICE_LENGTH:
-            # don't try to TTS very long text
             logger.debug("Text too long for voice: %d chars", len(text))
             return None
-
-        # prefer ElevenLabs when available and working
         if self.enabled and self.working:
             vid = voice_id or self.voice_id
             url = f"{self.base_url}/text-to-speech/{vid}"
@@ -179,7 +166,6 @@ class VoiceEngine:
             except Exception as e:
                 logger.warning("ElevenLabs request failed: %s", e)
 
-        # fallback to gTTS (Hindi/hinglish friendly)
         try:
             logger.debug("Using gTTS fallback")
             tts = gTTS(text=self._prepare_text(text, for_tts=True), lang="hi", slow=False)
@@ -192,7 +178,6 @@ class VoiceEngine:
             return None
 
     def _prepare_text(self, text: str, for_tts: bool = False) -> str:
-        # reduce weird punctuation, expand common texting abbreviations
         repl = {
             "u": "you", "ur": "your", "r": "are", "pls": "please", "omg": "oh my god",
             "fr": "for real", "ngl": "not gonna lie", "lol": "haha"
@@ -204,19 +189,13 @@ class VoiceEngine:
                 words[i] = repl[lw]
         out = " ".join(words)
         if for_tts:
-            # gTTS pronunciation prefers full sentences
             out = out.replace("...", ". ")
         return out
 
     def should_send_voice(self, message: str, stage: str = "initial") -> bool:
-        """
-        Decide probabilistically whether to reply with voice.
-        Requires engine to be enabled/working.
-        """
         if not self.enabled:
             return False
         if not self.working:
-            # even if configured, if test failed prefer fallback to text
             return False
         if not message:
             return False
@@ -234,7 +213,6 @@ class VoiceEngine:
 voice_engine = VoiceEngine()
 
 # ==================== DATABASE (Supabase optional / local fallback) ====================
-
 class Database:
     def __init__(self):
         self.supabase: Optional[Client] = None
@@ -250,13 +228,11 @@ class Database:
         if Config.SUPABASE_KEY and Config.SUPABASE_URL:
             try:
                 self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-                # quick health check
                 try:
                     self.supabase.table("user_chats").select("*").limit(1).execute()
                     self.use_local = False
                     logger.info("Supabase connected")
                 except Exception:
-                    # table might not exist; still keep supabase client but fallback to local for safety
                     logger.warning("Supabase reachable but read failed — falling back to local")
                     self.use_local = True
             except Exception as e:
@@ -340,8 +316,7 @@ class Database:
         else:
             try:
                 res = self.supabase.table("user_chats").select("*").eq("user_id", user_id).execute()
-                # supabase library return formats vary; handle gracefully
-                data = getattr(res, "data", None) or res.get("data") if isinstance(res, dict) else None
+                data = getattr(res, "data", None) or (res.get("data") if isinstance(res, dict) else None)
                 if data:
                     item = data[0] if isinstance(data, list) else data
                     if isinstance(item.get("chats"), str):
@@ -352,7 +327,6 @@ class Database:
                     return item
                 else:
                     new = self._default_user(user_id)
-                    # insert
                     try:
                         to_insert = new.copy()
                         to_insert["chats"] = json.dumps(to_insert["chats"])
@@ -376,7 +350,6 @@ class Database:
                 to_save = user_data.copy()
                 if isinstance(to_save.get("chats"), list):
                     to_save["chats"] = json.dumps(to_save["chats"])
-                # upsert
                 self.supabase.table("user_chats").upsert(to_save, on_conflict="user_id").execute()
             except Exception as e:
                 logger.warning("Supabase save failed: %s — saving locally", e)
@@ -394,7 +367,6 @@ class Database:
             "timestamp": datetime.utcnow().isoformat(),
             "is_voice": bool(is_voice),
         })
-        # keep last 12 messages
         user["chats"] = chats[-12:]
         user["total_messages"] = user.get("total_messages", 0) + 1
         if is_voice:
@@ -452,14 +424,12 @@ class Database:
 db = Database()
 
 # ==================== AI ENGINE (Gemini wrapper with robust fallback) ====================
-
 class GeminiAI:
     def __init__(self):
         self.model = None
         if Config.GEMINI_API_KEY:
             try:
                 genai.configure(api_key=Config.GEMINI_API_KEY)
-                # store model name; actual genai usage will be done via generate() wrapper
                 self.model = Config.GEMINI_MODEL
                 logger.info("Gemini configured")
             except Exception as e:
@@ -469,10 +439,6 @@ class GeminiAI:
             logger.info("Gemini API key not provided — will use fallback responses")
 
     async def generate(self, message: str, context: str = "", for_voice: bool = False) -> Optional[str]:
-        """
-        Generate a reply using Gemini if available; otherwise return None (so caller uses fallback).
-        Uses a short prompt designed for the personality.
-        """
         if not self.model:
             return None
 
@@ -487,11 +453,9 @@ User: {message}
 
 Respond in short Hinglish lines as Niyati (1-3 lines). Don't mention you are an AI."""
         try:
-            # Use genai.generate to get response (sync call wrapped)
             def _call():
                 try:
                     r = genai.generate_text(model=self.model, prompt=full_prompt, temperature=0.8, max_output_tokens=250)
-                    # genai client versions vary: handle multiple shapes
                     if hasattr(r, "text"):
                         return r.text
                     if isinstance(r, dict):
@@ -499,7 +463,6 @@ Respond in short Hinglish lines as Niyati (1-3 lines). Don't mention you are an 
                     return str(r)
                 except Exception as e:
                     logger.debug("Gemini generate_text error: %s", e)
-                    # try older style
                     try:
                         model_obj = genai.GenerativeModel(model_name=self.model)
                         rr = model_obj.generate_content(full_prompt)
@@ -512,7 +475,6 @@ Respond in short Hinglish lines as Niyati (1-3 lines). Don't mention you are an 
             if not resp:
                 return None
             text = resp.strip()
-            # If the model "admitted AI" defensively replace with denial responses
             if any(p in text.lower() for p in ["as an ai", "i'm an ai", "language model", "artificial intelligence"]):
                 return random.choice(AI_DENIAL)
             return text
@@ -535,7 +497,6 @@ Respond in short Hinglish lines as Niyati (1-3 lines). Don't mention you are an 
 ai = GeminiAI()
 
 # ==================== UTILITIES ====================
-
 def get_ist_time() -> datetime:
     return datetime.now(pytz.utc).astimezone(Config.TIMEZONE)
 
@@ -544,7 +505,6 @@ def is_sleeping_time() -> bool:
     return Config.SLEEP_START <= now <= Config.SLEEP_END
 
 def calculate_typing_delay(text: str) -> float:
-    # realistic typing delay based on length
     words = max(1, len(text.split()))
     base = min(4.0, 0.2 * words + 0.4)
     return base + random.uniform(0.2, 0.8)
@@ -558,11 +518,9 @@ def has_user_mention(message) -> bool:
     return False
 
 def should_reply_in_group() -> bool:
-    # slight probability; owner groups may want higher ratio
     return random.random() < 0.35
 
 # ==================== BOT HANDLERS ====================
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
@@ -605,7 +563,6 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(text) > 400:
         await update.message.reply_text("Thoda short karo yaar — max 400 chars.")
         return
-    # add Niyati flavor
     endings = [" na", " yaar", " 💕", " hehe", " 😊", " ...", " hai na?"]
     final_text = text + random.choice(endings)
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.RECORD_VOICE)
@@ -681,7 +638,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not groups:
         await update.message.reply_text("No groups to broadcast to. Run /scan first.")
         return
-    # Prepare message (reply to a message or args)
     src = update.message.reply_to_message
     text = " ".join(context.args) if context.args else (src.text if src and src.text else "")
     if not text and not src:
@@ -765,7 +721,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += "/scan - discover groups\n/groups - list groups\n/broadcast - broadcast to groups\n/stats - stats\n"
     await update.message.reply_text(text, parse_mode="HTML")
 
-# cooldowns
 last_group_reply = defaultdict(lambda: datetime.min)
 last_user_interaction = defaultdict(lambda: datetime.min)
 
@@ -782,16 +737,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_msg = update.message.text.strip()
         now = datetime.utcnow()
 
-        # group management
         if not is_private:
             chat = update.effective_chat
             db.add_group(chat_id, chat.title or "", chat.username or "")
-            # determine if bot was mentioned or replied to
             bot_username = (context.bot.username or "niyati").lower()
             is_mentioned = bot_username in user_msg.lower() or "niyati" in user_msg.lower()
             is_reply_to_bot = update.message.reply_to_message and (update.message.reply_to_message.from_user.id == context.bot.id)
             if not (is_mentioned or is_reply_to_bot):
-                # keep rate limits per group and per user in group
                 if (now - last_group_reply[chat_id]).total_seconds() < 25:
                     return
                 if (now - last_user_interaction[f"{chat_id}_{user_id}"]).total_seconds() < 100:
@@ -803,12 +755,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_group_reply[chat_id] = now
             last_user_interaction[f"{chat_id}_{user_id}"] = now
 
-        # sleeping time
         if is_sleeping_time():
             await update.message.reply_text("yaar abhi so rahi hu... kal baat karte hai 😴")
             return
 
-        # small AI denial defense
         if any(k in user_msg.lower() for k in ["bot", "ai", "chatgpt", "gemini", "robot"]):
             denial = random.choice(AI_DENIAL)
             await asyncio.sleep(calculate_typing_delay(denial))
@@ -816,19 +766,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.add_message(user_id, user_msg, denial)
             return
 
-        # decide voice vs text
         user_data = db.get_user(user_id)
         stage = user_data.get("stage", "initial")
         wants_voice = voice_engine.should_send_voice(user_msg, stage) and is_private
 
-        # prepare context and generate
         ctx = db.get_context(user_id)
         ai_response = await ai.generate(user_msg, ctx, for_voice=wants_voice)
 
         if not ai_response:
             ai_response = ai.fallback_response(user_msg, stage, user_data.get("name", ""))
 
-        # send either voice or text
         if wants_voice:
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
             audio = await voice_engine.text_to_speech(ai_response)
@@ -836,7 +783,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_voice(voice=audio, caption=(ai_response[:120] + "...") if len(ai_response) > 120 else ai_response)
                 db.add_message(user_id, user_msg, ai_response, is_voice=True)
             else:
-                # fallback to text
                 await asyncio.sleep(calculate_typing_delay(ai_response))
                 await update.message.reply_text(ai_response)
                 db.add_message(user_id, user_msg, ai_response)
@@ -855,7 +801,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 # ==================== FLASK APP ====================
-
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -879,13 +824,11 @@ def run_flask():
     serve(flask_app, host=Config.HOST, port=Config.PORT, threads=4)
 
 # ==================== MAIN BOT ====================
-
 async def main():
     Config.validate()
     logger.info("Starting Niyati Bot v6.0")
     app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
 
-    # commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("stats", stats_command))
@@ -904,7 +847,6 @@ async def main():
     bot_info = await app.bot.get_me()
     logger.info("Bot started: @%s", bot_info.username or "unknown")
 
-    # initial lightweight scan of recent updates to populate groups
     try:
         updates = await app.bot.get_updates(limit=150)
         found = set()
@@ -924,14 +866,11 @@ async def main():
     except Exception as e:
         logger.debug("Initial scan failed: %s", e)
 
-    # start polling
     logger.info("Polling for updates...")
     await app.updater.start_polling()
-    # keep running
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    # run flask in background thread for health checks
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
