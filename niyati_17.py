@@ -1,13 +1,20 @@
 """
-Niyati - Gen-Z AI Girlfriend Telegram Bot v6.0 (Refactor + ChatAction fix)
+Niyati - Gen-Z AI Girlfriend Telegram Bot v6.0 (Refactor + supabase import guard)
 
-This file is a full replacement for niyati_17.py with:
-- ChatAction import fixed for python-telegram-bot v20+ (telegram.constants.ChatAction)
-- Robust ElevenLabs async TTS with gTTS fallback
-- Supabase optional with local JSON fallback
-- Gemini wrapper with safe fallback behaviour
-- Improved group discovery, cooldowns, owner commands and logging
+This is a corrected version of niyati_17.py that avoids importing supabase at module-import time.
+The previous runtime crash on Render happened because the installed `supabase` package attempted to
+import `supabase_auth.http_clients` which wasn't present. To prevent the process from crashing
+during import, Supabase is now imported lazily inside Database._init_supabase(...) with robust
+exception handling. If Supabase (or its dependencies) are not available, the bot will fall back to
+local JSON storage and continue running.
+
+Other improvements retained:
+- ChatAction import compatible with python-telegram-bot v20+.
+- Async ElevenLabs TTS with gTTS fallback.
+- Gemini wrapper with safe fallbacks.
+- Local JSON DB fallback if Supabase is misconfigured or not installable.
 """
+
 import os
 import sys
 import random
@@ -18,7 +25,7 @@ import aiohttp
 import tempfile
 from datetime import datetime, time, timedelta
 from threading import Thread
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from io import BytesIO
 from collections import defaultdict
 
@@ -36,10 +43,13 @@ from telegram.error import Forbidden, BadRequest
 from waitress import serve
 import pytz
 import google.generativeai as genai
-from supabase import create_client, Client
+# NOTE: do NOT import supabase at module scope to avoid failing imports in
+# environments where supabase_auth is not available or versions mismatch.
+# from supabase import create_client, Client
 from gtts import gTTS
 
 # ==================== LOGGING SETUP ====================
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -48,6 +58,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== CONFIGURATION ====================
+
 class Config:
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
     OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0") or 0)
@@ -83,6 +94,7 @@ class Config:
             logger.info("ElevenLabs not configured — gTTS fallback will be used")
 
 # ==================== PERSONALITY & CONTENT ====================
+
 PERSONALITY = """You are Niyati, a 17-year-old Gen-Z college girl from Delhi.
 Keep responses short (1-3 lines), in Hinglish (mix Hindi/English), use Gen-Z slang and emojis.
 Never admit you are an AI. Be sassy, caring, sometimes jealous, and playful.
@@ -104,6 +116,7 @@ AI_DENIAL = [
 ]
 
 # ==================== VOICE ENGINE (async ElevenLabs with gTTS fallback) ====================
+
 class VoiceEngine:
     def __init__(self):
         self.api_key = Config.ELEVENLABS_API_KEY
@@ -213,9 +226,12 @@ class VoiceEngine:
 voice_engine = VoiceEngine()
 
 # ==================== DATABASE (Supabase optional / local fallback) ====================
+
 class Database:
     def __init__(self):
-        self.supabase: Optional[Client] = None
+        # type of supabase client is dynamic; avoid importing Client at module level
+        self.supabase: Optional[Any] = None
+        self.create_client = None  # function reference if available
         self.local_db_path = "local_db.json"
         self.groups_path = "groups_data.json"
         self.local_db: Dict[str, Dict] = {}
@@ -225,22 +241,42 @@ class Database:
         self._load_local()
 
     def _init_supabase(self):
-        if Config.SUPABASE_KEY and Config.SUPABASE_URL:
+        """
+        Try to import create_client lazily. If import fails (ModuleNotFoundError or other),
+        keep using local JSON storage and log a helpful message. This prevents deployment
+        crashes when the environment does not have matching supabase dependencies.
+        """
+        if not (Config.SUPABASE_KEY and Config.SUPABASE_URL):
+            self.use_local = True
+            return
+
+        try:
+            # lazy import to avoid module-level import errors like missing sub-deps
+            from supabase import create_client  # type: ignore
+            self.create_client = create_client
             try:
-                self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+                self.supabase = self.create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+                # quick health check: do not crash if table missing
                 try:
                     self.supabase.table("user_chats").select("*").limit(1).execute()
                     self.use_local = False
                     logger.info("Supabase connected")
                 except Exception:
-                    logger.warning("Supabase reachable but read failed — falling back to local")
+                    logger.warning("Supabase reachable but failed read (table might not exist). Using local fallback.")
                     self.use_local = True
             except Exception as e:
-                logger.warning("Supabase initialization failed: %s", e)
+                logger.warning("Supabase client initialization failed: %s", e)
                 self.supabase = None
                 self.use_local = True
-        else:
+        except ModuleNotFoundError as e:
+            # Common in minimal deployment where supabase_auth or other deps missing
+            logger.warning("Supabase library not available: %s. Falling back to local JSON DB.", e)
             self.use_local = True
+            self.supabase = None
+        except Exception as e:
+            logger.warning("Unexpected error importing supabase: %s. Falling back to local JSON DB.", e)
+            self.use_local = True
+            self.supabase = None
 
     def _load_local(self):
         try:
@@ -350,7 +386,12 @@ class Database:
                 to_save = user_data.copy()
                 if isinstance(to_save.get("chats"), list):
                     to_save["chats"] = json.dumps(to_save["chats"])
-                self.supabase.table("user_chats").upsert(to_save, on_conflict="user_id").execute()
+                # Upsert; on_conflict param may vary by client version
+                try:
+                    self.supabase.table("user_chats").upsert(to_save, on_conflict="user_id").execute()
+                except TypeError:
+                    # older/newer clients may not accept on_conflict kwarg
+                    self.supabase.table("user_chats").upsert(to_save).execute()
             except Exception as e:
                 logger.warning("Supabase save failed: %s — saving locally", e)
                 self.use_local = True
@@ -424,6 +465,7 @@ class Database:
 db = Database()
 
 # ==================== AI ENGINE (Gemini wrapper with robust fallback) ====================
+
 class GeminiAI:
     def __init__(self):
         self.model = None
@@ -497,6 +539,7 @@ Respond in short Hinglish lines as Niyati (1-3 lines). Don't mention you are an 
 ai = GeminiAI()
 
 # ==================== UTILITIES ====================
+
 def get_ist_time() -> datetime:
     return datetime.now(pytz.utc).astimezone(Config.TIMEZONE)
 
@@ -521,6 +564,7 @@ def should_reply_in_group() -> bool:
     return random.random() < 0.35
 
 # ==================== BOT HANDLERS ====================
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
@@ -721,6 +765,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += "/scan - discover groups\n/groups - list groups\n/broadcast - broadcast to groups\n/stats - stats\n"
     await update.message.reply_text(text, parse_mode="HTML")
 
+# cooldowns
 last_group_reply = defaultdict(lambda: datetime.min)
 last_user_interaction = defaultdict(lambda: datetime.min)
 
@@ -801,6 +846,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 # ==================== FLASK APP ====================
+
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -824,6 +870,7 @@ def run_flask():
     serve(flask_app, host=Config.HOST, port=Config.PORT, threads=4)
 
 # ==================== MAIN BOT ====================
+
 async def main():
     Config.validate()
     logger.info("Starting Niyati Bot v6.0")
