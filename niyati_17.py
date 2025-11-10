@@ -1,9 +1,7 @@
 """
-Niyati - Gen-Z AI Girlfriend Telegram Bot v7.0 (VAPI Integration)
+Niyati - Gen-Z AI Girlfriend Telegram Bot v7.0 (VAPI Integration - Fixed)
 
-This version replaces Gemini API with VAPI API for AI responses.
-VAPI is primarily a voice AI platform, but we'll use its assistant API
-to generate conversational responses.
+Fixed async initialization issues that were causing runtime errors.
 """
 
 import os
@@ -113,15 +111,19 @@ class VoiceEngine:
         self.base_url = "https://api.elevenlabs.io/v1"
         self.enabled = bool(self.api_key)
         self.working = False
+        self._initialized = False
+
+    async def initialize(self):
+        """Initialize the voice engine - call this from async context"""
+        if self._initialized:
+            return
+        self._initialized = True
+        
         if self.enabled:
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(self._test_connection())
-                else:
-                    loop.run_until_complete(self._test_connection())
+                await self._test_connection()
             except Exception as e:
-                logger.warning("ElevenLabs test scheduling failed: %s", e)
+                logger.warning("ElevenLabs initialization failed: %s", e)
 
     async def _test_connection(self):
         try:
@@ -466,13 +468,12 @@ class VapiAI:
         }
         self.initialized = False
         
-        if self.api_key:
-            asyncio.create_task(self._initialize())
-        else:
+    async def initialize(self):
+        """Initialize VAPI assistant - call this from async context"""
+        if not self.api_key:
             logger.info("VAPI API key not provided — will use fallback responses")
-
-    async def _initialize(self):
-        """Initialize or get existing VAPI assistant"""
+            return
+            
         try:
             # First try to list existing assistants
             async with aiohttp.ClientSession() as session:
@@ -547,57 +548,9 @@ class VapiAI:
 
     async def generate(self, message: str, context: str = "", for_voice: bool = False) -> Optional[str]:
         """Generate response using VAPI assistant"""
-        if not self.api_key or not self.initialized:
-            return None
-            
-        try:
-            # VAPI works best with voice calls, but we can simulate a text conversation
-            # by creating a transient assistant with the current context
-            
-            messages = [
-                {
-                    "role": "system",
-                    "content": f"{PERSONALITY}\n\nContext:\n{context}"
-                },
-                {
-                    "role": "user",
-                    "content": message
-                }
-            ]
-            
-            # Create a temporary assistant configuration for this specific conversation
-            assistant_config = {
-                "model": {
-                    "provider": "openai",
-                    "model": "gpt-3.5-turbo",
-                    "messages": messages,
-                    "temperature": 0.8,
-                    "maxTokens": 150
-                }
-            }
-            
-            # Update the assistant with current context
-            if self.assistant_id:
-                async with aiohttp.ClientSession() as session:
-                    async with session.patch(
-                        f"{self.base_url}/assistant/{self.assistant_id}",
-                        headers=self.headers,
-                        json=assistant_config,
-                        timeout=30
-                    ) as resp:
-                        if resp.status != 200:
-                            logger.debug(f"Failed to update assistant: {resp.status}")
-                            
-            # Since VAPI is primarily for voice calls, we'll use a workaround
-            # by simulating the response generation
-            # In a real implementation, you would use VAPI's call API
-            
-            # For now, return None to use fallback
-            return None
-            
-        except Exception as e:
-            logger.warning(f"VAPI generation failed: {e}")
-            return None
+        # VAPI is primarily for voice calls, not text chat
+        # Using fallback responses instead
+        return None
 
     def fallback_response(self, message: str, stage: str = "initial", name: str = "") -> str:
         """Fallback responses when VAPI is not available"""
@@ -632,6 +585,12 @@ class VapiAI:
             moods = ["I'm good baby! tum batao? 💕", "theek hu yaar, missing u tho 🥺", "mast! aaj mood ekdum accha hai ✨"]
             return random.choice(moods)
         
+        if any(x in m for x in ["bored", "bore"]):
+            return random.choice(["same yaar! kuch fun karte hai? 🎮", "netflix and chill? 😏", "chalo kahi ghoomne chalte hai! 🚗"])
+            
+        if any(x in m for x in ["food", "khana", "hungry", "bhukh"]):
+            return random.choice(["mujhe bhi bhook lagi hai! pizza order kare? 🍕", "momos khane chale? 😋", "ghar ka khana is the best tho 🍛"])
+        
         if "?" in message:
             return random.choice([
                 "umm lemme think... 🤔",
@@ -647,21 +606,24 @@ class VapiAI:
                 "baby tum kitne sweet ho yaar 💕",
                 "accha suno na, something important batana hai...",
                 "you know what? ur special fr 🥺",
-                "bas karo, sharma rahi hu 🙈"
+                "bas karo, sharma rahi hu 🙈",
+                "tumhare saath time spend karna best hai 💖"
             ])
         elif stage == "middle":
             return random.choice([
                 "haan haan, aur batao 😊",
                 "interesting... phir? 👀",
                 "oh accha, nice nice 💫",
-                "sahi hai yaar! 🙌"
+                "sahi hai yaar! 🙌",
+                "tumhari baatein sunna accha lagta hai ✨"
             ])
         else:
             return random.choice([
                 "hmm interesting... tell me more 👀",
                 "achha? continue na 🙂",
                 "okayy... and? 🤷‍♀️",
-                "oh wow, sahi hai! ✨"
+                "oh wow, sahi hai! ✨",
+                "nice nice, aur batao na 😄"
             ])
 
 ai = VapiAI()
@@ -1005,6 +967,11 @@ def run_flask():
 async def main():
     Config.validate()
     logger.info("Starting Niyati Bot v7.0 with VAPI")
+    
+    # Initialize async components
+    await voice_engine.initialize()
+    await ai.initialize()
+    
     app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
