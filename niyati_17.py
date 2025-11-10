@@ -14,7 +14,6 @@ import asyncio
 import logging
 import aiohttp
 import tempfile
-from vapi_python import Vapi
 from datetime import datetime, time, timedelta
 from threading import Thread
 from typing import Optional, List, Dict, Any
