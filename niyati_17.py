@@ -1,12 +1,26 @@
 """
-Niyati - Gen-Z AI Girlfriend Telegram Bot v7.0 (Enhanced with Media & Personality)
+Niyati - Gen-Z AI Girlfriend Telegram Bot v7.0 (Engagement & Multimedia Update)
 
-Enhanced features:
-- Short message responses (1-3 lines strictly enforced)
-- Trending meme references for engagement
-- Mood-based shayari (poetry)
-- Mood-based image sharing from private channel
-- Enhanced cute/charming personality
+This version builds upon v6.0, introducing significant enhancements to make Niyati more
+engaging, interactive, and emotionally resonant.
+
+Key Updates:
+- Personality & Prompt Overhaul: The core AI personality has been refined to be more "cute,
+  charming, and sweet" while strictly enforcing 1-3 line responses.
+- Trending Meme Integration: The AI is now instructed to subtly use trending Indian meme
+  references to make conversations more relatable and fun.
+- Mood-based Shayari: Niyati can now spontaneously send short, 2-4 line shayaris (poems)
+  during romantic or sad moments, making interactions more special.
+- Mood-based Image Sending:
+  - Connects to a private channel to send mood-specific images.
+  - New owner command `/addimage <mood>` allows registering images by replying to them.
+    The bot stores the image file_id in a new `mood_images.json`.
+  - The bot can now decide to send a photo with an AI-generated caption based on the
+    conversation's context and mood.
+- Smarter Reply Logic: The message handler now intelligently decides whether to send a
+  plain text, a voice note, a shayari, or a mood picture, creating a more dynamic and
+  human-like experience.
+- Retains all previous improvements like lazy Supabase import, async TTS, and local DB fallbacks.
 """
 
 import os
