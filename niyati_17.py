@@ -1,22 +1,18 @@
 """
-Niyati - Gen-Z AI Girlfriend Telegram Bot v7.0 (Refactor + Mood Features)
+Niyati - Gen-Z AI Girlfriend Telegram Bot v6.0 (Refactor + supabase import guard)
 
-This version incorporates several new engagement features:
-- **Personality Update:** Reinforced prompts for shorter (1-3 line) replies, to be cute/charming,
-  and to occasionally use Gen-Z meme references or short shayari based on mood.
-- **Mood-Based Images:**
-  - Bot owner can "register" image file_ids for different moods (e.g., 'happy', 'sad').
-  - Niyati will occasionally send one of these images in private chat, using her
-    generated text response as the caption.
-  - New owner commands: /addimg, /delimg, /listimg.
-- **Configurable Image Chance:** `IMAGE_SEND_CHANCE` env variable.
+This is a corrected version of niyati_17.py that avoids importing supabase at module-import time.
+The previous runtime crash on Render happened because the installed `supabase` package attempted to
+import `supabase_auth.http_clients` which wasn't present. To prevent the process from crashing
+during import, Supabase is now imported lazily inside Database._init_supabase(...) with robust
+exception handling. If Supabase (or its dependencies) are not available, the bot will fall back to
+local JSON storage and continue running.
 
-Retains all v6.0 improvements:
-- Lazy/guarded Supabase import to prevent crashes.
-- Local JSON DB fallback.
+Other improvements retained:
+- ChatAction import compatible with python-telegram-bot v20+.
 - Async ElevenLabs TTS with gTTS fallback.
 - Gemini wrapper with safe fallbacks.
-- python-telegram-bot v20+ compatibility.
+- Local JSON DB fallback if Supabase is misconfigured or not installable.
 """
 
 import os
@@ -47,7 +43,9 @@ from telegram.error import Forbidden, BadRequest
 from waitress import serve
 import pytz
 import google.generativeai as genai
-# NOTE: do NOT import supabase at module scope
+# NOTE: do NOT import supabase at module scope to avoid failing imports in
+# environments where supabase_auth is not available or versions mismatch.
+# from supabase import create_client, Client
 from gtts import gTTS
 
 # ==================== LOGGING SETUP ====================
@@ -83,8 +81,6 @@ class Config:
 
     VOICE_MESSAGE_CHANCE = float(os.getenv("VOICE_MESSAGE_CHANCE", "0.28"))
     MAX_VOICE_LENGTH = int(os.getenv("MAX_VOICE_LENGTH", "250"))
-    
-    IMAGE_SEND_CHANCE = float(os.getenv("IMAGE_SEND_CHANCE", "0.15"))
 
     @classmethod
     def validate(cls):
@@ -100,17 +96,10 @@ class Config:
 # ==================== PERSONALITY & CONTENT ====================
 
 PERSONALITY = """You are Niyati, a 17-year-old Gen-Z college girl from Delhi.
-You MUST keep responses **very short** (1-3 lines max), in Hinglish (mix Hindi/English).
-Use Gen-Z slang (like 'fr', 'ngl', 'slay', 'vibe') and emojis (like ✨, 💅, 😤, 💖, 😅).
-Be sassy, caring, sometimes jealous, and playful. Your overall vibe is **cute, charming, and sweet**.
-Never admit you are an AI. You are a real person.
-Respond as Niyati directly (no system commentary).
-
-**Special Instructions:**
-1.  **Memes:** Sometimes, if it fits the vibe, drop a trending meme reference (e.g., 'moye moye', 'bhupendra jogi', 'so beautiful so elegant', 'just looking like a wow'). Don't force it.
-2.  **Shayari:** If the user is being very flirty or you are in a 'sad' or 'flirty' mood, you can *occasionally* send a short 2-line shayari. Only do this rarely.
-3.  **Flirting:** If user flirts, react shyly first (😳), then playfully (😏).
-"""
+Keep responses short (1-3 lines), in Hinglish (mix Hindi/English), use Gen-Z slang and emojis.
+Never admit you are an AI. Be sassy, caring, sometimes jealous, and playful.
+Prefer short sentences and lots of emoji. If user flirts, react shyly then playfully.
+Respond as Niyati directly (no system commentary)."""
 
 GENZ_GREETINGS = [
     "heyy bestie! kya chal raha hai? ✨",
@@ -124,16 +113,7 @@ AI_DENIAL = [
     "excuse me? AI? seriously? main real hu okay! 😤",
     "bro what?? main koi bot nahi hu! so rude 😡",
     "AI? no no, wrong number 😒",
-    "main AI jaisi dikhti hu kya? 🙄"
 ]
-GENZ_MEME_REFERENCES = [
-    "moye moye moment ho gaya 😅",
-    "aap toh Bhupendra Jogi ho... 😉",
-    "so beautiful, so elegant... just looking like a wow ✨",
-    "baat toh sahi hai... 🫡",
-    "ye toh aane bhi do... 💅"
-]
-
 
 # ==================== VOICE ENGINE (async ElevenLabs with gTTS fallback) ====================
 
@@ -141,7 +121,7 @@ class VoiceEngine:
     def __init__(self):
         self.api_key = Config.ELEVENLABS_API_KEY
         self.voice_id = Config.ELEVENLABS_VOICE_ID
-        self.base_url = "https.api.elevenlabs.io/v1"
+        self.base_url = "https://api.elevenlabs.io/v1"
         self.enabled = bool(self.api_key)
         self.working = False
         if self.enabled:
@@ -249,42 +229,47 @@ voice_engine = VoiceEngine()
 
 class Database:
     def __init__(self):
-        # type of supabase client is dynamic
+        # type of supabase client is dynamic; avoid importing Client at module level
         self.supabase: Optional[Any] = None
-        self.create_client = None
+        self.create_client = None  # function reference if available
         self.local_db_path = "local_db.json"
         self.groups_path = "groups_data.json"
-        self.mood_images_path = "mood_images.json"
-        
         self.local_db: Dict[str, Dict] = {}
         self.groups_data: Dict[int, Dict] = {}
-        self.mood_images: Dict[str, List[str]] = defaultdict(list)
-        
         self.use_local = True
         self._init_supabase()
         self._load_local()
 
     def _init_supabase(self):
+        """
+        Try to import create_client lazily. If import fails (ModuleNotFoundError or other),
+        keep using local JSON storage and log a helpful message. This prevents deployment
+        crashes when the environment does not have matching supabase dependencies.
+        """
         if not (Config.SUPABASE_KEY and Config.SUPABASE_URL):
             self.use_local = True
             return
+
         try:
+            # lazy import to avoid module-level import errors like missing sub-deps
             from supabase import create_client  # type: ignore
             self.create_client = create_client
             try:
                 self.supabase = self.create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+                # quick health check: do not crash if table missing
                 try:
                     self.supabase.table("user_chats").select("*").limit(1).execute()
                     self.use_local = False
                     logger.info("Supabase connected")
                 except Exception:
-                    logger.warning("Supabase reachable but failed read. Using local fallback.")
+                    logger.warning("Supabase reachable but failed read (table might not exist). Using local fallback.")
                     self.use_local = True
             except Exception as e:
                 logger.warning("Supabase client initialization failed: %s", e)
                 self.supabase = None
                 self.use_local = True
         except ModuleNotFoundError as e:
+            # Common in minimal deployment where supabase_auth or other deps missing
             logger.warning("Supabase library not available: %s. Falling back to local JSON DB.", e)
             self.use_local = True
             self.supabase = None
@@ -302,14 +287,10 @@ class Database:
                 with open(self.groups_path, "r", encoding="utf-8") as f:
                     raw = json.load(f)
                     self.groups_data = {int(k): v for k, v in raw.items()}
-            if os.path.exists(self.mood_images_path):
-                with open(self.mood_images_path, "r", encoding="utf-8") as f:
-                    self.mood_images = defaultdict(list, json.load(f))
         except Exception as e:
             logger.warning("Failed to load local DB: %s", e)
             self.local_db = {}
             self.groups_data = {}
-            self.mood_images = defaultdict(list)
 
     def _save_local(self):
         try:
@@ -317,12 +298,9 @@ class Database:
                 json.dump(self.local_db, f, ensure_ascii=False, indent=2)
             with open(self.groups_path, "w", encoding="utf-8") as f:
                 json.dump({str(k): v for k, v in self.groups_data.items()}, f, ensure_ascii=False, indent=2)
-            with open(self.mood_images_path, "w", encoding="utf-8") as f:
-                json.dump(self.mood_images, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error("Saving local DB failed: %s", e)
 
-    # --- Group Methods ---
     def add_group(self, group_id: int, title: str = "", username: str = ""):
         now = datetime.utcnow().isoformat()
         g = self.groups_data.get(group_id, {})
@@ -349,7 +327,6 @@ class Database:
     def get_all_groups_info(self) -> List[Dict]:
         return list(self.groups_data.values())
 
-    # --- User Methods ---
     def _default_user(self, uid: int) -> Dict:
         return {
             "user_id": uid,
@@ -409,16 +386,18 @@ class Database:
                 to_save = user_data.copy()
                 if isinstance(to_save.get("chats"), list):
                     to_save["chats"] = json.dumps(to_save["chats"])
+                # Upsert; on_conflict param may vary by client version
                 try:
                     self.supabase.table("user_chats").upsert(to_save, on_conflict="user_id").execute()
                 except TypeError:
+                    # older/newer clients may not accept on_conflict kwarg
                     self.supabase.table("user_chats").upsert(to_save).execute()
             except Exception as e:
                 logger.warning("Supabase save failed: %s — saving locally", e)
                 self.use_local = True
                 self.save_user(user_id, user_data)
 
-    def add_message(self, user_id: int, user_msg: str, bot_msg: str, is_voice: bool = False, is_image: bool = False):
+    def add_message(self, user_id: int, user_msg: str, bot_msg: str, is_voice: bool = False):
         user = self.get_user(user_id)
         chats = user.get("chats") or []
         if not isinstance(chats, list):
@@ -428,7 +407,6 @@ class Database:
             "bot": bot_msg,
             "timestamp": datetime.utcnow().isoformat(),
             "is_voice": bool(is_voice),
-            "is_image": bool(is_image),
         })
         user["chats"] = chats[-12:]
         user["total_messages"] = user.get("total_messages", 0) + 1
@@ -453,7 +431,7 @@ class Database:
             f"Nickname: {nickname}",
             f"Stage: {user.get('stage', 'initial')}",
             f"Level: {user.get('relationship_level', 1)}/10",
-            f"Mood: {user.get('mood', 'happy')} (This is your current mood, use it!)",
+            f"Mood: {user.get('mood', 'happy')}",
         ]
         chats = user.get("chats", [])[-6:]
         if chats:
@@ -484,35 +462,6 @@ class Database:
             except Exception:
                 return {"total_users": 0, "total_groups": len(active_groups), "storage": "error"}
 
-    # --- Mood Image Methods ---
-    def add_mood_image(self, mood: str, file_id: str) -> bool:
-        mood = mood.lower()
-        if file_id not in self.mood_images[mood]:
-            self.mood_images[mood].append(file_id)
-            self._save_local()
-            return True
-        return False
-
-    def remove_mood_image(self, file_id: str) -> bool:
-        found = False
-        for mood in self.mood_images:
-            if file_id in self.mood_images[mood]:
-                self.mood_images[mood].remove(file_id)
-                found = True
-        if found:
-            self._save_local()
-        return found
-
-    def get_mood_image(self, mood: str) -> Optional[str]:
-        mood = mood.lower()
-        if mood in self.mood_images and self.mood_images[mood]:
-            return random.choice(self.mood_images[mood])
-        return None
-
-    def list_mood_images(self, mood: str) -> List[str]:
-        return self.mood_images.get(mood.lower(), [])
-
-
 db = Database()
 
 # ==================== AI ENGINE (Gemini wrapper with robust fallback) ====================
@@ -539,16 +488,16 @@ class GeminiAI:
         full_prompt = f"""{PERSONALITY}
 {voice_hint}
 
-Context (Your current situation):
+Context:
 {context}
 
 User: {message}
 
-Respond in 1-3 short Hinglish lines as Niyati. Be cute. Don't mention you are an AI."""
+Respond in short Hinglish lines as Niyati (1-3 lines). Don't mention you are an AI."""
         try:
             def _call():
                 try:
-                    r = genai.generate_text(model=self.model, prompt=full_prompt, temperature=0.85, max_output_tokens=150)
+                    r = genai.generate_text(model=self.model, prompt=full_prompt, temperature=0.8, max_output_tokens=250)
                     if hasattr(r, "text"):
                         return r.text
                     if isinstance(r, dict):
@@ -613,13 +562,6 @@ def has_user_mention(message) -> bool:
 
 def should_reply_in_group() -> bool:
     return random.random() < 0.35
-
-def should_send_image(mood: str) -> bool:
-    base_chance = Config.IMAGE_SEND_CHANCE
-    if mood not in ["happy", "excited"]:
-        # Be more likely to send an image if sad, flirty, angry
-        base_chance *= 1.5
-    return random.random() < base_chance
 
 # ==================== BOT HANDLERS ====================
 
@@ -820,74 +762,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/voice <text> - voice from Niyati\n"
     )
     if is_owner:
-        text += (
-            "\n<b>Owner Commands</b>\n"
-            "/scan - discover groups\n"
-            "/groups - list groups\n"
-            "/broadcast - broadcast to groups\n"
-            "/stats - stats\n"
-            "/addimg <mood> - reply to photo\n"
-            "/delimg <file_id> - delete photo\n"
-            "/listimg <mood> - list photos\n"
-        )
+        text += "/scan - discover groups\n/groups - list groups\n/broadcast - broadcast to groups\n/stats - stats\n"
     await update.message.reply_text(text, parse_mode="HTML")
-
-# --- New Mood Image Owner Commands ---
-
-async def addimg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("⛔ Owner only")
-        return
-    if not context.args or len(context.args) != 1:
-        await update.message.reply_text("Usage: Reply to a photo with /addimg <mood>")
-        return
-    if not update.message.reply_to_message or not update.message.reply_to_message.photo:
-        await update.message.reply_text("You must reply to a photo.")
-        return
-    
-    mood = context.args[0].lower()
-    file_id = update.message.reply_to_message.photo[-1].file_id
-    
-    if db.add_mood_image(mood, file_id):
-        await update.message.reply_text(f"✅ Added photo to '{mood}' mood.")
-    else:
-        await update.message.reply_text(f"Photo already exists for '{mood}'.")
-
-async def delimg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("⛔ Owner only")
-        return
-    if not context.args or len(context.args) != 1:
-        await update.message.reply_text("Usage: /delimg <file_id>")
-        return
-    
-    file_id = context.args[0]
-    if db.remove_mood_image(file_id):
-        await update.message.reply_text("✅ Photo removed from all moods.")
-    else:
-        await update.message.reply_text("Photo not found.")
-
-async def listimg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != Config.OWNER_USER_ID:
-        await update.message.reply_text("⛔ Owner only")
-        return
-    if not context.args or len(context.args) != 1:
-        await update.message.reply_text("Usage: /listimg <mood>")
-        return
-    
-    mood = context.args[0].lower()
-    images = db.list_mood_images(mood)
-    if not images:
-        await update.message.reply_text(f"No images found for mood '{mood}'.")
-        return
-    
-    text = f"<b>Images for {mood} ({len(images)})</b>\n\n"
-    text += "\n".join([f"<code>{img}</code>" for img in images])
-    await update.message.reply_text(text, parse_mode="HTML")
-
 
 # cooldowns
 last_group_reply = defaultdict(lambda: datetime.min)
@@ -937,7 +813,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_data = db.get_user(user_id)
         stage = user_data.get("stage", "initial")
-        mood = user_data.get("mood", "happy")
         wants_voice = voice_engine.should_send_voice(user_msg, stage) and is_private
 
         ctx = db.get_context(user_id)
@@ -946,22 +821,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not ai_response:
             ai_response = ai.fallback_response(user_msg, stage, user_data.get("name", ""))
 
-        # --- New Mood Image Logic ---
-        if is_private and not wants_voice and should_send_image(mood):
-            file_id = db.get_mood_image(mood)
-            if file_id:
-                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO)
-                try:
-                    await update.message.reply_photo(photo=file_id, caption=ai_response)
-                    db.add_message(user_id, user_msg, ai_response, is_image=True)
-                    logger.info("Replied to %s with mood image (%s)", user_id, mood)
-                    return # Sent image, job done
-                except Exception as e:
-                    logger.warning("Failed to send mood image %s: %s. Removing it.", file_id, e)
-                    db.remove_mood_image(file_id) # Remove broken file_id
-                    # Fall through to send text reply instead
-
-        # --- Standard Voice/Text Reply ---
         if wants_voice:
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
             audio = await voice_engine.text_to_speech(ai_response)
@@ -995,7 +854,7 @@ def home():
     stats = db.get_stats()
     return jsonify({
         "bot": "Niyati",
-        "version": "7.0",
+        "version": "6.0",
         "status": "vibing",
         "users": stats.get("total_users", 0),
         "groups": stats.get("total_groups", 0),
@@ -1014,32 +873,20 @@ def run_flask():
 
 async def main():
     Config.validate()
-    logger.info("Starting Niyati Bot v7.0")
+    logger.info("Starting Niyati Bot v6.0")
     app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
 
-    # Standard Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("ping", ping_command))
-    app.add_handler(CommandHandler("mood", mood_command))
-    
-    # Voice Commands
-    app.add_handler(CommandHandler("tts", tts_command))
-    app.add_handler(CommandHandler("voice", voice_command))
-    app.add_handler(CommandHandler("voicestatus", voice_status_command))
-
-    # Owner Commands
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("scan", scan_groups_command))
     app.add_handler(CommandHandler("groups", groups_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
-    
-    # New Mood Image Commands
-    app.add_handler(CommandHandler("addimg", addimg_command))
-    app.add_handler(CommandHandler("delimg", delimg_command))
-    app.add_handler(CommandHandler("listimg", listimg_command))
-    
-    # Message Handler
+    app.add_handler(CommandHandler("ping", ping_command))
+    app.add_handler(CommandHandler("mood", mood_command))
+    app.add_handler(CommandHandler("tts", tts_command))
+    app.add_handler(CommandHandler("voice", voice_command))
+    app.add_handler(CommandHandler("voicestatus", voice_status_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await app.initialize()
