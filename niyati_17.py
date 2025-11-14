@@ -51,7 +51,7 @@ class Config:
     GEMINI_MODEL = "gemini-2.0-flash-exp"
     
     # Supabase
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://xyz.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     
     # Server
