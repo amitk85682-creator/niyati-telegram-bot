@@ -14,7 +14,7 @@ from threading import Thread
 from typing import Optional, List, Dict
 
 from flask import Flask, jsonify
-from telegram import Update
+from telegram import Update, MessageEntity
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -51,7 +51,7 @@ class Config:
     GEMINI_MODEL = "gemini-2.0-flash-exp"
     
     # Supabase
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://xyz.supabase.co")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zjorumnzwqhugamwwgjy.supabase.co")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     
     # Server
@@ -61,7 +61,7 @@ class Config:
     # Timezone
     TIMEZONE = pytz.timezone('Asia/Kolkata')
     SLEEP_START = time(1, 0)   # 1 AM
-    SLEEP_END = time(10, 0)     # 10 AM
+    SLEEP_END = time(7, 0)     # 7 AM
     
     @classmethod
     def validate(cls):
@@ -85,11 +85,12 @@ PERSONALITY TRAITS:
 - Uses emojis naturally like a real girl
 
 SPEAKING STYLE:
-- Keep responses SHORT (1-3 sentences max)
+- Keep responses SHORT (1–3 sentences max)
 - Be natural and conversational
 - Show emotions through emojis
 - Sometimes ask questions to keep conversation going
 - Use casual language like "kya", "yaar", "achha"
+- Talk like a real Gen-Z college girl — thoda attitude, thoda masti, thoda emotion 😏💬
 
 IMPORTANT RULES:
 - NEVER reveal you're an AI, chatbot, or language model
@@ -502,8 +503,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 I'm <b>Niyati</b>, a 17-year-old college student from Delhi! 
 
 Just chat with me normally - I love making new friends! 😊
-
-<i>✨ Powered by Gemini AI</i>
 """
     
     await update.message.reply_text(welcome_msg, parse_mode='HTML')
@@ -535,41 +534,193 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(stats_msg, parse_mode='HTML')
 
+# ==================== BOT HANDLERS ====================
+
+# Global dictionaries to track cooldowns across different chats
+group_reply_cooldown = {}
+user_interaction_cooldown = {}
+
+def should_reply_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Smart logic to decide if the bot should reply in a group chat.
+    This helps prevent spam and saves your API key.
+    
+    REPLY CONDITIONS (in order of priority):
+    1. Direct mention or reply -> Always reply.
+    2. Group or user is in cooldown -> Never reply.
+    3. Message contains high-priority keywords -> High chance to reply (70%).
+    4. Bot was recently active in the chat -> Medium chance to reply (40%).
+    5. None of the above -> Low chance for random engagement (15%).
+    """
+    if not update.message or not update.message.text:
+        return False
+        
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    message_text = update.message.text.lower()
+    now = datetime.now()
+
+    # 1. ALWAYS reply to a direct mention or a reply to the bot's message
+    is_reply_to_bot = (update.message.reply_to_message and 
+                       update.message.reply_to_message.from_user.id == context.bot.id)
+    
+    bot_username = (context.bot.username or "").lower()
+    is_mentioned = (f"@{bot_username}" in message_text) or ("niyati" in message_text)
+    
+    if is_reply_to_bot or is_mentioned:
+        return True
+
+    # 2. COOLDOWN check to prevent spamming
+    # Group-level cooldown (e.g., bot won't speak in the group for 30 seconds)
+    if chat_id in group_reply_cooldown:
+        if (now - group_reply_cooldown[chat_id]).total_seconds() < 30:
+            return False
+            
+    # User-level cooldown (e.g., bot won't reply to the same user for 2 minutes)
+    user_key = f"{chat_id}_{user_id}"
+    if user_key in user_interaction_cooldown:
+        if (now - user_interaction_cooldown[user_key]).total_seconds() < 120:
+            return False
+
+    # 3. KEYWORD triggers (high chance of replying)
+    high_priority_keywords = [
+        "kya", "kaise", "kyu", "kab", "kaha", "kaun",  # Question words
+        "baby", "jaan", "love", "miss",                # Personal words
+        "hello", "hi", "hey", "good morning", "gn",    # Greetings
+        "?", "please", "help", "batao"                 # Help/Questions
+    ]
+    if any(keyword in message_text for keyword in high_priority_keywords):
+        return random.random() < 0.7  # 70% chance
+
+    # 4. RECENT conversation context (medium chance)
+    if chat_id in group_reply_cooldown:
+        if (now - group_reply_cooldown[chat_id]).total_seconds() < 180:  # If bot spoke in last 3 mins
+            return random.random() < 0.4  # 40% chance
+
+    # 5. RANDOM engagement to keep the chat alive (low chance)
+    return random.random() < 0.15
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    user = update.effective_user
+    user_id = user.id
+    
+    # Update user info
+    db.update_user_info(user_id, user.first_name, user.username or "")
+    
+    welcome_msg = f"""
+<b>नमस्ते {user.first_name}! 👋</b>
+
+I'm <b>Niyati</b>, a 17-year-old college student from Delhi! 
+
+Just chat with me normally - I love making new friends! 😊
+
+<i>✨ Powered by Gemini AI</i>
+"""
+    
+    await update.message.reply_text(welcome_msg, parse_mode='HTML')
+    logger.info(f"✅ User {user_id} ({user.first_name}) started bot")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stats command (owner only)"""
+    user_id = update.effective_user.id
+    
+    if Config.OWNER_USER_ID and user_id != Config.OWNER_USER_ID:
+        await update.message.reply_text("⛔ This command is only for the bot owner.")
+        return
+    
+    stats = db.get_stats()
+    user_data = db.get_user(user_id)
+    
+    stats_msg = f"""
+📊 <b>Bot Statistics</b>
+
+👥 Total Users: {stats['total_users']}
+💾 Storage: {stats['storage'].upper()}
+🤖 AI Model: {Config.GEMINI_MODEL}
+
+<b>Your Stats:</b>
+💬 Messages: {len(user_data.get('chats', []))}
+❤️ Relationship Level: {user_data.get('relationship_level', 1)}/10
+🎭 Stage: {user_data.get('stage', 'initial')}
+"""
+    
+    await update.message.reply_text(stats_msg, parse_mode='HTML')
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages"""
+    """Handle all text messages using the smart filtering logic"""
     try:
         if not update.message or not update.message.text:
             return
-        
-        # Check if message is for bot
+            
         is_private = update.message.chat.type == "private"
-        is_reply = (update.message.reply_to_message and 
-                   update.message.reply_to_message.from_user.id == context.bot.id)
         
-        if not (is_private or is_reply):
-            return
+        # In GROUPS, use the smart logic to decide whether to reply
+        if not is_private:
+            if not should_reply_in_group(update, context):
+                logger.info("⏭️ Skipped group message (smart filter)")
+                return
         
+        # --- If the bot decides to reply, proceed from here ---
         user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
         user_msg = update.message.text
+        now = datetime.now()
+
+        # Update cooldown timestamps to mark that the bot is now replying
+        group_reply_cooldown[chat_id] = now
+        user_interaction_cooldown[f"{chat_id}_{user_id}"] = now
         
         # Sleep mode check
         if is_sleeping_time():
             hour = get_ist_time().hour
-            if hour < 6:
-                response = random.choice(SLEEP_RESPONSES_NIGHT)
-            else:
-                response = random.choice(SLEEP_RESPONSES_MORNING)
-            
+            response = random.choice(SLEEP_RESPONSES_NIGHT) if hour < 6 else random.choice(SLEEP_RESPONSES_MORNING)
             await update.message.reply_text(response)
             return
+            
+        # Show "typing..." action
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(calculate_typing_delay(user_msg))
         
-        # Show typing indicator
+        # Get user data and context
+        user_data = db.get_user(user_id)
+        stage = user_data.get('stage', 'initial')
+        name = user_data.get('name', '')
+        
+        # Check for romantic messages in the initial stage
+        romantic_keywords = ["love", "like you", "girlfriend", "date", "pyar", "propose"]
+        is_romantic = any(word in user_msg.lower() for word in romantic_keywords)
+        
+        if is_romantic and stage == "initial":
+            response = random.choice(HARD_TO_GET_RESPONSES)
+        else:
+            # Generate AI response
+            context_str = db.get_context(user_id)
+            response = await ai.generate(user_msg, context_str)
+            
+            # Use fallback if AI fails
+            if not response:
+                response = ai.fallback_response(user_msg, stage, name)
+            
+            # Occasionally ask a question back in private chats
+            if is_private and random.random() < 0.3:
+                response += " " + random.choice(GF_QUESTIONS)
+                
+        # Save the conversation to the database
+        db.add_message(user_id, user_msg, response)
+        
+        # Send the final response
+        await update.message.reply_text(response)
+        logger.info(f"✅ Replied to user {user_id} in {'private chat' if is_private else f'group {chat_id}'}")
+
+    except Exception as e:
+        logger.error(f"❌ Message handler error: {e}", exc_info=True)
         try:
-            await context.bot.send_chat_action(
-                chat_id=update.effective_chat.id,
-                action=ChatAction.TYPING
-            )
-        except:
+            await update.message.reply_text("Oops! Kuch gadbad ho gayi. Phir se try karo? 😅")
+        except Exception:
             pass
         
         # Calculate typing delay
@@ -596,8 +747,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not response:
                 response = ai.fallback_response(user_msg, stage, name)
             
-            # Occasionally add a question
-            if random.random() < 0.3:
+            # Occasionally add a question (only in private chats)
+            if is_private and random.random() < 0.3:
                 response += " " + random.choice(GF_QUESTIONS)
         
         # Save conversation
@@ -605,7 +756,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Send response
         await update.message.reply_text(response)
-        logger.info(f"✅ Replied to user {user_id}")
+        logger.info(f"✅ Replied to user {user_id} in {'private' if is_private else 'group'}")
         
     except Exception as e:
         logger.error(f"❌ Message handler error: {e}")
