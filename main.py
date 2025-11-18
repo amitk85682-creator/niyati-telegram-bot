@@ -19,7 +19,7 @@ from telegram.error import TelegramError, RetryAfter
 import asyncio
 import logging
 import google.generativeai as genai
-from google.genai import types
+google-genai
 import random
 import hashlib
 
