@@ -18,8 +18,8 @@ from telegram.constants import ParseMode, ChatAction
 from telegram.error import TelegramError, RetryAfter
 import asyncio
 import logging
-import google.generativeai as genai
-google-genai
+from google import genai
+from google.genai import types
 import random
 import hashlib
 
