@@ -2,7 +2,8 @@ import logging
 import asyncio
 import random
 import datetime
-from telegram import Update, ChatAction
+from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, JobQueue
 import google.generativeai as genai
 from supabase import create_client, Client
