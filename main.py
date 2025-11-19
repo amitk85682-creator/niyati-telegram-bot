@@ -1,5 +1,3 @@
-is code ko dobara se likhao improve karo and koi errror na aaye 
-
 import os
 import json
 import sqlite3
