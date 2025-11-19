@@ -1003,7 +1003,7 @@ if __name__ == "__main__":
         logger.info("\n👋 Niyati says bye bye!")
     except Exception as e:
         logger.critical(f"💥 Critical error: {e}")
-        sys.exit(1)"""
+        sys.exit(1)
 Niyati - Advanced AI Girlfriend Telegram Bot
 Fixed Version with Proper Error Handling
 Cute, Charming, Sweet Girl Persona - Never mentions AI/Robot
