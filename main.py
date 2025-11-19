@@ -319,6 +319,8 @@ class Database:
     
     def update_user_data(self, user_id: int, **kwargs):
         """Update user data with specific fields"""
+        # Avoid multiple values for user_id when callers pass full user_data dict
+        kwargs.pop('user_id', None)
         user_id_str = str(user_id)
         user_data = self.get_user_data(user_id)
         
@@ -384,7 +386,10 @@ class Database:
             user_data['personality_mode'] = 'romantic'
         
         # Save updated data
-        self.update_user_data(user_id, **user_data)
+        # use update_user_data but ensure we don't pass duplicate user_id
+        save_data = dict(user_data)
+        save_data.pop('user_id', None)
+        self.update_user_data(user_id, **save_data)
     
     def get_context(self, user_id: int, is_group: bool = False) -> str:
         """Get conversation context"""
@@ -1289,6 +1294,8 @@ class Database:
     
     def update_user_data(self, user_id: int, **kwargs):
         """Update user data"""
+        # Remove possible user_id in kwargs to avoid "multiple values for argument" errors
+        kwargs.pop('user_id', None)
         user_id_str = str(user_id)
         user_data = self.get_user_data(user_id)
         user_data.update(kwargs)
@@ -1323,7 +1330,10 @@ class Database:
         if user_data['messages'] > 20:
             user_data['level'] = min(10, 2 + user_data['messages'] // 10)
         
-        self.update_user_data(user_id, **user_data)
+        # Save without passing duplicate user_id
+        save_data = dict(user_data)
+        save_data.pop('user_id', None)
+        self.update_user_data(user_id, **save_data)
     
     def get_context(self, user_id: int, is_group: bool = False) -> str:
         """Get context"""
