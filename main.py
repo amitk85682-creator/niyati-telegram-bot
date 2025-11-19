@@ -1,4 +1,4 @@
-# --- main.py (Corrected) ---
+# --- main.py (Corrected Again) ---
 
 import logging
 import random
@@ -6,8 +6,7 @@ from datetime import time
 import pytz
 
 from telegram import Update, Chat
-# JobQueue is now imported directly
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, JobQueue # <-- CHANGE HERE
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, JobQueue
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
@@ -131,18 +130,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prefs = {}
     if mode == 'private':
-        db.get_or_create_user(user.id, user.first_name) # Ensure user exists
+        db.get_or_create_user(user.id, user.first_name)
         prefs = db.get_user_prefs(user.id) or {"memes": True, "shayari": True, "geeta": True}
 
     reply_text = persona.get_reply(text, mode, prefs, GEETA_WINDOW_OPEN)
     
     await message.reply_text(reply_text)
 
-# --- Error Handler ---
+# --- Error Handler (Corrected) ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Log Errors caused by Updates and send a gentle message if possible."""
     logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
     
-    if isinstance(context.error, TelegramError):
+    # Only try to send a message if the error is tied to a specific chat
+    # This check prevents the 'NoneType' error
+    if isinstance(context.error, TelegramError) and update and hasattr(update, 'effective_chat') and update.effective_chat: # <-- CHANGE HERE
         try:
             chat_id = update.effective_chat.id
             await context.bot.send_message(chat_id, "Sorry yaar, meri galti... kuch toh gadbad ho gayi. 🫶")
@@ -154,22 +156,15 @@ def main():
     """Start the bot."""
     db.init_db()
 
-    # Create the Application builder
     builder = Application.builder().token(config.TELEGRAM_TOKEN)
+    job_queue = JobQueue()
+    builder.job_queue(job_queue)
+    application = builder.build()
 
-    # Create and attach the JobQueue
-    job_queue = JobQueue() # <-- CHANGE HERE
-    builder.job_queue(job_queue) # <-- CHANGE HERE
-
-    # Build the application
-    application = builder.build() # <-- CHANGE HERE
-
-    # Schedule the daily jobs
     tz = pytz.timezone(config.GEETA_TIMEZONE)
     job_queue.run_daily(open_geeta_window, time(hour=7, minute=0, second=0, tzinfo=tz))
     job_queue.run_daily(close_geeta_window, time(hour=10, minute=0, second=0, tzinfo=tz))
 
-    # --- Register Handlers ---
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler(["meme", "shayari", "geeta"], toggle_feature_command))
@@ -178,7 +173,6 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
 
-    # Run the bot
     logger.info("Niyati is starting... ✨")
     application.run_polling()
 
