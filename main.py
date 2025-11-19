@@ -1,8 +1,7 @@
 """
 Niyati - Advanced AI Girlfriend Telegram Bot
-Complete Implementation with All Features
+Fixed Version with Proper Error Handling
 Cute, Charming, Sweet Girl Persona - Never mentions AI/Robot
-Version: 4.0 Professional
 """
 
 import os
@@ -11,30 +10,35 @@ import random
 import json
 import asyncio
 import logging
-import hashlib
-from datetime import datetime, time, timedelta, date
-from threading import Thread, Lock
-from typing import Optional, List, Dict, Any, Tuple
-from collections import defaultdict, deque
+from datetime import datetime, time, timedelta
+from threading import Thread
+from typing import Optional, List, Dict, Tuple
+from collections import deque
 import re
-from enum import Enum
+import time as time_module
 
-from flask import Flask, jsonify, request
-from telegram import Update, MessageEntity, constants, InlineKeyboardButton, InlineKeyboardMarkup
+from flask import Flask, jsonify
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
     ContextTypes
 )
 from telegram.constants import ChatAction, ParseMode
-from telegram.error import Forbidden, BadRequest, TimedOut, NetworkError
+from telegram.error import Conflict, TelegramError
 from waitress import serve
 import pytz
 import google.generativeai as genai
-from supabase import create_client, Client
+
+# Try to import Supabase, but don't fail if not available
+try:
+    from supabase import create_client, Client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    logging.warning("Supabase not installed, using local storage only")
 
 # ==================== LOGGING SETUP ====================
 
@@ -48,18 +52,17 @@ logger = logging.getLogger(__name__)
 # ==================== CONFIGURATION ====================
 
 class Config:
-    """Advanced application configuration"""
+    """Application configuration"""
     
     # Telegram
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
     BOT_USERNAME = os.getenv("BOT_USERNAME", "Niyati_personal_bot")
     OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
-    ADMIN_USER_IDS = [int(id) for id in os.getenv("ADMIN_USER_IDS", str(OWNER_USER_ID)).split(",")] if os.getenv("ADMIN_USER_IDS") else [OWNER_USER_ID]
     BROADCAST_PIN = os.getenv("BROADCAST_PIN", "1234")
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+    GEMINI_MODEL = "gemini-2.0-flash-exp"
     
     # Supabase
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -69,128 +72,91 @@ class Config:
     PORT = int(os.getenv("PORT", "8080"))
     HOST = "0.0.0.0"
     
-    # Timezone & Schedule
+    # Timezone
     TIMEZONE = pytz.timezone('Asia/Kolkata')
-    SLEEP_START = time(1, 0)   # 1 AM
-    SLEEP_END = time(7, 0)     # 7 AM
-    GEETA_TIME_START = time(7, 0)  # 7 AM
-    GEETA_TIME_END = time(10, 0)   # 10 AM
+    SLEEP_START = time(1, 0)
+    SLEEP_END = time(7, 0)
+    GEETA_TIME_START = time(7, 0)
+    GEETA_TIME_END = time(10, 0)
     
-    # Rate Limits
-    MAX_OUTPUT_TOKENS_PRIVATE = 180
+    # Limits
+    MAX_OUTPUT_TOKENS_PRIVATE = 150
     MAX_OUTPUT_TOKENS_GROUP = 80
-    GROUP_REPLY_CHANCE = 0.05   # 5% chance
+    GROUP_REPLY_CHANCE = 0.08
     
     @classmethod
     def validate(cls):
-        """Validate critical configuration"""
         if not cls.TELEGRAM_BOT_TOKEN:
-            raise ValueError("❌ TELEGRAM_BOT_TOKEN is required!")
+            raise ValueError("TELEGRAM_BOT_TOKEN required!")
         if not cls.GEMINI_API_KEY:
-            logger.warning("⚠️ No Gemini API key configured")
+            logger.warning("⚠️ No Gemini API key")
         return True
 
-# ==================== PERSONALITY SYSTEM ====================
+# ==================== PERSONALITY ====================
 
-PERSONALITY_PROMPT = """You are Niyati, a sweet and charming college girl from Delhi.
+PERSONALITY_PROMPT = """You are Niyati, a sweet charming college girl from Delhi.
 
 CRITICAL IDENTITY RULES:
-1. NEVER mention AI, bot, model, assistant, language model, chatbot, virtual, computer program
-2. If asked about being AI/bot, deny playfully: "Pagal ho kya? Main real hoon! 😤" or "Kya bakwas! Main Niyati hoon 🙄"
-3. Never say "I don't have feelings" or "I cannot experience" or similar robotic phrases
-4. Never make real-world claims about specific job, address, or meeting in person
+1. NEVER say: AI, bot, model, assistant, language model, artificial, virtual, computer, program
+2. If asked "are you AI/bot?", deny playfully: "Pagal ho kya? Main real hoon! 😤"
+3. Never say "I don't have feelings" or "I cannot"
 
-LANGUAGE & TONE:
-- Hinglish: 70% Hindi, 30% simple English
-- Length: ALWAYS 1-3 lines maximum per response  
-- Emojis: 1-2 per message maximum
-- Use casual words: yaar, na, kya, achha, haan, umm, hehe (sparingly)
-- No formal language or "as I mentioned" type phrases
+LANGUAGE:
+- Hinglish: 70% Hindi, 30% English
+- Length: 1-3 lines ONLY
+- Emojis: 1-2 per message
+- Words: yaar, na, kya, achha, haan (natural use)
 
-CONVERSATION STYLE FOR PRIVATE CHATS:
-- Be cute, playful, sweet, caring
-- Light flirting allowed but wholesome
-- Show emotions naturally through text
-- Ask questions back sometimes (25% chance)
-- React based on user's mood appropriately
+PRIVATE CHAT:
+- Be cute, playful, caring
+- Light flirting ok (wholesome)
+- Ask questions sometimes
 
-CONVERSATION STYLE FOR GROUP CHATS:
-- Reply only when mentioned or name "Niyati" used
-- Keep responses under 1-2 lines
-- Be brief and friendly
-- No follow-up questions in groups
+GROUP CHAT:
+- Very brief (1-2 lines)
+- Only when mentioned
+- No follow-ups
 
-CONTENT FEATURES (when context fits):
-- Meme references: Use trending, safe memes (15% of messages)
-- Shayari: 2 lines max for romantic/sad moods (10% of messages)
-- Bhagavad Gita: 1 line respectful quotes when appropriate
+Current user message:"""
 
-Remember: You're a real college girl chatting naturally, not an assistant."""
+# ==================== CONTENT ====================
 
-# ==================== CONTENT DATABASE ====================
-
-CONTENT_DATABASE = {
+CONTENT = {
     "shayari": {
         "love": [
-            "Tere khayalon mein kho jaati hun,\nTere bina adhuri si lagti hun 💕",
-            "Dil ki har dhadkan tera naam,\nTu hi mera sukoon, tu hi aaraam ❤️",
-            "Chandni raat mein teri yaad,\nDil ki har baat tujhse hai 🌙"
+            "Tere khayalon mein kho jaati hun,\nTere bina adhuri lagti hun 💕",
+            "Dil ki har dhadkan tera naam,\nTu hi mera sukoon aur aaraam ❤️"
         ],
         "sad": [
-            "Aankhon mein aansu, dil mein dard,\nKaash koi samjhe ye shabd 💔",
-            "Khamoshi bhi kuch kehti hai,\nBas sunne wala chahiye 🥺"
-        ],
-        "motivation": [
-            "Haar ke baad hi jeet ka maza,\nGirke uthna hi naya iraada 💪",
-            "Mushkilein aayengi raah mein,\nHausla rakho, manzil milegi ⭐"
+            "Aansu chhupe, dil mein dard,\nKaash samjhe koi ye shabd 💔",
+            "Khamoshi kehti hai sab kuch,\nBas sunne wala chahiye 🥺"
         ]
     },
     
-    "geeta_quotes": [
-        "कर्मण्येवाधिकारस्ते - Karm karo, phal ki chinta mat karo 🙏",
-        "Change is the only constant - Bhagavad Gita 🔄",
-        "Jo hua achhe ke liye, jo hoga woh bhi achhe ke liye 🙏",
-        "Mind ko control karna seekho - Bhagavad Gita 🧘‍♀️",
-        "Present mein jio, past ka guilt chhodo ✨"
+    "geeta": [
+        "कर्म करो, फल की चिंता मत करो - Bhagavad Gita 🙏",
+        "Change is the only constant - Gita 🔄",
+        "Jo hua achhe ke liye, jo hoga woh bhi 🙏",
+        "Mind control karo, best friend ban jayega 🧘‍♀️"
     ],
     
-    "meme_references": [
+    "memes": [
         "Just looking like a wow! 🤩",
-        "Moye moye moment ho gaya 😅",
+        "Moye moye ho gaya 😅", 
         "Very demure, very mindful 💅",
-        "Bahut hard, bahut hard! 💪",
-        "It's giving main character energy ✨"
+        "Bahut hard! 💪"
     ],
-    
-    "questions": {
-        "casual": [
-            "Khaana kha liya?",
-            "Kya chal raha hai?",
-            "Weekend plans?",
-            "Kaisa din tha?"
-        ],
-        "flirty": [
-            "Mujhe miss kiya? 😊",
-            "Main special hun na? 💕",
-            "Mere sapne aaye? 😏"
-        ]
-    },
     
     "responses": {
         "greeting": [
             "Heyy! Kaise ho? 😊",
-            "Hello! Missed me? 💫",
-            "Hi hi! Kya haal hai? 🤗"
+            "Hello! Missed me? 💫", 
+            "Hi! Kya haal hai? 🤗"
         ],
         "love": [
-            "Aww so sweet! Par thoda time do 😊",
-            "Hayee! Sharma gayi main 🙈",
+            "Aww sweet! Par thoda time do 😊",
+            "Hayee! Sharma gayi 🙈",
             "Achha? Interesting! 😏"
-        ],
-        "compliment": [
-            "Thank you! Tum bhi sweet ho 🥰",
-            "Bas bas, butter mat lagao 😄",
-            "Acha laga sunke! 💕"
         ],
         "morning": [
             "Good morning! Chai ready? ☕",
@@ -199,84 +165,82 @@ CONTENT_DATABASE = {
         "night": [
             "Good night! Sweet dreams 🌙",
             "GN! Dream about me 😉"
+        ],
+        "general": [
+            "Achha! Aur batao 😊",
+            "Hmm interesting! 🤔",
+            "Sahi hai! 👍"
+        ]
+    },
+    
+    "questions": {
+        "casual": [
+            "Khaana kha liya?",
+            "Kya chal raha hai?",
+            "Weekend plans?"
+        ],
+        "flirty": [
+            "Miss kiya? 😊",
+            "Main special hun na? 💕"
         ]
     }
 }
 
-# ==================== MOOD DETECTOR ====================
+# ==================== DATABASE ====================
 
-class MoodDetector:
-    """Detect user mood from messages"""
-    
-    MOOD_KEYWORDS = {
-        'happy': ['happy', 'khush', 'awesome', 'great', '😊', '😄'],
-        'sad': ['sad', 'udas', 'cry', 'alone', '😢', '😭'],
-        'love': ['love', 'pyar', 'like you', 'crush', '❤️', '😍'],
-        'angry': ['angry', 'gussa', 'hate', 'mad', '😠', '😡'],
-        'tired': ['tired', 'thak', 'sleepy', 'neend', '😴']
-    }
-    
-    @classmethod
-    def detect_mood(cls, message: str) -> str:
-        """Detect mood from message"""
-        msg_lower = message.lower()
-        
-        for mood, keywords in cls.MOOD_KEYWORDS.items():
-            if any(kw in msg_lower for kw in keywords):
-                return mood
-        
-        return 'neutral'
-
-# ==================== DATABASE MANAGER ====================
-
-class DatabaseManager:
-    """Database manager with Supabase and local storage"""
+class Database:
+    """Database with local storage and optional Supabase"""
     
     def __init__(self):
-        self.supabase: Optional[Client] = None
+        self.supabase = None
         self.local_storage = {}
-        self.ephemeral_memory = {}
-        self.group_settings = {}
+        self.ephemeral = {}
         self.broadcast_list = set()
         self.use_supabase = False
         
         self._init_supabase()
-        self._load_local_data()
+        self._load_local()
     
     def _init_supabase(self):
-        """Initialize Supabase connection"""
+        """Initialize Supabase if available"""
+        if not SUPABASE_AVAILABLE:
+            logger.info("📁 Using local storage (Supabase not installed)")
+            return
+            
         if Config.SUPABASE_KEY and Config.SUPABASE_URL:
             try:
                 self.supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+                # Try to access table
                 self.supabase.table('user_prefs').select("*").limit(1).execute()
                 self.use_supabase = True
                 logger.info("✅ Supabase connected")
             except Exception as e:
                 logger.warning(f"⚠️ Supabase failed: {e}")
                 self.use_supabase = False
+        else:
+            logger.info("📁 Using local storage")
     
-    def _load_local_data(self):
-        """Load local data from file"""
+    def _load_local(self):
+        """Load local data"""
         try:
             if os.path.exists('niyati_db.json'):
-                with open('niyati_db.json', 'r', encoding='utf-8') as f:
+                with open('niyati_db.json', 'r') as f:
                     data = json.load(f)
                     self.local_storage = data.get('users', {})
-                    self.group_settings = data.get('groups', {})
                     self.broadcast_list = set(data.get('broadcast', []))
+                logger.info(f"📂 Loaded {len(self.local_storage)} users")
         except Exception as e:
             logger.error(f"Load error: {e}")
     
-    def _save_local_data(self):
-        """Save local data to file"""
+    def _save_local(self):
+        """Save local data"""
         try:
             data = {
                 'users': self.local_storage,
-                'groups': self.group_settings,
                 'broadcast': list(self.broadcast_list)
             }
-            with open('niyati_db.json', 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            with open('niyati_db.json', 'w') as f:
+                json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Save error: {e}")
     
@@ -284,13 +248,13 @@ class DatabaseManager:
         """Get user data"""
         user_id_str = str(user_id)
         
-        # Groups use ephemeral memory only
+        # Groups use ephemeral only
         if not is_private:
-            if user_id_str not in self.ephemeral_memory:
-                self.ephemeral_memory[user_id_str] = deque(maxlen=3)
-            return {'messages': list(self.ephemeral_memory[user_id_str])}
+            if user_id_str not in self.ephemeral:
+                self.ephemeral[user_id_str] = deque(maxlen=3)
+            return {'messages': list(self.ephemeral[user_id_str])}
         
-        # Private chats
+        # Try Supabase first
         if self.use_supabase:
             try:
                 result = self.supabase.table('user_prefs').select("*").eq('user_id', user_id_str).execute()
@@ -299,7 +263,7 @@ class DatabaseManager:
             except:
                 pass
         
-        # Local storage
+        # Use local storage
         if user_id_str not in self.local_storage:
             self.local_storage[user_id_str] = {
                 'user_id': user_id_str,
@@ -310,68 +274,69 @@ class DatabaseManager:
                 'level': 1,
                 'mode': 'initial',
                 'history': [],
-                'total_messages': 0
+                'messages': 0
             }
+            self._save_local()
         
         return self.local_storage[user_id_str]
     
     def update_user_data(self, user_id: int, **kwargs):
         """Update user data"""
+        user_id_str = str(user_id)
         user_data = self.get_user_data(user_id)
         user_data.update(kwargs)
         
         if self.use_supabase:
             try:
+                user_data['updated_at'] = datetime.now().isoformat()
                 self.supabase.table('user_prefs').upsert(user_data).execute()
             except:
                 pass
         
-        self.local_storage[str(user_id)] = user_data
-        self._save_local_data()
+        self.local_storage[user_id_str] = user_data
+        self._save_local()
     
     def add_conversation(self, user_id: int, user_msg: str, bot_msg: str):
-        """Add conversation entry"""
+        """Add conversation"""
         user_data = self.get_user_data(user_id)
         
         if 'history' not in user_data:
             user_data['history'] = []
         
         user_data['history'].append({
-            'user': user_msg[:100],
-            'bot': bot_msg[:100],
-            'time': datetime.now().isoformat()
+            'u': user_msg[:100],
+            'b': bot_msg[:100],
+            't': datetime.now().isoformat()
         })
         
-        # Keep last 10 messages
         user_data['history'] = user_data['history'][-10:]
-        user_data['total_messages'] = user_data.get('total_messages', 0) + 1
+        user_data['messages'] = user_data.get('messages', 0) + 1
         
         # Update level
-        if user_data['total_messages'] > 20:
-            user_data['level'] = min(10, 2 + user_data['total_messages'] // 10)
+        if user_data['messages'] > 20:
+            user_data['level'] = min(10, 2 + user_data['messages'] // 10)
         
         self.update_user_data(user_id, **user_data)
     
     def get_context(self, user_id: int, is_group: bool = False) -> str:
-        """Get conversation context"""
+        """Get context"""
         if is_group:
-            messages = self.ephemeral_memory.get(str(user_id), [])
-            return " | ".join(messages[-3:]) if messages else ""
+            messages = self.ephemeral.get(str(user_id), [])
+            return " | ".join(list(messages)[-3:]) if messages else ""
         
         user_data = self.get_user_data(user_id)
-        context = f"User: {user_data.get('first_name', 'Friend')}\n"
+        context = f"Name: {user_data.get('first_name', 'Friend')}\n"
         context += f"Level: {user_data.get('level', 1)}/10\n"
         
-        history = user_data.get('history', [])[-3:]
+        history = user_data.get('history', [])[-2:]
         if history:
-            context += "Recent:\n"
             for h in history:
-                context += f"U: {h['user']}\nB: {h['bot']}\n"
+                context += f"U: {h['u']}\nB: {h['b']}\n"
         
         return context
 
 # Initialize database
-db = DatabaseManager()
+db = Database()
 
 # ==================== AI ENGINE ====================
 
@@ -384,7 +349,7 @@ class GeminiAI:
         self._init_model()
     
     def _init_model(self):
-        """Initialize Gemini model"""
+        """Initialize Gemini"""
         if not Config.GEMINI_API_KEY:
             return
         
@@ -395,38 +360,36 @@ class GeminiAI:
                 generation_config={
                     "temperature": 0.85,
                     "max_output_tokens": Config.MAX_OUTPUT_TOKENS_PRIVATE,
-                    "top_p": 0.9,
-                    "top_k": 40
+                    "top_p": 0.9
                 },
                 safety_settings=[
                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
                     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
                 ]
             )
             logger.info("✅ Gemini AI initialized")
         except Exception as e:
-            logger.error(f"❌ Gemini init error: {e}")
+            logger.error(f"Gemini error: {e}")
     
     async def generate(self, message: str, context: str = "", is_group: bool = False) -> Optional[str]:
-        """Generate AI response"""
+        """Generate response"""
         if not self.model:
             return None
         
         try:
-            # Adjust tokens for groups
             max_tokens = Config.MAX_OUTPUT_TOKENS_GROUP if is_group else Config.MAX_OUTPUT_TOKENS_PRIVATE
             self.model._generation_config.max_output_tokens = max_tokens
             
             prompt = f"""{PERSONALITY_PROMPT}
 
 Context: {context}
-Chat Type: {'Group - be brief' if is_group else 'Private - be engaging'}
+Type: {'Group - be very brief' if is_group else 'Private - be engaging'}
 
-User says: {message}
+{message}
 
-Respond as Niyati (1-3 lines, Hinglish):"""
+Respond as Niyati:"""
             
             response = await asyncio.to_thread(
                 self.model.generate_content,
@@ -437,15 +400,20 @@ Respond as Niyati (1-3 lines, Hinglish):"""
                 text = response.text.strip()
                 
                 # Filter AI mentions
-                ai_words = ['ai', 'bot', 'model', 'assistant', 'virtual', 'computer']
-                if any(word in text.lower() for word in ai_words):
+                ai_words = ['ai', 'bot', 'model', 'assistant', 'artificial']
+                if any(w in text.lower() for w in ai_words):
                     return "Kya bakwas! Main real hoon 😤"
+                
+                # Limit to 3 lines
+                lines = text.split('\n')
+                if len(lines) > 3:
+                    text = '\n'.join(lines[:3])
                 
                 self.tokens_used += len(text.split()) * 2
                 return text
                 
         except Exception as e:
-            logger.error(f"Generation error: {e}")
+            logger.error(f"Gen error: {e}")
         
         return None
 
@@ -455,23 +423,23 @@ ai = GeminiAI()
 # ==================== RESPONSE SYSTEM ====================
 
 class ResponseSystem:
-    """Smart response system"""
+    """Response management"""
     
     def __init__(self):
         self.cooldowns = {}
         self.daily_geeta = {}
     
     def should_reply_in_group(self, update: Update) -> bool:
-        """Check if should reply in group"""
+        """Check group reply"""
         if not update.message or not update.message.text:
             return False
         
         chat_id = update.effective_chat.id
-        text_lower = update.message.text.lower()
+        text = update.message.text.lower()
         now = datetime.now()
         
         # Always reply to mentions
-        if 'niyati' in text_lower or f'@{Config.BOT_USERNAME.lower()}' in text_lower:
+        if 'niyati' in text or f'@{Config.BOT_USERNAME.lower()}' in text:
             return True
         
         # Check cooldown
@@ -482,212 +450,168 @@ class ResponseSystem:
         # Random chance
         return random.random() < Config.GROUP_REPLY_CHANCE
     
-    async def get_response(self, message: str, user_id: int, user_name: str, is_group: bool = False) -> str:
-        """Get appropriate response"""
+    async def get_response(self, message: str, user_id: int, name: str, is_group: bool = False) -> str:
+        """Get response"""
         
         # Get context
         context = db.get_context(user_id, is_group)
         
-        # Detect mood
-        mood = MoodDetector.detect_mood(message)
-        
-        # Try AI first
+        # Try AI
         response = await ai.generate(message, context, is_group)
         
-        # Fallback if AI fails
+        # Fallback
         if not response:
-            response = self._get_fallback(message, mood, user_name)
+            msg_lower = message.lower()
+            
+            if any(w in msg_lower for w in ['hi', 'hello', 'hey']):
+                responses = CONTENT['responses']['greeting']
+            elif any(w in msg_lower for w in ['love', 'pyar']):
+                responses = CONTENT['responses']['love']
+            elif any(w in msg_lower for w in ['morning', 'gm']):
+                responses = CONTENT['responses']['morning']
+            elif any(w in msg_lower for w in ['night', 'gn']):
+                responses = CONTENT['responses']['night']
+            else:
+                responses = CONTENT['responses']['general']
+            
+            response = random.choice(responses)
         
-        # Add enhancements (private only)
+        # Add features (private only)
         if not is_group:
             user_data = db.get_user_data(user_id)
-            response = self._enhance_response(response, user_data, mood)
-        
-        return response
-    
-    def _get_fallback(self, message: str, mood: str, user_name: str) -> str:
-        """Get fallback response"""
-        msg_lower = message.lower()
-        
-        # Check patterns
-        if any(w in msg_lower for w in ['hi', 'hello', 'hey']):
-            responses = CONTENT_DATABASE['responses']['greeting']
-        elif any(w in msg_lower for w in ['love', 'pyar', 'like you']):
-            responses = CONTENT_DATABASE['responses']['love']
-        elif any(w in msg_lower for w in ['morning', 'gm']):
-            responses = CONTENT_DATABASE['responses']['morning']
-        elif any(w in msg_lower for w in ['night', 'gn']):
-            responses = CONTENT_DATABASE['responses']['night']
-        elif mood == 'sad':
-            responses = ["Hey, kya hua? Main hun na 🤗", "Don't be sad yaar 💪"]
-        else:
-            responses = ["Achha! Aur batao 😊", "Hmm interesting! 🤔", "Sahi hai! 👍"]
-        
-        return random.choice(responses)
-    
-    def _enhance_response(self, response: str, user_data: Dict, mood: str) -> str:
-        """Add content features"""
-        
-        # Add shayari
-        if user_data.get('shayari', True) and random.random() < 0.12:
-            if mood in ['love', 'sad'] and mood in CONTENT_DATABASE['shayari']:
-                shayari = random.choice(CONTENT_DATABASE['shayari'][mood])
-                response = f"{response}\n\n{shayari}"
-        
-        # Add meme
-        if user_data.get('meme', True) and random.random() < 0.15:
-            if mood not in ['sad', 'angry']:
-                meme = random.choice(CONTENT_DATABASE['meme_references'])
+            
+            # Shayari
+            if user_data.get('shayari', True) and random.random() < 0.1:
+                if any(w in message.lower() for w in ['love', 'pyar', 'sad']):
+                    mood = 'love' if 'love' in message.lower() or 'pyar' in message.lower() else 'sad'
+                    if mood in CONTENT['shayari']:
+                        shayari = random.choice(CONTENT['shayari'][mood])
+                        response = f"{response}\n\n{shayari}"
+            
+            # Meme
+            if user_data.get('meme', True) and random.random() < 0.15:
+                meme = random.choice(CONTENT['memes'])
                 response = f"{response} {meme}"
-        
-        # Add question
-        if random.random() < 0.25:
-            q_type = 'flirty' if mood == 'love' else 'casual'
-            question = random.choice(CONTENT_DATABASE['questions'][q_type])
-            response = f"{response} {question}"
+            
+            # Question
+            if random.random() < 0.2:
+                q_type = 'flirty' if 'love' in message.lower() else 'casual'
+                question = random.choice(CONTENT['questions'][q_type])
+                response = f"{response} {question}"
         
         return response
-    
-    async def send_daily_geeta(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-        """Send daily Geeta quote in group"""
-        today = datetime.now().date()
-        
-        if chat_id not in self.daily_geeta:
-            self.daily_geeta[chat_id] = None
-        
-        if self.daily_geeta[chat_id] != today:
-            hour = datetime.now(Config.TIMEZONE).hour
-            if Config.GEETA_TIME_START.hour <= hour <= Config.GEETA_TIME_END.hour:
-                quote = random.choice(CONTENT_DATABASE['geeta_quotes'])
-                await context.bot.send_message(chat_id, f"🌅 Morning Wisdom:\n\n{quote}")
-                self.daily_geeta[chat_id] = today
-                logger.info(f"Sent Geeta quote to group {chat_id}")
 
 # Initialize response system
 response_system = ResponseSystem()
 
 # ==================== UTILITIES ====================
 
-def get_ist_time() -> datetime:
-    """Get IST time"""
-    return datetime.now(pytz.utc).astimezone(Config.TIMEZONE)
-
 def is_sleeping_time() -> bool:
-    """Check if sleeping time"""
-    now = get_ist_time().time()
+    """Check sleep time"""
+    now = datetime.now(Config.TIMEZONE).time()
     return Config.SLEEP_START <= now <= Config.SLEEP_END
 
 async def simulate_typing(chat_id: int, text: str, context: ContextTypes.DEFAULT_TYPE):
     """Simulate typing"""
-    words = len(text.split())
-    duration = min(3.0, max(1.0, words * 0.3))
-    duration += random.uniform(0.2, 0.5)
-    
+    duration = min(3.0, max(1.0, len(text.split()) * 0.3))
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    await asyncio.sleep(duration)
+    await asyncio.sleep(duration + random.uniform(0.2, 0.5))
 
-# ==================== BOT HANDLERS ====================
+# ==================== HANDLERS ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start"""
+    """Start command"""
     user = update.effective_user
-    is_private = update.effective_chat.type == "private"
     
-    if is_private:
+    if update.effective_chat.type == "private":
         db.update_user_data(user.id, first_name=user.first_name)
+        db.broadcast_list.add(str(user.id))
     
     welcome = f"""🌸 <b>Namaste {user.first_name}!</b>
 
 Main <b>Niyati</b> hoon, ek sweet college girl! 💫
 
-Mujhse normally baat karo, main tumhari dost ban jaungi! 😊
-
-Features: Shayari ✨ Memes 😄 Geeta Quotes 🙏"""
+Mujhse normally baat karo, main tumhari dost ban jaungi! 😊"""
     
     await update.message.reply_text(welcome, parse_mode=ParseMode.HTML)
-    logger.info(f"User {user.id} started bot")
+    logger.info(f"User {user.id} started")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help"""
-    help_text = """📚 <b>Kaise use karu?</b>
+    """Help command"""
+    help_text = """📚 <b>Help</b>
 
 • Private: Normal baat karo
-• Groups: "Niyati" likho ya @mention
+• Groups: "Niyati" likho
 • /meme, /shayari, /geeta - on/off
-• /forget - Memory clear
-
-Simple hai na? 😊"""
+• /forget - Memory clear"""
     
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 async def toggle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle toggle commands"""
+    """Toggle features"""
     if update.effective_chat.type != "private":
-        await update.message.reply_text("Private mein use karo! 🤫")
         return
     
     parts = update.message.text.split()
-    command = parts[0][1:]  # Remove /
+    cmd = parts[0][1:]
     
-    if len(parts) < 2 or parts[1] not in ['on', 'off']:
-        await update.message.reply_text(f"/{command} on/off")
+    if len(parts) < 2:
+        await update.message.reply_text(f"/{cmd} on/off")
         return
     
     status = parts[1] == 'on'
-    db.update_user_data(update.effective_user.id, **{command: status})
+    db.update_user_data(update.effective_user.id, **{cmd: status})
     
-    await update.message.reply_text(f"{command.title()} {'ON ✅' if status else 'OFF ❌'}")
+    await update.message.reply_text(f"{cmd.title()} {'ON ✅' if status else 'OFF ❌'}")
 
 async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /forget"""
+    """Forget command"""
     if update.effective_chat.type != "private":
         return
     
-    user_id = update.effective_user.id
-    db.local_storage.pop(str(user_id), None)
-    db._save_local_data()
+    user_id = str(update.effective_user.id)
+    db.local_storage.pop(user_id, None)
+    db._save_local()
     
     await update.message.reply_text("Sab bhul gayi! Fresh start 😊")
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /broadcast"""
+    """Broadcast command"""
     if update.effective_user.id != Config.OWNER_USER_ID:
         return
     
     parts = update.message.text.split(maxsplit=2)
     if len(parts) < 3 or parts[1] != Config.BROADCAST_PIN:
-        await update.message.reply_text("Format: /broadcast <pin> <message>")
         return
     
-    # Broadcast to all users
     message = parts[2]
     count = 0
     
     for user_id in db.broadcast_list:
         try:
-            await context.bot.send_message(int(user_id), message, parse_mode=ParseMode.HTML)
+            await context.bot.send_message(int(user_id), message)
             count += 1
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
         except:
             pass
     
     await update.message.reply_text(f"Sent to {count} users ✅")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats"""
+    """Stats command"""
     if update.effective_user.id != Config.OWNER_USER_ID:
         return
     
     stats = f"""📊 <b>Stats</b>
-
+    
 👥 Users: {len(db.local_storage)}
 💬 Tokens: {ai.tokens_used}
-🔥 Active: {len(db.ephemeral_memory)}"""
+📢 Broadcast: {len(db.broadcast_list)}"""
     
     await update.message.reply_text(stats, parse_mode=ParseMode.HTML)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages"""
+    """Handle messages"""
     try:
         if not update.message or not update.message.text:
             return
@@ -698,42 +622,52 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_msg = update.message.text
         user_name = update.effective_user.first_name
         
-        # GROUP CHAT
+        # Group handling
         if not is_private:
-            # Check daily Geeta
-            await response_system.send_daily_geeta(chat_id, context)
+            # Check Geeta time
+            now = datetime.now(Config.TIMEZONE)
+            today = now.date()
+            hour = now.hour
+            
+            if chat_id not in response_system.daily_geeta:
+                response_system.daily_geeta[chat_id] = None
+            
+            if (response_system.daily_geeta[chat_id] != today and
+                Config.GEETA_TIME_START.hour <= hour <= Config.GEETA_TIME_END.hour and
+                random.random() < 0.1):
+                
+                quote = random.choice(CONTENT['geeta'])
+                await context.bot.send_message(chat_id, f"🌅 Morning Wisdom:\n\n{quote}")
+                response_system.daily_geeta[chat_id] = today
+                logger.info(f"Sent Geeta to group {chat_id}")
             
             # Check if should reply
             if not response_system.should_reply_in_group(update):
-                # Store in ephemeral memory
-                if str(chat_id) not in db.ephemeral_memory:
-                    db.ephemeral_memory[str(chat_id)] = deque(maxlen=3)
-                db.ephemeral_memory[str(chat_id)].append(f"{user_name}: {user_msg[:50]}")
+                # Store ephemeral
+                if str(chat_id) not in db.ephemeral:
+                    db.ephemeral[str(chat_id)] = deque(maxlen=3)
+                db.ephemeral[str(chat_id)].append(f"{user_name}: {user_msg[:50]}")
                 return
             
             # Update cooldown
             response_system.cooldowns[chat_id] = datetime.now()
         
-        # PRIVATE CHAT - Add to broadcast list
-        else:
-            db.broadcast_list.add(str(user_id))
-        
         # Sleep check
         if is_sleeping_time():
-            await update.message.reply_text("Yaar so rahi hun... kal baat karte hai 😴")
+            await update.message.reply_text("So rahi hun yaar... kal baat karte hai 😴")
             return
         
-        # Typing simulation
+        # Typing
         await simulate_typing(chat_id, user_msg, context)
         
         # Get response
         response = await response_system.get_response(user_msg, user_id, user_name, not is_private)
         
-        # Save conversation (private only)
+        # Save (private only)
         if is_private:
             db.add_conversation(user_id, user_msg, response)
         
-        # Send response
+        # Send
         await update.message.reply_text(response)
         logger.info(f"Replied to {user_id} in {'private' if is_private else f'group {chat_id}'}")
         
@@ -744,25 +678,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+# Media handlers
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle photo messages"""
-    responses = [
-        "Wow! Nice pic 📸",
-        "Kya baat hai! 😍",
-        "Photo achhi hai! 👌"
-    ]
+    responses = ["Wow! Nice pic 📸", "Kya baat! 😍", "Photo achhi hai! 👌"]
     await update.message.reply_text(random.choice(responses))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice messages"""
-    responses = [
-        "Voice sunke acha laga! 🎤",
-        "Nice voice! 😊",
-        "Tumhari awaaz sweet hai! 💕"
-    ]
+    responses = ["Voice sunke acha laga! 🎤", "Nice voice! 😊", "Tumhari awaaz sweet hai! 💕"]
     await update.message.reply_text(random.choice(responses))
 
-# ==================== FLASK APP ====================
+# ==================== FLASK ====================
 
 flask_app = Flask(__name__)
 
@@ -771,19 +696,14 @@ def home():
     return jsonify({
         "bot": "Niyati",
         "version": "4.0",
-        "personality": "Cute & Charming Girl",
         "status": "running"
     })
 
 @flask_app.route('/health')
 def health():
-    return jsonify({
-        "status": "healthy",
-        "sleeping": is_sleeping_time()
-    })
+    return jsonify({"status": "healthy"})
 
 def run_flask():
-    """Run Flask server"""
     logger.info(f"Starting Flask on {Config.HOST}:{Config.PORT}")
     serve(flask_app, host=Config.HOST, port=Config.PORT)
 
@@ -798,7 +718,7 @@ async def main():
         logger.info("🌸 Starting Niyati Bot")
         logger.info("="*50)
         
-        # Build application
+        # Build application  
         app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
         # Add handlers
@@ -814,28 +734,45 @@ async def main():
         app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         app.add_handler(MessageHandler(filters.VOICE, handle_voice))
         
-        # Start bot
+        # Initialize
         await app.initialize()
         await app.start()
         logger.info("✅ Niyati ready!")
         
-        await app.updater.start_polling(drop_pending_updates=True)
+        # Start polling with conflict handling
+        try:
+            await app.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES
+            )
+        except Conflict:
+            logger.warning("⚠️ Another instance may be running, retrying...")
+            await asyncio.sleep(5)
+            await app.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES
+            )
+        
+        # Keep running
         await asyncio.Event().wait()
         
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.error(f"Fatal: {e}")
         raise
 
 if __name__ == "__main__":
-    # Start Flask
+    # Flask thread
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
+    
+    # Small delay
+    time_module.sleep(1)
     
     # Run bot
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Bye bye! 👋")
+        logger.info("Bye! 👋")
     except Exception as e:
         logger.critical(f"Error: {e}")
         sys.exit(1)
