@@ -1,4 +1,4 @@
-# --- main.py ---
+# --- main.py (Corrected) ---
 
 import logging
 import random
@@ -6,7 +6,8 @@ from datetime import time
 import pytz
 
 from telegram import Update, Chat
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, JobQueue
+# JobQueue is now imported directly
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, JobQueue # <-- CHANGE HERE
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
@@ -125,26 +126,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = "private" if chat.type == Chat.PRIVATE else "group"
     
-    # Group chat logic: Reply only on mention
     if mode == 'group' and f"@{config.BOT_USERNAME}" not in text:
-        return # Do nothing if not mentioned
+        return
 
-    # Get user preferences for private chat
     prefs = {}
     if mode == 'private':
+        db.get_or_create_user(user.id, user.first_name) # Ensure user exists
         prefs = db.get_user_prefs(user.id) or {"memes": True, "shayari": True, "geeta": True}
 
-    # Generate reply from persona
     reply_text = persona.get_reply(text, mode, prefs, GEETA_WINDOW_OPEN)
     
     await message.reply_text(reply_text)
 
 # --- Error Handler ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Log Errors caused by Updates."""
     logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
     
-    # Soft acknowledgment for API errors
     if isinstance(context.error, TelegramError):
         try:
             chat_id = update.effective_chat.id
@@ -155,33 +152,33 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 # --- Main Function ---
 def main():
     """Start the bot."""
-    # Initialize the database
     db.init_db()
 
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+    # Create the Application builder
+    builder = Application.builder().token(config.TELEGRAM_TOKEN)
 
-    # Setup JobQueue for scheduled tasks
-    job_queue = application.job_queue
+    # Create and attach the JobQueue
+    job_queue = JobQueue() # <-- CHANGE HERE
+    builder.job_queue(job_queue) # <-- CHANGE HERE
+
+    # Build the application
+    application = builder.build() # <-- CHANGE HERE
+
+    # Schedule the daily jobs
     tz = pytz.timezone(config.GEETA_TIMEZONE)
     job_queue.run_daily(open_geeta_window, time(hour=7, minute=0, second=0, tzinfo=tz))
     job_queue.run_daily(close_geeta_window, time(hour=10, minute=0, second=0, tzinfo=tz))
 
     # --- Register Handlers ---
-    # Commands
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler(["meme", "shayari", "geeta"], toggle_feature_command))
     application.add_handler(CommandHandler("forget", forget_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
-
-    # Messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Errors
     application.add_error_handler(error_handler)
 
-    # Run the bot until the user presses Ctrl-C
+    # Run the bot
     logger.info("Niyati is starting... ✨")
     application.run_polling()
 
