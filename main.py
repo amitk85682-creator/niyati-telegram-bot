@@ -1533,12 +1533,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.update_user_data(user.id, first_name=user.first_name)
         db.broadcast_list.add(str(user.id))
     
-    welcome = f"""🌸 <b>Namaste {user.first_name}!</b>
+    welcome = (
+        f"\U0001F338 <b>Namaste {user.first_name}!</b>\n\n"
+        "Main <b>Niyati</b> hoon, ek sweet college girl! \U0001F4AB\n\n"
+        "Mujhse normally baat karo, main tumhari dost ban jaungi! \U0001F60A"
+    )
 
-Main <b>Niyati</b> hoon, ek sweet college girl! 💫
-
-Mujhse normally baat karo, main tumhari dost ban jaungi! 😊"""
-    
     await update.message.reply_text(welcome, parse_mode=ParseMode.HTML)
     logger.info(f"User {user.id} started")
 
