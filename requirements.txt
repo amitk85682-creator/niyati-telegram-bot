@@ -1,4 +1,4 @@
-python-telegram-bot
+python-telegram-bot[job-queue]
 flask==2.3.3
 google-genai
 aiohttp==3.13.1
