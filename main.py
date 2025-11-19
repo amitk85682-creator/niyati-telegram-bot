@@ -1545,12 +1545,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Help command"""
-    help_text = "\U0001F4DA <b>Help</b>
-
-• Private: Normal baat karo
-• Groups: "Niyati" likho
-• /meme, /shayari, /geeta - on/off
-• /forget - Memory clear"""
+    help_text = (
+        "\U0001F4DA <b>Help</b>\n\n"
+        "• Private: Normal baat karo\n"
+        "• Groups: 'Niyati' likho\n"
+        "• /meme, /shayari, /geeta - on/off\n"
+        "• /forget - Memory clear"
+    )
     
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
@@ -1609,11 +1610,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != Config.OWNER_USER_ID:
         return
     
-    stats = f"\U0001F4CA <b>Stats</b>
-    
-👥 Users: {len(db.local_storage)}
-💬 Tokens: {ai.tokens_used}
-📢 Broadcast: {len(db.broadcast_list)}"""
+    stats = (
+        f"\U0001F4CA <b>Stats</b>\n\n"
+        f"👥 Users: {len(db.local_storage)}\n"
+        f"💬 Tokens: {ai.tokens_used}\n"
+        f"📢 Broadcast: {len(db.broadcast_list)}"
+    )
     
     await update.message.reply_text(stats, parse_mode=ParseMode.HTML)
 
