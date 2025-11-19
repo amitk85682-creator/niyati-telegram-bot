@@ -1,20 +1,20 @@
 # --- config.py ---
 
 # Replace with the token you get from BotFather
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_BOT_TOKEN = "7833989616:AAEopVatvSTIrIWsiqoaMjgZ4URnKeHwUSM"
 
 # Replace with the numerical Telegram User IDs of the admins
 # You can get your ID by messaging @userinfobot
-ADMIN_IDS = {123456789, 987654321}
+OWNER_USER_ID = {6946322342}
 
 # A secret PIN for the /broadcast command to prevent misuse
-BROADCAST_PIN = "NIYATI_PIN_123"
+BROADCAST_PIN = "niyati_secret_2025"
 
 # Database file name
-DB_NAME = "niyati_bot.db"
+DB_NAME = "NiyatiBot"
 
 # Timezone for the Geeta quote window (e.g., 'Asia/Kolkata')
 GEETA_TIMEZONE = "Asia/Kolkata"
 
 # Bot's username (without the '@')
-BOT_USERNAME = "Niyati_personal_bot"
+BOT_USERNAME = "@Niyati_personal_bot"
