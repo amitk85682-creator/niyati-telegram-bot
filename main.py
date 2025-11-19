@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Niyati - Advanced AI Girlfriend Telegram Bot
 Fixed Version 5.0 - All Errors Resolved
