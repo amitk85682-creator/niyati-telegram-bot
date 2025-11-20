@@ -63,7 +63,7 @@ class Config:
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-2.0-flash-exp"
+    GEMINI_MODEL = "gemini-3-pro"
     
     # Supabase
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -1074,7 +1074,7 @@ class Config:
     
     # Gemini AI
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = "gemini-2.0-flash-exp"
+    GEMINI_MODEL = "gemini-3-pro"
     
     # Supabase
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
