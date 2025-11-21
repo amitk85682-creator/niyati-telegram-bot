@@ -440,7 +440,7 @@ class DatabaseManager:
 
 
 # ============================================================================
-# AI CLIENT MANAGER
+# AI CLIENT MANAGER (FINAL CLEANUP)
 # ============================================================================
 
 class AIClientManager:
@@ -448,17 +448,22 @@ class AIClientManager:
     
     def __init__(self):
         self.provider = Config.AI_PROVIDER
+        self.model = ""
+        self.client = None # Keeps the structure clean
         
         if self.provider == "openai":
+            # For OpenAI, we rely on the global key set by the library
             openai.api_key = Config.OPENAI_API_KEY
             self.model = Config.OPENAI_MODEL
-            self.client = None
+            # No client object is needed for the older OpenAI library style
+            
         elif self.provider == "anthropic":
+            # If AI_PROVIDER was somehow set back to anthropic, 
+            # this will try to initialize it. We keep the proxy clearing at the top 
+            # of the file to protect this.
             try:
-                # Simple initialization without custom HTTP client
                 self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
                 self.model = Config.ANTHROPIC_MODEL
-                logger.info("Anthropic client initialized successfully")
             except Exception as e:
                 logger.error(f"Anthropic initialization failed: {e}")
                 raise
@@ -467,40 +472,27 @@ class AIClientManager:
         
         logger.info(f"AI Client initialized with provider: {self.provider}, model: {self.model}")
     
-    async def get_response(self, system_prompt: str, messages: List[Dict[str, str]], 
-                          max_tokens: int = None) -> str:
-        """Get AI response from configured provider"""
-        if max_tokens is None:
-            max_tokens = Config.MAX_TOKENS_PER_RESPONSE
-        
-        try:
-            if self.provider == "openai":
-                return await self._get_openai_response(system_prompt, messages, max_tokens)
-            elif self.provider == "anthropic":
-                return await self._get_anthropic_response(system_prompt, messages, max_tokens)
-        except Exception as e:
-            logger.error(f"AI API error: {e}")
-            fallback_responses = [
-                "hmm, thoda sa network issue aa raha… ek sec! 🫶",
-                "ek minute, connection thoda slow hai… 😅",
-                "sorry yaar, thoda technical issue aa gaya! phir try karo 🫶"
-            ]
-            return random.choice(fallback_responses)
+    # ... (rest of get_response is fine)
     
     async def _get_openai_response(self, system_prompt: str, messages: List[Dict[str, str]], 
                                    max_tokens: int) -> str:
         """Get response from OpenAI"""
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         
+        # We use asyncio.to_thread for the synchronous API call
         response = await asyncio.to_thread(
             openai.chat.completions.create,
             model=self.model,
             messages=full_messages,
             max_tokens=max_tokens,
             temperature=0.8,
+            # For the older library style, proxy issues should be handled by 
+            # environment clearing, but if they persist, this is the safest call.
         )
         
         return response.choices[0].message.content.strip()
+    
+    # ... (rest of _get_anthropic_response is fine)
     
     async def _get_anthropic_response(self, system_prompt: str, messages: List[Dict[str, str]], 
                                       max_tokens: int) -> str:
