@@ -443,18 +443,14 @@ class AIClientManager:
     """Manages AI API calls to OpenAI or Anthropic"""
     
     def __init__(self):
-        self.provider = Config.AI_PROVIDER
+        self.provider = Config.AI_PROVIDER [cite: 1]
         
         if self.provider == "openai":
-            openai.api_key = Config.OPENAI_API_KEY
-            self.model = Config.OPENAI_MODEL
+            # ... OpenAI setup
         elif self.provider == "anthropic":
-            self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
-            self.model = Config.ANTHROPIC_MODEL
-        else:
-            raise ValueError(f"Unknown AI provider: {self.provider}")
-        
-        logger.info(f"AI Client initialized with provider: {self.provider}, model: {self.model}")
+            self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY) [cite: 1]
+            self.model = Config.ANTHROPIC_MODEL [cite: 1]
+        # ...
     
     async def get_response(self, system_prompt: str, messages: List[Dict[str, str]], 
                           max_tokens: int = None) -> str:
