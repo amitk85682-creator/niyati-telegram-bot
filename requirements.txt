@@ -18,7 +18,7 @@ anthropic==0.18.1
 openai==1.12.0
 # For memory/embeddings
 sentence-transformers==2.2.2
-torch==2.2.1
+torch
 torchvision==0.17.1
 faiss-cpu==1.7.4 # For fast similarity search, CPU version
 numpy==1.26.4
