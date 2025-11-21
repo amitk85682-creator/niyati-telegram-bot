@@ -1223,23 +1223,55 @@ class NiyatiBot:
 
 
 # ============================================================================
-# MAIN ENTRY POINT
+# HEALTH CHECK SERVER (FOR RENDER WEB SERVICE)
 # ============================================================================
 
-def main():
-    """Main entry point"""
-    logger.info("=" * 60)
-    logger.info("NIYATI TELEGRAM BOT")
-    logger.info("=" * 60)
-    logger.info(f"AI Provider: {Config.AI_PROVIDER}")
-    logger.info(f"Model: {Config.ANTHROPIC_MODEL if Config.AI_PROVIDER == 'anthropic' else Config.OPENAI_MODEL}")
-    logger.info(f"Database: {Config.DB_PATH}")
-    logger.info(f"Admin IDs: {Config.ADMIN_USER_IDS}")
-    logger.info("=" * 60)
+from aiohttp import web
+import threading
+
+class HealthCheckServer:
+    """Simple HTTP server for Render health checks"""
     
+    def __init__(self, port: int = 8080):
+        self.port = port
+        self.app = web.Application()
+        self.app.router.add_get('/', self.health_check)
+        self.app.router.add_get('/health', self.health_check)
+        self.runner = None
+    
+    async def health_check(self, request):
+        """Health check endpoint"""
+        return web.json_response({
+            "status": "healthy",
+            "bot": "Niyati",
+            "version": "1.0.0",
+            "timestamp": datetime.now().isoformat()
+        })
+    
+    async def start(self):
+        """Start the HTTP server"""
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        site = web.TCPSite(self.runner, '0.0.0.0', self.port)
+        await site.start()
+        logger.info(f"Health check server started on port {self.port}")
+    
+    async def stop(self):
+        """Stop the HTTP server"""
+        if self.runner:
+            await self.runner.cleanup()
+
+
+# ============================================================================
+# MAIN ENTRY POINT (UPDATED)
+# ============================================================================
+
+async def run_bot_with_health_server():
+    """Run bot with health check server"""
+    
+    # Validate configuration
     if not Config.TELEGRAM_BOT_TOKEN or Config.TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logger.error("ERROR: TELEGRAM_BOT_TOKEN not configured!")
-        logger.error("Set environment variable: TELEGRAM_BOT_TOKEN=your_token_here")
         return
     
     if Config.AI_PROVIDER == "openai" and not Config.OPENAI_API_KEY:
@@ -1250,16 +1282,54 @@ def main():
         logger.error("ERROR: ANTHROPIC_API_KEY not configured!")
         return
     
+    # Start health check server
+    port = int(os.getenv("PORT", "8080"))
+    health_server = HealthCheckServer(port=port)
+    await health_server.start()
+    
+    logger.info("=" * 60)
+    logger.info("NIYATI TELEGRAM BOT")
+    logger.info("=" * 60)
+    logger.info(f"Health server: http://0.0.0.0:{port}")
+    logger.info(f"AI Provider: {Config.AI_PROVIDER}")
+    logger.info(f"Model: {Config.ANTHROPIC_MODEL if Config.AI_PROVIDER == 'anthropic' else Config.OPENAI_MODEL}")
+    logger.info(f"Database: {Config.DB_PATH}")
+    logger.info("=" * 60)
+    
+    # Start bot
     try:
         bot = NiyatiBot()
         logger.info("Bot initialized successfully!")
         logger.info("Starting polling...")
-        bot.run()
+        
+        # Run bot in polling mode
+        await bot.application.initialize()
+        await bot.application.start()
+        await bot.application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        
+        # Keep running
+        logger.info("Bot is running! Press Ctrl+C to stop.")
+        await asyncio.Event().wait()  # Run forever
+        
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         raise
+    finally:
+        if bot.application.running:
+            await bot.application.updater.stop()
+            await bot.application.stop()
+            await bot.application.shutdown()
+        await health_server.stop()
+
+
+def main():
+    """Main entry point"""
+    try:
+        asyncio.run(run_bot_with_health_server())
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
 
 
 if __name__ == "__main__":
