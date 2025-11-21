@@ -450,34 +450,17 @@ class AIClientManager:
             self.model = Config.OPENAI_MODEL
             self.client = None
         elif self.provider == "anthropic":
-            # Fixed initialization - avoid proxy issues
+            # This handles the 'proxies' TypeError directly by overriding environment settings.
             try:
-                # Use default HTTP client without custom proxy configuration
-                import httpx
-                
-                # Create a simple HTTP client without proxies
-                http_client = httpx.Client(
-                    timeout=httpx.Timeout(60.0, connect=10.0),
-                    follow_redirects=True,
-                )
-                
-                # Initialize Anthropic client with explicit http_client
                 self.client = Anthropic(
                     api_key=Config.ANTHROPIC_API_KEY,
-                    http_client=http_client,
+                    # This line is the direct fix for the TypeError:
+                    proxies=None 
                 )
                 self.model = Config.ANTHROPIC_MODEL
-                logger.info("Anthropic client initialized successfully")
             except Exception as e:
-                logger.error(f"Failed to initialize Anthropic client: {e}")
-                # Fallback: try simple initialization without custom HTTP client
-                try:
-                    self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
-                    self.model = Config.ANTHROPIC_MODEL
-                    logger.info("Anthropic client initialized with default settings")
-                except Exception as e2:
-                    logger.error(f"Anthropic initialization failed completely: {e2}")
-                    raise
+                logger.error(f"Anthropic initialization failed: {e}")
+                raise # Stop execution if client cannot be made
         else:
             raise ValueError(f"Unknown AI provider: {self.provider}")
         
