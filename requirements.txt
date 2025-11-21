@@ -16,3 +16,4 @@ requests==2.31.0
 google-generativeai
 anthropic==0.18.1
 openai==1.12.0
+sqlalchemy
