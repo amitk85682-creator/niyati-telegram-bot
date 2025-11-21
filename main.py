@@ -443,13 +443,14 @@ class AIClientManager:
     """Manages AI API calls to OpenAI or Anthropic"""
     
     def __init__(self):
-        self.provider = Config.AI_PROVIDER [cite: 1]
+        [cite_start]self.provider = Config.AI_PROVIDER [cite: 1]
         
         if self.provider == "openai":
             # ... OpenAI setup
+        # The 'elif' block should be aligned correctly here:
         elif self.provider == "anthropic":
-            self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY) [cite: 1]
-            self.model = Config.ANTHROPIC_MODEL [cite: 1]
+            [cite_start]self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY) [cite: 1]
+            [cite_start]self.model = Config.ANTHROPIC_MODEL [cite: 1]
         # ...
     
     async def get_response(self, system_prompt: str, messages: List[Dict[str, str]], 
