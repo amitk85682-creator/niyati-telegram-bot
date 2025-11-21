@@ -12,4 +12,5 @@ typing-extensions==4.15.0
 gtts
 requests==2.31.0
 google-generativeai
-
+anthropic==0.18.1
+openai==1.12.0
