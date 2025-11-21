@@ -16,7 +16,6 @@ requests==2.31.0
 google-generativeai
 anthropic==0.18.1
 openai==1.12.0
-psycopg2-binary==2.9.9  # For PostgreSQL. Use mysql-connector-python for MySQL or leave empty for SQLite.
 # For memory/embeddings
 sentence-transformers==2.2.2
 torch==2.2.1
