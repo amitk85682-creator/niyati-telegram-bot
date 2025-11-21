@@ -1,70 +1,53 @@
-# --- database.py ---
+# config.py
+import os
+from dotenv import load_dotenv
 
-import sqlite3
-from config import DB_NAME
+load_dotenv()
 
-def init_db():
-    """Initializes the database and creates the users table if it doesn't exist."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            first_name TEXT,
-            meme_pref BOOLEAN NOT NULL DEFAULT 1,
-            shayari_pref BOOLEAN NOT NULL DEFAULT 1,
-            geeta_pref BOOLEAN NOT NULL DEFAULT 1
-        )
-    """)
-    conn.commit()
-    conn.close()
+# --- Core Config ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise ValueError("FATAL: TELEGRAM_TOKEN not found in .env file")
 
-def get_or_create_user(user_id: int, first_name: str):
-    """Gets a user from the DB or creates a new one with default preferences."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, first_name) VALUES (?, ?)", (user_id, first_name))
-    conn.commit()
-    
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    user_data = cursor.fetchone()
-    conn.close()
-    return user_data
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
+ADMIN_IDS = [int(admin_id) for admin_id in ADMIN_IDS_STR.split(',') if admin_id.strip().isdigit()]
 
-def get_user_prefs(user_id: int):
-    """Retrieves a user's preferences."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT meme_pref, shayari_pref, geeta_pref FROM users WHERE user_id = ?", (user_id,))
-    prefs = cursor.fetchone()
-    conn.close()
-    if prefs:
-        return {"memes": bool(prefs[0]), "shayari": bool(prefs[1]), "geeta": bool(prefs[2])}
-    return None
+# --- Database Config ---
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///niyati.db")
 
-def update_user_pref(user_id: int, pref_name: str, value: bool):
-    """Updates a user's preference in the database."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    # Using f-string safely as pref_name is controlled internally
-    query = f"UPDATE users SET {pref_name}_pref = ? WHERE user_id = ?"
-    cursor.execute(query, (value, user_id))
-    conn.commit()
-    conn.close()
+# --- Persona & Behavior Config ---
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 
-def delete_user_data(user_id: int):
-    """Deletes a user's data from the database."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
+# --- Feature Flags (can be toggled by admins) ---
+# These are the default states. User preferences are stored in the DB.
+DEFAULT_FEATURES = {
+    "memes": True,
+    "shayari": True,
+    "geeta": True,
+    "fancy_fonts": True
+}
 
-def get_all_user_ids():
-    """Fetches all user IDs for broadcasting."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users")
-    user_ids = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return user_ids
+# --- Budget & Rate Limiting ---
+# Set to True to enable low budget mode (fewer replies, no extras)
+LOW_BUDGET_MODE = False 
+# You can add logic to toggle this based on API usage.
+
+# --- Niyati's Persona ---
+# A small collection of shayari to draw from.
+# In a real app, you might load these from a JSON file.
+SHAYARI_COLLECTION = [
+    "thoda sa tu, thoda sa mai,\naur baaki sab kismat ka khel...",
+    "dil ki raahon me tu hi,\nkhwabon ki roshni saath chale ✨",
+    "jo tha bikhar sa, teri baat se judne laga,\ntere hone se hi shayad, mera hona bana 😊",
+    "nazar mein tum ho,\nkhwabon mein tum ho,\nbas yaaron ab toh,\nhar jagah tum hi ho ❤️",
+    "chand taaron se aage,\nek jahaan aur bhi hai,\nbas wahan sirf hum hai,\naur tumhara gumaan 🌙"
+]
+
+# Simple, respectful Gita paraphrases.
+GEETA_QUOTES = [
+    "Karma karo, phal ki chinta mat karo. Bas apna best do. 🙏",
+    "Badalte rehna hi jeevan hai. Jo naya hai, usse apna lo. ✨",
+    "Mann hi mitra hai aur mann hi shatru hai. Apne mann ko jeeto. 🧘",
+    "Jo hua, achha hua. Jo ho raha hai, achha ho raha hai. Jo hoga, woh bhi achha hoga. ✨",
+    "Aatma ko na shastra kaat sakte hain, na aag jala sakti hai. 🔥"
+]
