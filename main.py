@@ -436,22 +436,52 @@ class DatabaseManager:
 
 
 # ============================================================================
-# AI CLIENT MANAGER
+# AI CLIENT MANAGER (FIXED)
 # ============================================================================
 
 class AIClientManager:
     """Manages AI API calls to OpenAI or Anthropic"""
     
     def __init__(self):
-        [cite_start]self.provider = Config.AI_PROVIDER [cite: 1]
+        self.provider = Config.AI_PROVIDER
         
         if self.provider == "openai":
-            # ... OpenAI setup
-        # The 'elif' block should be aligned correctly here:
+            openai.api_key = Config.OPENAI_API_KEY
+            self.model = Config.OPENAI_MODEL
+            self.client = None
         elif self.provider == "anthropic":
-            [cite_start]self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY) [cite: 1]
-            [cite_start]self.model = Config.ANTHROPIC_MODEL [cite: 1]
-        # ...
+            # Fixed initialization - avoid proxy issues
+            try:
+                # Use default HTTP client without custom proxy configuration
+                import httpx
+                
+                # Create a simple HTTP client without proxies
+                http_client = httpx.Client(
+                    timeout=httpx.Timeout(60.0, connect=10.0),
+                    follow_redirects=True,
+                )
+                
+                # Initialize Anthropic client with explicit http_client
+                self.client = Anthropic(
+                    api_key=Config.ANTHROPIC_API_KEY,
+                    http_client=http_client,
+                )
+                self.model = Config.ANTHROPIC_MODEL
+                logger.info("Anthropic client initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Anthropic client: {e}")
+                # Fallback: try simple initialization without custom HTTP client
+                try:
+                    self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
+                    self.model = Config.ANTHROPIC_MODEL
+                    logger.info("Anthropic client initialized with default settings")
+                except Exception as e2:
+                    logger.error(f"Anthropic initialization failed completely: {e2}")
+                    raise
+        else:
+            raise ValueError(f"Unknown AI provider: {self.provider}")
+        
+        logger.info(f"AI Client initialized with provider: {self.provider}, model: {self.model}")
     
     async def get_response(self, system_prompt: str, messages: List[Dict[str, str]], 
                           max_tokens: int = None) -> str:
@@ -466,7 +496,13 @@ class AIClientManager:
                 return await self._get_anthropic_response(system_prompt, messages, max_tokens)
         except Exception as e:
             logger.error(f"AI API error: {e}")
-            return "hmm, thoda sa network issue aa raha… ek sec! 🫶"
+            # Better fallback responses
+            fallback_responses = [
+                "hmm, thoda sa network issue aa raha… ek sec! 🫶",
+                "ek minute, connection thoda slow hai… 😅",
+                "sorry yaar, thoda technical issue aa gaya! phir try karo 🫶"
+            ]
+            return random.choice(fallback_responses)
     
     async def _get_openai_response(self, system_prompt: str, messages: List[Dict[str, str]], 
                                    max_tokens: int) -> str:
@@ -486,18 +522,20 @@ class AIClientManager:
     async def _get_anthropic_response(self, system_prompt: str, messages: List[Dict[str, str]], 
                                       max_tokens: int) -> str:
         """Get response from Anthropic"""
-        response = await asyncio.to_thread(
-            self.client.messages.create,
-            model=self.model,
-            system=system_prompt,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.8,
-        )
-        
-        return response.content[0].text.strip()
-
-
+        try:
+            response = await asyncio.to_thread(
+                self.client.messages.create,
+                model=self.model,
+                system=system_prompt,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.8,
+            )
+            
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.error(f"Anthropic API call failed: {e}")
+            raise
 # ============================================================================
 # SYSTEM PROMPT BUILDER
 # ============================================================================
