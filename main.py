@@ -660,14 +660,14 @@ class AIClientManager:
     """Manages AI API calls to OpenAI or Anthropic"""
     
     def __init__(self):
-        [cite_start]self.provider = Config.AI_PROVIDER [cite: 1]
+        self.provider = Config.AI_PROVIDER
         
         if self.provider == "openai":
             openai.api_key = Config.OPENAI_API_KEY
             self.model = Config.OPENAI_MODEL
         elif self.provider == "anthropic":
-            [cite_start]self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY) [cite: 1]
-            [cite_start]self.model = Config.ANTHROPIC_MODEL [cite: 1]
+            self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
+            self.model = Config.ANTHROPIC_MODEL
         else:
             raise ValueError(f"Unknown AI provider: {self.provider}")
         
@@ -690,6 +690,8 @@ class AIClientManager:
     
     async def _get_openai_response(self, system_prompt: str, messages: List[Dict[str, str]], 
                                    max_tokens: int) -> str:
+        # ... (rest of the method)
+        pass # The rest of the method is not shown, but ensure it's also clean.
         """Get response from OpenAI"""
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         
