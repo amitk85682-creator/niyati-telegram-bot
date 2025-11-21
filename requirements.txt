@@ -1,4 +1,6 @@
-python-telegram-bot[job-queue]
+# Core dependencies
+python-telegram-bot==20.7
+python-telegram-bot[job-queue]==20.7
 flask==2.3.3
 google-genai
 aiohttp==3.13.1
@@ -26,3 +28,7 @@ numpy==1.26.4
 apscheduler==3.10.4
 # For fancy text
 fancy-text==0.3.0
+black==23.12.1
+flake8==7.0.0
+# Scheduling
+APScheduler==3.10.4
