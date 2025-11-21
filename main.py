@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Niyati Telegram Bot
+Niyati Telegram Bot - FIXED VERSION
 A cute, charming, sweet companion bot with Hinglish personality
 Supports private chats, groups, and broadcast mode
 """
@@ -20,6 +20,10 @@ from enum import Enum
 import pytz
 from functools import wraps
 import random
+
+# Clear proxy environment variables BEFORE importing Anthropic
+for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+    os.environ.pop(proxy_var, None)
 
 # Telegram imports
 from telegram import (
@@ -436,7 +440,7 @@ class DatabaseManager:
 
 
 # ============================================================================
-# AI CLIENT MANAGER (FIXED)
+# AI CLIENT MANAGER
 # ============================================================================
 
 class AIClientManager:
@@ -450,17 +454,14 @@ class AIClientManager:
             self.model = Config.OPENAI_MODEL
             self.client = None
         elif self.provider == "anthropic":
-            # This handles the 'proxies' TypeError directly by overriding environment settings.
             try:
-                self.client = Anthropic(
-                    api_key=Config.ANTHROPIC_API_KEY,
-                    # This line is the direct fix for the TypeError:
-                    proxies=None 
-                )
+                # Simple initialization without custom HTTP client
+                self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
                 self.model = Config.ANTHROPIC_MODEL
+                logger.info("Anthropic client initialized successfully")
             except Exception as e:
                 logger.error(f"Anthropic initialization failed: {e}")
-                raise # Stop execution if client cannot be made
+                raise
         else:
             raise ValueError(f"Unknown AI provider: {self.provider}")
         
@@ -479,7 +480,6 @@ class AIClientManager:
                 return await self._get_anthropic_response(system_prompt, messages, max_tokens)
         except Exception as e:
             logger.error(f"AI API error: {e}")
-            # Better fallback responses
             fallback_responses = [
                 "hmm, thoda sa network issue aa raha… ek sec! 🫶",
                 "ek minute, connection thoda slow hai… 😅",
@@ -519,6 +519,8 @@ class AIClientManager:
         except Exception as e:
             logger.error(f"Anthropic API call failed: {e}")
             raise
+
+
 # ============================================================================
 # SYSTEM PROMPT BUILDER
 # ============================================================================
@@ -653,71 +655,43 @@ Behavior Patterns:
 
 
 # ============================================================================
-# AI CLIENT MANAGER
+# CONTEXT MANAGER (WAS MISSING!)
 # ============================================================================
 
-class AIClientManager:
-    """Manages AI API calls to OpenAI or Anthropic"""
+class ContextManager:
+    """Manages ephemeral context for group and persistent context for private"""
     
-    def __init__(self):
-        self.provider = Config.AI_PROVIDER
+    def __init__(self, db_manager: DatabaseManager):
+        self.db = db_manager
+        # Ephemeral group context (in-memory only)
+        self.group_contexts: Dict[int, List[Dict]] = {}
+    
+    def get_private_context(self, user_id: int, first_name: str) -> UserContext:
+        """Get or create private chat context"""
+        user = self.db.get_user(user_id)
         
-        if self.provider == "openai":
-            openai.api_key = Config.OPENAI_API_KEY
-            self.model = Config.OPENAI_MODEL
-        elif self.provider == "anthropic":
-            self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY)
-            self.model = Config.ANTHROPIC_MODEL
+        if user:
+            features = Features.from_dict(json.loads(user['features']))
+            summary = user['summary']
+            last_messages = self.db.get_last_messages(user_id, limit=3)
         else:
-            raise ValueError(f"Unknown AI provider: {self.provider}")
+            features = Features()
+            summary = ""
+            last_messages = []
+            # Create new user
+            self.db.save_user(user_id, first_name, features=features, summary=summary)
         
-        logger.info(f"AI Client initialized with provider: {self.provider}, model: {self.model}")
-    
-    async def get_response(self, system_prompt: str, messages: List[Dict[str, str]], 
-                            max_tokens: int = None) -> str:
-        """Get AI response from configured provider"""
-        if max_tokens is None:
-            max_tokens = Config.MAX_TOKENS_PER_RESPONSE
-        
-        try:
-            if self.provider == "openai":
-                return await self._get_openai_response(system_prompt, messages, max_tokens)
-            elif self.provider == "anthropic":
-                return await self._get_anthropic_response(system_prompt, messages, max_tokens)
-        except Exception as e:
-            logger.error(f"AI API error: {e}")
-            return "hmm, thoda sa network issue aa raha… ek sec! 🫶"
-    
-    async def _get_openai_response(self, system_prompt: str, messages: List[Dict[str, str]], 
-                                   max_tokens: int) -> str:
-        # ... (rest of the method)
-        pass # The rest of the method is not shown, but ensure it's also clean.
-        """Get response from OpenAI"""
-        full_messages = [{"role": "system", "content": system_prompt}] + messages
-        
-        response = await asyncio.to_thread(
-            openai.chat.completions.create,
-            model=self.model,
-            messages=full_messages,
-            max_tokens=max_tokens,
-            temperature=0.8,
+        return UserContext(
+            user_id=user_id,
+            first_name=first_name,
+            mode=Mode.PRIVATE,
+            features=features,
+            summary=summary,
+            last_messages=last_messages
         )
-        
-        return response.choices[0].message.content.strip()
     
-    async def _get_anthropic_response(self, system_prompt: str, messages: List[Dict[str, str]], 
-                                      max_tokens: int) -> str:
-        """Get response from Anthropic"""
-        response = await asyncio.to_thread(
-            self.client.messages.create,
-            model=self.model,
-            system=system_prompt,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.8,
-        )
-        
-        return response.content[0].text.strip()
+    def save_private_context(self, context: UserContext, user_message: str, 
+                            bot_response: str, username: str = None):
         """Save private context to database"""
         # Update message embeddings
         self.db.add_message_embedding(context.user_id, "user", user_message)
@@ -913,7 +887,6 @@ class NiyatiBot:
         app.add_handler(CommandHandler("geeta", self.cmd_geeta))
         app.add_handler(CommandHandler("forget", self.cmd_forget))
         app.add_handler(CommandHandler("broadcast", self.cmd_broadcast))
-        app.add_handler(CommandHandler("mode", self.cmd_mode))
         app.add_handler(CommandHandler("stats", self.cmd_stats))
         
         # Message handlers
@@ -940,7 +913,6 @@ class NiyatiBot:
         chat = update.effective_chat
         
         if chat.type == "private":
-            # Private start
             user_context = self.context_manager.get_private_context(user.id, user.first_name)
             
             response = f"heyy {user.first_name}! main Niyati hu 😊\n"
@@ -948,7 +920,6 @@ class NiyatiBot:
             
             await update.message.reply_text(response)
         else:
-            # Group start
             response = f"namaskar! main Niyati hu 🙏\n"
             response += f"mujhe @{context.bot.username} karke mention karo ya commands use karo!"
             
@@ -1063,29 +1034,9 @@ class NiyatiBot:
             await update.message.reply_text("galat PIN! 🔒")
             return
         
-        # Get broadcast content (everything after PIN)
         broadcast_text = " ".join(args[1:])
-        
-        # In real implementation, you'd send to all users
-        # For now, just acknowledge
         await update.message.reply_text(f"broadcast ready! content:\n\n{broadcast_text}")
-        
         logger.info(f"Broadcast from admin {user.id}: {broadcast_text[:50]}...")
-    
-    async def cmd_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /mode command (testing only)"""
-        user = update.effective_user
-        
-        if not is_admin(user.id):
-            return
-        
-        args = context.args
-        if not args or args[0].lower() not in ["private", "group"]:
-            await update.message.reply_text("Usage: `/mode private|group`", parse_mode=ParseMode.MARKDOWN)
-            return
-        
-        mode = args[0].lower()
-        await update.message.reply_text(f"mode testing: {mode} (normally auto-detected)")
     
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /stats command (admin only)"""
@@ -1116,18 +1067,14 @@ class NiyatiBot:
         if not message or not message.text:
             return
         
-        # Detect mode
         mode = detect_mode_from_chat(chat, context.bot.username)
         
-        # Check cooldown for private chats
         if mode == Mode.PRIVATE:
             if not self.db.check_user_cooldown(user.id):
-                return  # Still in cooldown
+                return
         
-        # Group filtering
         if mode == Mode.GROUP:
             if not should_reply_in_group(message.text, context.bot.username):
-                # Add to ephemeral context but don't reply
                 self.context_manager.add_group_message(
                     chat.id, 
                     "user", 
@@ -1135,16 +1082,13 @@ class NiyatiBot:
                 )
                 return
         
-        # Check budget
         if not self.budget_tracker.can_send_message():
             if mode == Mode.PRIVATE:
                 await message.reply_text("aaj ke liye bohot baat ho gayi! kal milte hain 🫶")
             return
         
-        # Send typing indicator
         await send_typing_action(update, context)
         
-        # Generate response
         try:
             response_text = await self._generate_response(
                 mode=mode,
@@ -1155,14 +1099,11 @@ class NiyatiBot:
                 chat_id=chat.id
             )
             
-            # Send response
             await message.reply_text(response_text)
             
-            # Update cooldown for private
             if mode == Mode.PRIVATE:
                 self.db.update_user_cooldown(user.id)
             
-            # Increment budget
             self.budget_tracker.increment()
             
         except Exception as e:
@@ -1178,16 +1119,13 @@ class NiyatiBot:
         
         mode = detect_mode_from_chat(chat, context.bot.username)
         
-        # Group filtering for media
         if mode == Mode.GROUP:
             if random.random() > Config.GROUP_REPLY_PROBABILITY:
                 return
         
-        # Check budget
         if not self.budget_tracker.can_send_message():
             return
         
-        # Simple reactions to media
         reactions = [
             "wow, ye toh kamal hai! 😍",
             "bahut badhiya! ✨",
@@ -1197,8 +1135,7 @@ class NiyatiBot:
         
         features = self.db.get_user_features(user.id) if mode == Mode.PRIVATE else Features()
         
-        # Optionally add shayari
-        if features.shayari and random.random() < 0.2:  # 20% chance
+        if features.shayari and random.random() < 0.2:
             reactions.append("tum toh artist nikle! khubsurti har jagah hai bas dekhne ki nazar chahiye ✨")
         
         response = random.choice(reactions)
@@ -1214,27 +1151,21 @@ class NiyatiBot:
                                  username: str, message_text: str, chat_id: int) -> str:
         """Generate AI response based on mode and context"""
         
-        # Sanitize input
         message_text = sanitize_text(message_text)
         
-        # Get context based on mode
         if mode == Mode.PRIVATE:
             user_context = self.context_manager.get_private_context(user_id, first_name)
             features = user_context.features
             conversation_history = user_context.last_messages
             user_summary = user_context.summary
-        else:  # GROUP
-            features = Features()  # Default features for groups
+        else:
+            features = Features()
             conversation_history = self.context_manager.get_group_context(chat_id)
             user_summary = ""
         
-        # Get budget state
         budget_state = self.budget_tracker.get_budget_state()
-        
-        # Check Geeta window
         geeta_window_open = self.geeta_scheduler.is_window_open()
         
-        # Build system prompt
         system_prompt = SystemPromptBuilder.build(
             mode=mode,
             features=features,
@@ -1243,18 +1174,15 @@ class NiyatiBot:
             user_summary=user_summary
         )
         
-        # Build messages for AI
         messages = conversation_history.copy()
         messages.append({"role": "user", "content": message_text})
         
-        # Get AI response
         response = await self.ai_client.get_response(
             system_prompt=system_prompt,
             messages=messages,
             max_tokens=Config.MAX_TOKENS_PER_RESPONSE if not budget_state.low_budget else 80
         )
         
-        # Save context based on mode
         if mode == Mode.PRIVATE:
             self.context_manager.save_private_context(
                 user_context, 
@@ -1262,7 +1190,7 @@ class NiyatiBot:
                 response, 
                 username
             )
-        else:  # GROUP
+        else:
             self.context_manager.add_group_message(chat_id, "user", f"{first_name}: {message_text}")
             self.context_manager.add_group_message(chat_id, "assistant", response)
         
@@ -1276,7 +1204,6 @@ class NiyatiBot:
         """Handle errors"""
         logger.error(f"Exception while handling update: {context.error}")
         
-        # Try to send error message to user
         if isinstance(update, Update) and update.effective_message:
             try:
                 await update.effective_message.reply_text(
@@ -1296,498 +1223,6 @@ class NiyatiBot:
 
 
 # ============================================================================
-# ADDITIONAL UTILITIES & HELPERS
-# ============================================================================
-
-class FancyText:
-    """Fancy text formatting utilities (minimal use)"""
-    
-    FONTS = {
-        "bold": {
-            "a": "𝗮", "b": "𝗯", "c": "𝗰", "d": "𝗱", "e": "𝗲", "f": "𝗳", "g": "𝗴",
-            "h": "𝗵", "i": "𝗶", "j": "𝗷", "k": "𝗸", "l": "𝗹", "m": "𝗺", "n": "𝗻",
-            "o": "𝗼", "p": "𝗽", "q": "𝗾", "r": "𝗿", "s": "𝘀", "t": "𝘁", "u": "𝘂",
-            "v": "𝘃", "w": "𝘄", "x": "𝘅", "y": "𝘆", "z": "𝘇",
-        },
-    }
-    
-    @staticmethod
-    def apply_bold(text: str) -> str:
-        """Apply bold fancy font (use sparingly)"""
-        result = ""
-        for char in text:
-            if char.lower() in FancyText.FONTS["bold"]:
-                result += FancyText.FONTS["bold"][char.lower()]
-            else:
-                result += char
-        return result
-
-
-class ShayariGenerator:
-    """Helper for shayari templates"""
-    
-    TEMPLATES = [
-        "dil ki raahon me {topic}, khwabon ki roshni saath chale ✨",
-        "thoda sa tu, thoda sa mai, aur baaki sab kismat ka khel…",
-        "jo tha bikhar sa, teri baat se judne laga 💫",
-        "chand sitare sab mile, par teri baatein alag si hain ✨",
-        "subah ki pehli kiran, teri smile ki tarah fresh hai 😊",
-        "zindagi me rang tu laya, ab sab kuch rangeen lagta hai 🌈",
-    ]
-    
-    @staticmethod
-    def get_random_shayari(topic: str = "pyaar") -> str:
-        """Get a random shayari"""
-        template = random.choice(ShayariGenerator.TEMPLATES)
-        if "{topic}" in template:
-            return template.format(topic=topic)
-        return template
-
-
-class MemeReference:
-    """Safe meme references"""
-    
-    REFERENCES = [
-        "ye plan toh full main-character energy lag raha 😌",
-        "mood = no thoughts, just vibes ✨",
-        "POV: jab sab kuch perfect ho jaye 🚀",
-        "this is fine energy aa raha hai 😅",
-        "plot twist incoming! 🎬",
-        "low-key ye best idea hai ✨",
-        "high-key excited hu! 🙌",
-        "Delhi winters meme energy! ❄️",
-    ]
-    
-    @staticmethod
-    def get_random() -> str:
-        """Get a random meme reference"""
-        return random.choice(MemeReference.REFERENCES)
-
-
-class GeetaQuotes:
-    """Bhagavad Gita paraphrases"""
-    
-    QUOTES = [
-        "जो हो गया उसे सोचकर दुखी मत हो, जो होना है उसके लिए तैयार रहो ✨",
-        "कर्म करो, फल की चिंता मत करो—बस अपना best दो 🙏",
-        "मन को शांत रखो, जो तुम्हारा है वो तुम्हे मिल के rahega 💫",
-        "परिवर्तन संसार का नियम है—change को accept करो ✨",
-        "खुद पे विश्वास रखो, तुम जितना सोचते हो उससे ज्यादा strong हो 🙏",
-    ]
-    
-    @staticmethod
-    def get_random() -> str:
-        """Get a random Geeta quote"""
-        return random.choice(GeetaQuotes.QUOTES)
-
-
-# ============================================================================
-# BROADCAST MANAGER
-# ============================================================================
-
-class BroadcastManager:
-    """Manages broadcast messages to all users"""
-    
-    def __init__(self, db_manager: DatabaseManager, bot_application):
-        self.db = db_manager
-        self.app = bot_application
-    
-    async def broadcast_to_all_users(self, content: str, parse_mode: str = None):
-        """Broadcast message to all users in database"""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        users = cursor.fetchall()
-        conn.close()
-        
-        success_count = 0
-        fail_count = 0
-        
-        for user in users:
-            user_id = user['user_id']
-            try:
-                await self.app.bot.send_message(
-                    chat_id=user_id,
-                    text=content,
-                    parse_mode=parse_mode
-                )
-                success_count += 1
-                await asyncio.sleep(0.05)  # Rate limit protection
-            except Exception as e:
-                logger.error(f"Failed to broadcast to {user_id}: {e}")
-                fail_count += 1
-        
-        logger.info(f"Broadcast complete: {success_count} success, {fail_count} failed")
-        return success_count, fail_count
-
-
-# ============================================================================
-# ANALYTICS & MONITORING
-# ============================================================================
-
-class AnalyticsTracker:
-    """Track bot usage analytics"""
-    
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
-        self._setup_analytics_tables()
-    
-    def _setup_analytics_tables(self):
-        """Setup analytics tables"""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS analytics_daily (
-                date TEXT PRIMARY KEY,
-                total_messages INTEGER DEFAULT 0,
-                private_messages INTEGER DEFAULT 0,
-                group_messages INTEGER DEFAULT 0,
-                unique_users INTEGER DEFAULT 0,
-                commands_used INTEGER DEFAULT 0
-            )
-        """)
-        
-        conn.commit()
-        conn.close()
-    
-    def log_message(self, mode: Mode, user_id: int, is_command: bool = False):
-        """Log a message event"""
-        today = datetime.now().strftime("%Y-%m-%d")
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        
-        # Update daily analytics
-        cursor.execute("""
-            INSERT INTO analytics_daily (date, total_messages, private_messages, group_messages, commands_used)
-            VALUES (?, 1, ?, ?, ?)
-            ON CONFLICT(date) DO UPDATE SET
-                total_messages = total_messages + 1,
-                private_messages = private_messages + ?,
-                group_messages = group_messages + ?,
-                commands_used = commands_used + ?
-        """, (
-            today,
-            1 if mode == Mode.PRIVATE else 0,
-            1 if mode == Mode.GROUP else 0,
-            1 if is_command else 0,
-            1 if mode == Mode.PRIVATE else 0,
-            1 if mode == Mode.GROUP else 0,
-            1 if is_command else 0,
-        ))
-        
-        conn.commit()
-        conn.close()
-    
-    def get_daily_stats(self, date: str = None) -> Dict:
-        """Get daily statistics"""
-        if date is None:
-            date = datetime.now().strftime("%Y-%m-%d")
-        
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM analytics_daily WHERE date = ?", (date,))
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            return dict(row)
-        return {}
-
-
-# ============================================================================
-# CONVERSATION SUMMARIZER
-# ============================================================================
-
-class ConversationSummarizer:
-    """Periodically summarize conversations for memory efficiency"""
-    
-    def __init__(self, ai_client: AIClientManager, db_manager: DatabaseManager):
-        self.ai_client = ai_client
-        self.db = db_manager
-    
-    async def summarize_conversation(self, user_id: int) -> str:
-        """Generate a summary of user's conversation history"""
-        messages = self.db.get_last_messages(user_id, limit=10)
-        
-        if len(messages) < 3:
-            return ""
-        
-        # Build conversation text
-        conversation = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        
-        # Summarization prompt
-        summary_prompt = """Summarize this conversation in 1-2 short Hindi/Hinglish sentences (max 300 chars). 
-Capture: user's mood, topics discussed, preferences. Be concise."""
-        
-        try:
-            summary = await self.ai_client.get_response(
-                system_prompt=summary_prompt,
-                messages=[{"role": "user", "content": conversation}],
-                max_tokens=100
-            )
-            
-            # Trim to 300 chars
-            summary = summary[:300]
-            
-            # Save to database
-            self.db.update_user_summary(user_id, summary)
-            
-            return summary
-        except Exception as e:
-            logger.error(f"Failed to summarize conversation: {e}")
-            return ""
-
-
-# ============================================================================
-# SCHEDULED TASKS
-# ============================================================================
-
-class ScheduledTasks:
-    """Handle periodic background tasks"""
-    
-    def __init__(self, bot: 'NiyatiBot'):
-        self.bot = bot
-        self.running = False
-    
-    async def start(self):
-        """Start scheduled tasks"""
-        self.running = True
-        asyncio.create_task(self._daily_reset_task())
-        asyncio.create_task(self._periodic_summary_task())
-        logger.info("Scheduled tasks started")
-    
-    async def stop(self):
-        """Stop scheduled tasks"""
-        self.running = False
-    
-    async def _daily_reset_task(self):
-        """Reset daily counters at midnight"""
-        while self.running:
-            now = datetime.now()
-            # Calculate seconds until next midnight
-            tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-            seconds_until_midnight = (tomorrow - now).total_seconds()
-            
-            await asyncio.sleep(seconds_until_midnight)
-            
-            # Reset logic would go here
-            logger.info("Daily reset triggered")
-    
-    async def _periodic_summary_task(self):
-        """Periodically summarize long conversations"""
-        while self.running:
-            await asyncio.sleep(3600)  # Every hour
-            
-            # Get users with >10 messages
-            conn = self.bot.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT user_id, COUNT(*) as msg_count 
-                FROM message_embeddings 
-                GROUP BY user_id 
-                HAVING msg_count > 10
-            """)
-            users = cursor.fetchall()
-            conn.close()
-            
-            summarizer = ConversationSummarizer(self.bot.ai_client, self.bot.db)
-            
-            for user in users:
-                try:
-                    await summarizer.summarize_conversation(user['user_id'])
-                except Exception as e:
-                    logger.error(f"Summary task error: {e}")
-
-
-# ============================================================================
-# SAFETY FILTERS
-# ============================================================================
-
-class SafetyFilter:
-    """Content safety filtering"""
-    
-    SENSITIVE_PATTERNS = [
-        r'\b(suicide|kill myself|end it all)\b',
-        r'\b(self[- ]?harm|cut myself)\b',
-        r'\b(депрессия|depression)\b',
-    ]
-    
-    EXPLICIT_PATTERNS = [
-        # Add patterns for explicit content filtering
-    ]
-    
-    @staticmethod
-    def check_distress(text: str) -> bool:
-        """Check if message indicates distress/self-harm"""
-        text_lower = text.lower()
-        for pattern in SafetyFilter.SENSITIVE_PATTERNS:
-            if re.search(pattern, text_lower):
-                return True
-        return False
-    
-    @staticmethod
-    def check_explicit(text: str) -> bool:
-        """Check for explicit content"""
-        text_lower = text.lower()
-        for pattern in SafetyFilter.EXPLICIT_PATTERNS:
-            if re.search(pattern, text_lower):
-                return True
-        return False
-    
-    @staticmethod
-    def get_distress_response() -> str:
-        """Get appropriate response for distress"""
-        responses = [
-            "mujhe tumhari chinta ho rahi hai… please kisi trusted person ya professional se baat karo 🫶",
-            "tum akele nahi ho… please kisi se help lo, ya helpline pe call karo. tumhari care important hai 💙",
-        ]
-        return random.choice(responses)
-
-
-# ============================================================================
-# RATE LIMITER
-# ============================================================================
-
-class RateLimiter:
-    """Advanced rate limiting"""
-    
-    def __init__(self):
-        self.user_timestamps: Dict[int, List[float]] = {}
-        self.window_seconds = 60
-        self.max_requests = 10
-    
-    def is_allowed(self, user_id: int) -> bool:
-        """Check if user is within rate limits"""
-        import time
-        now = time.time()
-        
-        if user_id not in self.user_timestamps:
-            self.user_timestamps[user_id] = []
-        
-        # Remove old timestamps outside window
-        self.user_timestamps[user_id] = [
-            ts for ts in self.user_timestamps[user_id]
-            if now - ts < self.window_seconds
-        ]
-        
-        # Check count
-        if len(self.user_timestamps[user_id]) >= self.max_requests:
-            return False
-        
-        # Add current timestamp
-        self.user_timestamps[user_id].append(now)
-        return True
-
-
-# ============================================================================
-# HEALTH MONITOR
-# ============================================================================
-
-class HealthMonitor:
-    """Monitor bot health and performance"""
-    
-    def __init__(self):
-        self.start_time = datetime.now()
-        self.total_requests = 0
-        self.total_errors = 0
-        self.last_error_time = None
-    
-    def record_request(self):
-        """Record a successful request"""
-        self.total_requests += 1
-    
-    def record_error(self):
-        """Record an error"""
-        self.total_errors += 1
-        self.last_error_time = datetime.now()
-    
-    def get_health_status(self) -> Dict:
-        """Get current health status"""
-        uptime = (datetime.now() - self.start_time).total_seconds()
-        error_rate = self.total_errors / max(self.total_requests, 1)
-        
-        return {
-            "status": "healthy" if error_rate < 0.05 else "degraded",
-            "uptime_seconds": uptime,
-            "total_requests": self.total_requests,
-            "total_errors": self.total_errors,
-            "error_rate": error_rate,
-            "last_error": self.last_error_time.isoformat() if self.last_error_time else None,
-        }
-
-
-# ============================================================================
-# ENHANCED NIYATI BOT WITH ALL FEATURES
-# ============================================================================
-
-class EnhancedNiyatiBot(NiyatiBot):
-    """Enhanced bot with all advanced features"""
-    
-    def __init__(self):
-        super().__init__()
-        self.analytics = AnalyticsTracker(self.db)
-        self.safety_filter = SafetyFilter()
-        self.rate_limiter = RateLimiter()
-        self.health_monitor = HealthMonitor()
-        self.broadcast_manager = BroadcastManager(self.db, self.application)
-        self.scheduled_tasks = ScheduledTasks(self)
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced message handler with safety and analytics"""
-        user = update.effective_user
-        chat = update.effective_chat
-        message = update.message
-        
-        if not message or not message.text:
-            return
-        
-        # Rate limiting
-        if not self.rate_limiter.is_allowed(user.id):
-            await message.reply_text("thoda slow down karo yaar! 😅")
-            return
-        
-        # Safety filtering
-        if self.safety_filter.check_distress(message.text):
-            response = self.safety_filter.get_distress_response()
-            await message.reply_text(response)
-            self.health_monitor.record_request()
-            return
-        
-        if self.safety_filter.check_explicit(message.text):
-            await message.reply_text("ye topic pe main baat nahi kar sakti… let's keep it clean 🫶")
-            self.health_monitor.record_request()
-            return
-        
-        # Call parent handler
-        try:
-            await super().handle_message(update, context)
-            self.health_monitor.record_request()
-            
-            # Log analytics
-            mode = detect_mode_from_chat(chat, context.bot.username)
-            self.analytics.log_message(mode, user.id, is_command=False)
-            
-        except Exception as e:
-            self.health_monitor.record_error()
-            raise e
-    
-    async def start_tasks(self):
-        """Start background tasks"""
-        await self.scheduled_tasks.start()
-    
-    def run(self):
-        """Run enhanced bot"""
-        logger.info("Starting Enhanced Niyati Bot...")
-        
-        # Start background tasks
-        asyncio.create_task(self.start_tasks())
-        
-        # Run polling
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-# ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
 
@@ -1802,7 +1237,6 @@ def main():
     logger.info(f"Admin IDs: {Config.ADMIN_USER_IDS}")
     logger.info("=" * 60)
     
-    # Validate configuration
     if not Config.TELEGRAM_BOT_TOKEN or Config.TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logger.error("ERROR: TELEGRAM_BOT_TOKEN not configured!")
         logger.error("Set environment variable: TELEGRAM_BOT_TOKEN=your_token_here")
@@ -1816,9 +1250,8 @@ def main():
         logger.error("ERROR: ANTHROPIC_API_KEY not configured!")
         return
     
-    # Create and run bot
     try:
-        bot = EnhancedNiyatiBot()
+        bot = NiyatiBot()
         logger.info("Bot initialized successfully!")
         logger.info("Starting polling...")
         bot.run()
