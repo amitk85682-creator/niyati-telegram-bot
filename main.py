@@ -632,43 +632,69 @@ Behavior Patterns:
 
 
 # ============================================================================
-# CONTEXT MANAGER
+# AI CLIENT MANAGER
 # ============================================================================
 
-class ContextManager:
-    """Manages ephemeral context for group and persistent context for private"""
+class AIClientManager:
+    """Manages AI API calls to OpenAI or Anthropic"""
     
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
-        # Ephemeral group context (in-memory only)
-        self.group_contexts: Dict[int, List[Dict]] = {}
-    
-    def get_private_context(self, user_id: int, first_name: str) -> UserContext:
-        """Get or create private chat context"""
-        user = self.db.get_user(user_id)
+    def __init__(self):
+        [cite_start]self.provider = Config.AI_PROVIDER [cite: 1]
         
-        if user:
-            features = Features.from_dict(json.loads(user['features']))
-            summary = user['summary']
-            last_messages = self.db.get_last_messages(user_id, limit=3)
+        if self.provider == "openai":
+            openai.api_key = Config.OPENAI_API_KEY
+            self.model = Config.OPENAI_MODEL
+        elif self.provider == "anthropic":
+            [cite_start]self.client = Anthropic(api_key=Config.ANTHROPIC_API_KEY) [cite: 1]
+            [cite_start]self.model = Config.ANTHROPIC_MODEL [cite: 1]
         else:
-            features = Features()
-            summary = ""
-            last_messages = []
-            # Create new user
-            self.db.save_user(user_id, first_name, features=features, summary=summary)
+            raise ValueError(f"Unknown AI provider: {self.provider}")
         
-        return UserContext(
-            user_id=user_id,
-            first_name=first_name,
-            mode=Mode.PRIVATE,
-            features=features,
-            summary=summary,
-            last_messages=last_messages
-        )
+        logger.info(f"AI Client initialized with provider: {self.provider}, model: {self.model}")
     
-    def save_private_context(self, context: UserContext, user_message: str, 
-                            bot_response: str, username: str = None):
+    async def get_response(self, system_prompt: str, messages: List[Dict[str, str]], 
+                            max_tokens: int = None) -> str:
+        """Get AI response from configured provider"""
+        if max_tokens is None:
+            max_tokens = Config.MAX_TOKENS_PER_RESPONSE
+        
+        try:
+            if self.provider == "openai":
+                return await self._get_openai_response(system_prompt, messages, max_tokens)
+            elif self.provider == "anthropic":
+                return await self._get_anthropic_response(system_prompt, messages, max_tokens)
+        except Exception as e:
+            logger.error(f"AI API error: {e}")
+            return "hmm, thoda sa network issue aa raha… ek sec! 🫶"
+    
+    async def _get_openai_response(self, system_prompt: str, messages: List[Dict[str, str]], 
+                                   max_tokens: int) -> str:
+        """Get response from OpenAI"""
+        full_messages = [{"role": "system", "content": system_prompt}] + messages
+        
+        response = await asyncio.to_thread(
+            openai.chat.completions.create,
+            model=self.model,
+            messages=full_messages,
+            max_tokens=max_tokens,
+            temperature=0.8,
+        )
+        
+        return response.choices[0].message.content.strip()
+    
+    async def _get_anthropic_response(self, system_prompt: str, messages: List[Dict[str, str]], 
+                                      max_tokens: int) -> str:
+        """Get response from Anthropic"""
+        response = await asyncio.to_thread(
+            self.client.messages.create,
+            model=self.model,
+            system=system_prompt,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.8,
+        )
+        
+        return response.content[0].text.strip()
         """Save private context to database"""
         # Update message embeddings
         self.db.add_message_embedding(context.user_id, "user", user_message)
