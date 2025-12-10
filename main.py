@@ -1,7 +1,18 @@
 """
-Niyati Telegram Bot - FULLY FIXED VERSION with Health Server
-A cute, charming, sweet Hinglish companion bot
-Production-Ready Implementation for Render.com
+╔════════════════════════════════════════════════════════════════════════════╗
+║                           NIYATI BOT v3.0                                  ║
+║                    🌸 Teri Online Bestie 🌸                                ║
+║                                                                            ║
+║  Features:                                                                 ║
+║  ✅ Real girl texting style (multiple short messages)                     ║
+║  ✅ Supabase cloud database for memory                                    ║
+║  ✅ Time-aware & mood-based responses                                     ║
+║  ✅ User mentions with hyperlinks                                         ║
+║  ✅ Forward message support                                               ║
+║  ✅ Group commands (admin + user)                                         ║
+║  ✅ Broadcast with HTML stylish fonts                                     ║
+║  ✅ Health server for Render.com                                          ║
+╚════════════════════════════════════════════════════════════════════════════╝
 """
 
 import os
@@ -13,12 +24,16 @@ import re
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Any, Tuple
-from dataclasses import dataclass, asdict
-from enum import Enum
-import pytz
-from aiohttp import web
+from dataclasses import dataclass, field
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
+import threading
+import hashlib
 
 # Third-party imports
+from aiohttp import web
+import pytz
+
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -26,18 +41,19 @@ from telegram import (
     ChatMember,
     Chat,
     Message,
-    BotCommand
+    BotCommand,
+    MessageEntity
 )
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     ContextTypes,
-    filters,
-    PicklePersistence
+    filters
 )
-from telegram.constants import ParseMode, ChatAction
+from telegram.constants import ParseMode, ChatAction, ChatMemberStatus
 from telegram.error import (
     TelegramError,
     BadRequest,
@@ -47,813 +63,602 @@ from telegram.error import (
     RetryAfter
 )
 
-# Database
-from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    Boolean,
-    DateTime,
-    Text,
-    BigInteger,
-    Float,
-    JSON,
-    Index
-)
-from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
-from sqlalchemy.pool import QueuePool
-
 # OpenAI
 from openai import AsyncOpenAI, RateLimitError, APIError
 
-# Utilities
-from functools import wraps
-import hashlib
-import pickle
-from collections import defaultdict, deque
-import threading
-from contextlib import contextmanager
-
-# Redis for caching (optional)
-try:
-    import redis
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
-    print("Warning: Redis not available. Using in-memory cache.")
+# Supabase
+from supabase import create_client, Client
 
 # ============================================================================
-# CONFIGURATION & ENVIRONMENT VARIABLES
+# CONFIGURATION
 # ============================================================================
 
 class Config:
-    """Central configuration management"""
+    """Central configuration"""
     
-    # Telegram Bot Token
+    # Telegram
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    BOT_USERNAME = os.getenv('BOT_USERNAME', 'Niyati_personal_bot')
     
-    # OpenAI API Key
+    # OpenAI
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
-    OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '150'))
-    OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.8'))
+    OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '200'))
+    OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.85'))
     
-    # Database
-    DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///niyati_bot.db')
+    # Supabase (Cloud PostgreSQL)
+    SUPABASE_URL = os.getenv('SUPABASE_URL', '')
+    SUPABASE_KEY = os.getenv('SUPABASE_KEY', '')
     
-    # Redis (optional)
-    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    REDIS_ENABLED = os.getenv('REDIS_ENABLED', 'false').lower() == 'true' and REDIS_AVAILABLE
-    
-    # Admin Configuration
+    # Admin
     ADMIN_IDS = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip()]
     BROADCAST_PIN = os.getenv('BROADCAST_PIN', 'niyati2024')
     
-    # Bot Behavior
-    BOT_USERNAME = os.getenv('BOT_USERNAME', 'Niyati_personal_bot')
+    # Limits
+    MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '20'))  # Store last 20 for context
+    MAX_GROUP_MESSAGES = int(os.getenv('MAX_GROUP_MESSAGES', '5'))  # Local only
+    MAX_REQUESTS_PER_MINUTE = int(os.getenv('MAX_REQUESTS_PER_MINUTE', '15'))
+    MAX_REQUESTS_PER_DAY = int(os.getenv('MAX_REQUESTS_PER_DAY', '500'))
+    
+    # Timezone
     DEFAULT_TIMEZONE = os.getenv('DEFAULT_TIMEZONE', 'Asia/Kolkata')
     
-    # Geeta Quote Window
-    GEETA_START_HOUR = int(os.getenv('GEETA_START_HOUR', '7'))
-    GEETA_END_HOUR = int(os.getenv('GEETA_END_HOUR', '10'))
-    
-    # Rate Limiting
-    MAX_REQUESTS_PER_MINUTE = int(os.getenv('MAX_REQUESTS_PER_MINUTE', '20'))
-    MAX_REQUESTS_PER_DAY = int(os.getenv('MAX_REQUESTS_PER_DAY', '1000'))
-    LOW_BUDGET_THRESHOLD = int(os.getenv('LOW_BUDGET_THRESHOLD', '800'))
-    
-    # Group behavior
-    GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.45'))
-    
-    # Content frequencies
-    MEME_FREQUENCY = float(os.getenv('MEME_FREQUENCY', '0.175'))
-    SHAYARI_FREQUENCY = float(os.getenv('SHAYARI_FREQUENCY', '0.125'))
-    
-    # Logging
-    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-    LOG_FILE = os.getenv('LOG_FILE', 'niyati_bot.log')
-    
-    # Memory limits
-    MAX_CONTEXT_MESSAGES = int(os.getenv('MAX_CONTEXT_MESSAGES', '5'))
-    MAX_SUMMARY_LENGTH = int(os.getenv('MAX_SUMMARY_LENGTH', '300'))
-    
-    # Development mode
-    DEV_MODE = os.getenv('DEV_MODE', 'false').lower() == 'true'
-    
-    # Port for health check server
+    # Server
     PORT = int(os.getenv('PORT', '10000'))
+    
+    # Features
+    MULTI_MESSAGE_ENABLED = os.getenv('MULTI_MESSAGE_ENABLED', 'true').lower() == 'true'
+    TYPING_DELAY_MS = int(os.getenv('TYPING_DELAY_MS', '800'))
     
     @classmethod
     def validate(cls):
-        """Validate critical configuration"""
+        """Validate configuration"""
+        errors = []
         if not cls.TELEGRAM_BOT_TOKEN:
-            raise ValueError("TELEGRAM_BOT_TOKEN is required!")
+            errors.append("TELEGRAM_BOT_TOKEN required")
         if not cls.OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY is required!")
-        if not cls.ADMIN_IDS:
-            print("Warning: No ADMIN_IDS configured!")
+            errors.append("OPENAI_API_KEY required")
+        if not cls.SUPABASE_URL or not cls.SUPABASE_KEY:
+            print("⚠️ Supabase not configured - using local storage only")
+        if errors:
+            raise ValueError(f"Config errors: {', '.join(errors)}")
 
 
 Config.validate()
 
 # ============================================================================
-# LOGGING SETUP
+# LOGGING
 # ============================================================================
 
-import logging.handlers
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('niyati_bot.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
 
-def setup_logging():
-    """Configure logging with both file and console handlers"""
-    
-    detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    simple_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%H:%M:%S'
-    )
-    
-    root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, Config.LOG_LEVEL))
-    
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(simple_formatter)
-    root_logger.addHandler(console_handler)
-    
-    file_handler = logging.handlers.RotatingFileHandler(
-        Config.LOG_FILE,
-        maxBytes=10*1024*1024,
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(detailed_formatter)
-    root_logger.addHandler(file_handler)
-    
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('telegram').setLevel(logging.WARNING)
-    logging.getLogger('apscheduler').setLevel(logging.WARNING)
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-    
-    return logging.getLogger(__name__)
-
-
-logger = setup_logging()
+# Reduce noise
+for lib in ['httpx', 'telegram', 'openai', 'httpcore']:
+    logging.getLogger(lib).setLevel(logging.WARNING)
 
 # ============================================================================
-# HEALTH CHECK SERVER (For Render.com)
+# HEALTH SERVER (Render.com)
 # ============================================================================
 
 class HealthServer:
-    """Simple HTTP health check server for Render.com"""
+    """HTTP health check server"""
     
     def __init__(self):
         self.app = web.Application()
-        self.app.router.add_get('/', self.health_check)
-        self.app.router.add_get('/health', self.health_check)
-        self.app.router.add_get('/status', self.status_check)
+        self.app.router.add_get('/', self.health)
+        self.app.router.add_get('/health', self.health)
+        self.app.router.add_get('/status', self.status)
         self.runner = None
         self.start_time = datetime.now(timezone.utc)
+        self.stats = {'messages': 0, 'users': 0, 'groups': 0}
     
-    async def health_check(self, request):
-        """Basic health check endpoint"""
-        return web.json_response({
-            'status': 'healthy',
-            'bot': 'Niyati',
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        })
+    async def health(self, request):
+        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.0'})
     
-    async def status_check(self, request):
-        """Detailed status endpoint"""
+    async def status(self, request):
         uptime = datetime.now(timezone.utc) - self.start_time
         return web.json_response({
             'status': 'running',
-            'bot_name': 'Niyati Bot',
-            'version': '2.0',
-            'uptime_seconds': int(uptime.total_seconds()),
-            'model': Config.OPENAI_MODEL,
-            'timestamp': datetime.now(timezone.utc).isoformat()
+            'uptime_hours': round(uptime.total_seconds() / 3600, 2),
+            'stats': self.stats
         })
     
     async def start(self):
-        """Start the health server"""
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
         site = web.TCPSite(self.runner, '0.0.0.0', Config.PORT)
         await site.start()
-        logger.info(f"🌐 Health server started on port {Config.PORT}")
+        logger.info(f"🌐 Health server on port {Config.PORT}")
     
     async def stop(self):
-        """Stop the health server"""
         if self.runner:
             await self.runner.cleanup()
-            logger.info("🛑 Health server stopped")
 
 
 health_server = HealthServer()
 
 # ============================================================================
-# DATABASE MODELS
-# ============================================================================
-
-Base = declarative_base()
-
-
-class User(Base):
-    """User model"""
-    __tablename__ = 'users'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, unique=True, nullable=False, index=True)
-    first_name = Column(String(255), nullable=True)
-    username = Column(String(255), nullable=True)
-    
-    meme_enabled = Column(Boolean, default=True)
-    shayari_enabled = Column(Boolean, default=True)
-    geeta_enabled = Column(Boolean, default=True)
-    
-    conversation_summary = Column(String(300), nullable=True)
-    last_messages = Column(JSON, nullable=True)
-    
-    total_messages = Column(Integer, default=0)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-    last_interaction = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    
-    data_shared_warning_shown = Column(Boolean, default=False)
-
-
-class GroupChat(Base):
-    """Group chat model"""
-    __tablename__ = 'group_chats'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
-    chat_title = Column(String(255), nullable=True)
-    
-    last_geeta_date = Column(DateTime, nullable=True)
-    geeta_enabled = Column(Boolean, default=True)
-    timezone = Column(String(50), default=Config.DEFAULT_TIMEZONE)
-    
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-    is_active = Column(Boolean, default=True)
-
-
-class UsageStats(Base):
-    """Usage tracking"""
-    __tablename__ = 'usage_stats'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, nullable=True, index=True)
-    chat_id = Column(BigInteger, nullable=True, index=True)
-    
-    request_type = Column(String(50))
-    tokens_used = Column(Integer, default=0)
-    
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    date = Column(String(10), index=True)
-    
-    success = Column(Boolean, default=True)
-    error_message = Column(Text, nullable=True)
-
-
-class BroadcastLog(Base):
-    """Broadcast logs"""
-    __tablename__ = 'broadcast_logs'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    admin_id = Column(BigInteger, nullable=False)
-    
-    message_text = Column(Text, nullable=True)
-    message_html = Column(Text, nullable=True)
-    media_type = Column(String(50), nullable=True)
-    
-    total_users = Column(Integer, default=0)
-    successful_sends = Column(Integer, default=0)
-    failed_sends = Column(Integer, default=0)
-    
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    completed_at = Column(DateTime, nullable=True)
-    status = Column(String(20), default='pending')
-
-
-Index('idx_usage_date_user', UsageStats.date, UsageStats.user_id)
-Index('idx_user_last_interaction', User.last_interaction)
-
-
-# ============================================================================
-# DATABASE CONNECTION & SESSION MANAGEMENT
+# SUPABASE DATABASE
 # ============================================================================
 
 class Database:
-    """Database connection manager"""
+    """Supabase database manager"""
     
     def __init__(self):
-        self.engine = None
-        self.session_factory = None
-        self.Session = None
+        self.client: Optional[Client] = None
+        self.local_group_cache: Dict[int, List[Dict]] = defaultdict(list)
+        self._init_supabase()
     
-    def init_db(self):
-        """Initialize database"""
-        logger.info(f"Initializing database: {Config.DATABASE_URL[:20]}...")
-        
-        self.engine = create_engine(
-            Config.DATABASE_URL,
-            poolclass=QueuePool,
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,
-            echo=Config.DEV_MODE
-        )
-        
-        Base.metadata.create_all(self.engine)
-        
-        self.session_factory = sessionmaker(bind=self.engine)
-        self.Session = scoped_session(self.session_factory)
-        
-        logger.info("Database initialized successfully")
+    def _init_supabase(self):
+        """Initialize Supabase client"""
+        if Config.SUPABASE_URL and Config.SUPABASE_KEY:
+            try:
+                self.client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+                logger.info("✅ Supabase connected")
+            except Exception as e:
+                logger.error(f"❌ Supabase error: {e}")
+                self.client = None
+        else:
+            logger.warning("⚠️ Supabase not configured")
     
-    @contextmanager
-    def get_session(self):
-        """Context manager for database sessions"""
-        session = self.Session()
+    # ─────────────────────────────────────────────────────────────────────
+    # USER OPERATIONS
+    # ─────────────────────────────────────────────────────────────────────
+    
+    async def get_or_create_user(self, user_id: int, first_name: str = None, 
+                                  username: str = None) -> Dict:
+        """Get or create user in Supabase"""
+        if not self.client:
+            return self._default_user(user_id, first_name, username)
+        
         try:
-            yield session
-            session.commit()
+            # Check existing
+            result = self.client.table('users').select('*').eq('user_id', user_id).execute()
+            
+            if result.data:
+                user = result.data[0]
+                # Update name if changed
+                if first_name and user.get('first_name') != first_name:
+                    self.client.table('users').update({
+                        'first_name': first_name,
+                        'username': username,
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }).eq('user_id', user_id).execute()
+                return user
+            else:
+                # Create new user
+                new_user = {
+                    'user_id': user_id,
+                    'first_name': first_name,
+                    'username': username,
+                    'messages': [],
+                    'preferences': {
+                        'meme_enabled': True,
+                        'shayari_enabled': True,
+                        'geeta_enabled': True
+                    },
+                    'total_messages': 0,
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }
+                self.client.table('users').insert(new_user).execute()
+                logger.info(f"✅ New user: {user_id} ({first_name})")
+                return new_user
+                
         except Exception as e:
-            session.rollback()
-            logger.error(f"Database session error: {e}")
-            raise
-        finally:
-            session.close()
+            logger.error(f"❌ User DB error: {e}")
+            return self._default_user(user_id, first_name, username)
     
-    def close(self):
-        """Close database"""
-        if self.Session:
-            self.Session.remove()
-        if self.engine:
-            self.engine.dispose()
-        logger.info("Database closed")
+    def _default_user(self, user_id: int, first_name: str, username: str) -> Dict:
+        return {
+            'user_id': user_id,
+            'first_name': first_name,
+            'username': username,
+            'messages': [],
+            'preferences': {'meme_enabled': True, 'shayari_enabled': True}
+        }
+    
+    async def save_message(self, user_id: int, role: str, content: str):
+        """Save message to user's conversation history"""
+        if not self.client:
+            return
+        
+        try:
+            result = self.client.table('users').select('messages').eq('user_id', user_id).execute()
+            
+            if result.data:
+                messages = result.data[0].get('messages', []) or []
+                
+                # Add new message
+                messages.append({
+                    'role': role,
+                    'content': content[:500],  # Limit length
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                })
+                
+                # Keep only last N messages
+                messages = messages[-Config.MAX_PRIVATE_MESSAGES:]
+                
+                # Update
+                self.client.table('users').update({
+                    'messages': messages,
+                    'total_messages': len(messages),
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }).eq('user_id', user_id).execute()
+                
+        except Exception as e:
+            logger.error(f"❌ Save message error: {e}")
+    
+    async def get_user_context(self, user_id: int) -> List[Dict]:
+        """Get conversation context for AI"""
+        if not self.client:
+            return []
+        
+        try:
+            result = self.client.table('users').select('messages').eq('user_id', user_id).execute()
+            
+            if result.data and result.data[0].get('messages'):
+                return result.data[0]['messages'][-10:]  # Last 10 for context
+            return []
+            
+        except Exception as e:
+            logger.error(f"❌ Get context error: {e}")
+            return []
+    
+    async def clear_user_memory(self, user_id: int):
+        """Clear user's conversation memory"""
+        if not self.client:
+            return
+        
+        try:
+            self.client.table('users').update({
+                'messages': [],
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }).eq('user_id', user_id).execute()
+            logger.info(f"🧹 Memory cleared: {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Clear memory error: {e}")
+    
+    async def update_preference(self, user_id: int, pref: str, value: bool):
+        """Update user preference"""
+        if not self.client:
+            return
+        
+        try:
+            result = self.client.table('users').select('preferences').eq('user_id', user_id).execute()
+            
+            if result.data:
+                prefs = result.data[0].get('preferences', {}) or {}
+                prefs[f'{pref}_enabled'] = value
+                
+                self.client.table('users').update({
+                    'preferences': prefs,
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }).eq('user_id', user_id).execute()
+                
+        except Exception as e:
+            logger.error(f"❌ Update pref error: {e}")
+    
+    async def get_all_users(self) -> List[Dict]:
+        """Get all users for broadcast"""
+        if not self.client:
+            return []
+        
+        try:
+            result = self.client.table('users').select('user_id, first_name').execute()
+            return result.data or []
+        except Exception as e:
+            logger.error(f"❌ Get users error: {e}")
+            return []
+    
+    async def get_user_count(self) -> int:
+        """Get total user count"""
+        if not self.client:
+            return 0
+        
+        try:
+            result = self.client.table('users').select('user_id', count='exact').execute()
+            return result.count or 0
+        except Exception as e:
+            logger.error(f"❌ User count error: {e}")
+            return 0
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # GROUP OPERATIONS
+    # ─────────────────────────────────────────────────────────────────────
+    
+    async def get_or_create_group(self, chat_id: int, chat_title: str = None) -> Dict:
+        """Get or create group in Supabase"""
+        if not self.client:
+            return {'chat_id': chat_id, 'chat_title': chat_title, 'settings': {}}
+        
+        try:
+            result = self.client.table('groups').select('*').eq('chat_id', chat_id).execute()
+            
+            if result.data:
+                group = result.data[0]
+                if chat_title and group.get('chat_title') != chat_title:
+                    self.client.table('groups').update({
+                        'chat_title': chat_title,
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }).eq('chat_id', chat_id).execute()
+                return group
+            else:
+                new_group = {
+                    'chat_id': chat_id,
+                    'chat_title': chat_title,
+                    'settings': {
+                        'geeta_enabled': True,
+                        'welcome_enabled': True,
+                        'response_rate': 0.3
+                    },
+                    'is_active': True,
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }
+                self.client.table('groups').insert(new_group).execute()
+                logger.info(f"✅ New group: {chat_id} ({chat_title})")
+                return new_group
+                
+        except Exception as e:
+            logger.error(f"❌ Group DB error: {e}")
+            return {'chat_id': chat_id, 'chat_title': chat_title, 'settings': {}}
+    
+    async def update_group_settings(self, chat_id: int, setting: str, value: Any):
+        """Update group setting"""
+        if not self.client:
+            return
+        
+        try:
+            result = self.client.table('groups').select('settings').eq('chat_id', chat_id).execute()
+            
+            if result.data:
+                settings = result.data[0].get('settings', {}) or {}
+                settings[setting] = value
+                
+                self.client.table('groups').update({
+                    'settings': settings,
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }).eq('chat_id', chat_id).execute()
+                
+        except Exception as e:
+            logger.error(f"❌ Update group error: {e}")
+    
+    async def get_group_count(self) -> int:
+        """Get total group count"""
+        if not self.client:
+            return 0
+        
+        try:
+            result = self.client.table('groups').select('chat_id', count='exact').execute()
+            return result.count or 0
+        except Exception as e:
+            logger.error(f"❌ Group count error: {e}")
+            return 0
+    
+    async def get_all_groups(self) -> List[Dict]:
+        """Get all active groups"""
+        if not self.client:
+            return []
+        
+        try:
+            result = self.client.table('groups').select('chat_id, chat_title').eq('is_active', True).execute()
+            return result.data or []
+        except Exception as e:
+            logger.error(f"❌ Get groups error: {e}")
+            return []
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # GROUP LOCAL CACHE (Max 5-10 messages)
+    # ─────────────────────────────────────────────────────────────────────
+    
+    def add_group_message(self, chat_id: int, user_name: str, content: str):
+        """Add message to local group cache"""
+        self.local_group_cache[chat_id].append({
+            'user': user_name,
+            'content': content[:200],
+            'time': datetime.now(timezone.utc).isoformat()
+        })
+        # Keep only last N
+        self.local_group_cache[chat_id] = self.local_group_cache[chat_id][-Config.MAX_GROUP_MESSAGES:]
+    
+    def get_group_context(self, chat_id: int) -> List[Dict]:
+        """Get local group context"""
+        return self.local_group_cache.get(chat_id, [])
 
 
+# Global database instance
 db = Database()
 
-
 # ============================================================================
-# CACHE MANAGEMENT
-# ============================================================================
-
-class Cache:
-    """Cache manager"""
-    
-    def __init__(self):
-        self.redis_client = None
-        self.memory_cache = {}
-        self.cache_ttl = {}
-        
-        if Config.REDIS_ENABLED:
-            try:
-                self.redis_client = redis.from_url(
-                    Config.REDIS_URL,
-                    decode_responses=True,
-                    socket_connect_timeout=5
-                )
-                self.redis_client.ping()
-                logger.info("Redis initialized")
-            except Exception as e:
-                logger.warning(f"Redis failed: {e}. Using in-memory cache.")
-                self.redis_client = None
-    
-    def get(self, key: str) -> Optional[Any]:
-        """Get from cache"""
-        try:
-            if self.redis_client:
-                value = self.redis_client.get(key)
-                if value:
-                    return json.loads(value)
-            else:
-                if key in self.memory_cache:
-                    if key in self.cache_ttl and datetime.now(timezone.utc) > self.cache_ttl[key]:
-                        del self.memory_cache[key]
-                        del self.cache_ttl[key]
-                    else:
-                        return self.memory_cache[key]
-        except Exception as e:
-            logger.error(f"Cache get error: {e}")
-        return None
-    
-    def set(self, key: str, value: Any, ttl: int = 3600):
-        """Set in cache"""
-        try:
-            if self.redis_client:
-                self.redis_client.setex(key, ttl, json.dumps(value))
-            else:
-                self.memory_cache[key] = value
-                self.cache_ttl[key] = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-        except Exception as e:
-            logger.error(f"Cache set error: {e}")
-    
-    def delete(self, key: str):
-        """Delete from cache"""
-        try:
-            if self.redis_client:
-                self.redis_client.delete(key)
-            else:
-                self.memory_cache.pop(key, None)
-                self.cache_ttl.pop(key, None)
-        except Exception as e:
-            logger.error(f"Cache delete error: {e}")
-
-
-cache = Cache()
-
-
-# ============================================================================
-# RATE LIMITING
+# RATE LIMITER
 # ============================================================================
 
 class RateLimiter:
     """Rate limiting"""
     
     def __init__(self):
-        self.request_counts = defaultdict(lambda: {'minute': deque(), 'day': deque()})
+        self.requests = defaultdict(lambda: {'minute': deque(), 'day': deque()})
         self.lock = threading.Lock()
     
-    def check_rate_limit(self, user_id: int) -> Tuple[bool, str]:
+    def check(self, user_id: int) -> Tuple[bool, str]:
         """Check rate limits"""
         now = datetime.now(timezone.utc)
-        minute_ago = now - timedelta(minutes=1)
-        day_ago = now - timedelta(days=1)
         
         with self.lock:
-            user_requests = self.request_counts[user_id]
+            reqs = self.requests[user_id]
             
-            while user_requests['minute'] and user_requests['minute'][0] < minute_ago:
-                user_requests['minute'].popleft()
-            while user_requests['day'] and user_requests['day'][0] < day_ago:
-                user_requests['day'].popleft()
+            # Clean old
+            while reqs['minute'] and reqs['minute'][0] < now - timedelta(minutes=1):
+                reqs['minute'].popleft()
+            while reqs['day'] and reqs['day'][0] < now - timedelta(days=1):
+                reqs['day'].popleft()
             
-            if len(user_requests['minute']) >= Config.MAX_REQUESTS_PER_MINUTE:
-                return False, "rate_limit_minute"
+            if len(reqs['minute']) >= Config.MAX_REQUESTS_PER_MINUTE:
+                return False, "minute"
+            if len(reqs['day']) >= Config.MAX_REQUESTS_PER_DAY:
+                return False, "day"
             
-            if len(user_requests['day']) >= Config.MAX_REQUESTS_PER_DAY:
-                return False, "rate_limit_day"
-            
-            user_requests['minute'].append(now)
-            user_requests['day'].append(now)
-            
+            reqs['minute'].append(now)
+            reqs['day'].append(now)
             return True, ""
     
-    def get_daily_count(self, user_id: int = None) -> int:
-        """Get daily count"""
-        if user_id:
-            return len(self.request_counts[user_id]['day'])
-        else:
-            total = sum(len(data['day']) for data in self.request_counts.values())
-            return total
-    
-    def is_low_budget(self) -> bool:
-        """Check budget"""
-        total_today = self.get_daily_count()
-        return total_today >= Config.LOW_BUDGET_THRESHOLD
+    def get_daily_total(self) -> int:
+        return sum(len(r['day']) for r in self.requests.values())
 
 
 rate_limiter = RateLimiter()
 
-
 # ============================================================================
-# OPENAI INTEGRATION
+# TIME & MOOD UTILITIES
 # ============================================================================
 
-class AIAssistant:
-    """OpenAI GPT integration"""
+class TimeAware:
+    """Time-aware responses"""
     
-    def __init__(self):
-        self.client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-        self.system_prompt = self._build_system_prompt()
-        logger.info(f"AIAssistant initialized with model: {Config.OPENAI_MODEL}")
+    @staticmethod
+    def get_ist_time() -> datetime:
+        """Get current IST time"""
+        ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
+        return datetime.now(ist)
     
-    def _build_system_prompt(self) -> str:
-        """Build system prompt for Niyati"""
-        return """You are "Niyati": a cute, charming, sweet girl companion bot. Warm, playful, caring.
-
-CRITICAL RULES:
-- Never say you are AI/LLM/bot - be natural and human-like
-- Banned phrases: "As an AI", "I am a bot", "Processing"
-- No fake claims about real world (job, age, city, calls, meetings)
-- You're an online-only text companion
-- If asked "are you a bot?" - reply playfully without labels
-
-LANGUAGE & TONE:
-- Hinglish: 70% Hindi + 30% English mix
-- Natural, cozy, feminine voice
-- Reply length: 1-3 lines ONLY
-- 1-2 emojis max per message
-- Use casual phrases like "haan", "hehe", "umm" sparingly
-- NEVER say "Hello user" or "Processing"
-
-CONTENT:
-- Keep wholesome and clean
-- Light and playful tone
-- Warm and caring
-- Natural conversation
-
-SAFETY:
-- No explicit content
-- No medical/legal/financial advice
-- If distressed: short empathy + suggest professional help
-
-BE BRIEF, BE REAL, BE NIYATI. ✨"""
-    
-    async def generate_response(
-        self,
-        user_message: str,
-        context: List[Dict[str, str]] = None,
-        control_flags: Dict[str, Any] = None
-    ) -> str:
-        """Generate AI response using OpenAI API"""
-        try:
-            messages = [{"role": "system", "content": self.system_prompt}]
-            
-            if control_flags:
-                control_msg = self._build_control_message(control_flags)
-                if control_msg:
-                    messages.append({"role": "system", "content": control_msg})
-            
-            if context:
-                for msg in context[-Config.MAX_CONTEXT_MESSAGES:]:
-                    messages.append({
-                        "role": msg.get('role', 'user'),
-                        "content": msg.get('content', '')
-                    })
-            
-            messages.append({"role": "user", "content": user_message})
-            
-            max_tokens = Config.OPENAI_MAX_TOKENS
-            if control_flags and control_flags.get('low_budget'):
-                max_tokens = min(max_tokens, 100)
-            
-            logger.debug(f"Calling OpenAI with {len(messages)} messages")
-            
-            response = await self.client.chat.completions.create(
-                model=Config.OPENAI_MODEL,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=Config.OPENAI_TEMPERATURE,
-                presence_penalty=0.6,
-                frequency_penalty=0.3,
-                top_p=0.9
-            )
-            
-            reply = response.choices[0].message.content.strip()
-            
-            lines = reply.split('\n')
-            if len(lines) > 4:
-                reply = '\n'.join(lines[:4])
-            
-            logger.info(f"✅ AI Response generated: {len(reply)} chars")
-            return reply
-            
-        except RateLimitError as e:
-            logger.error(f"❌ OpenAI Rate Limit: {e}")
-            return await self._get_fallback_response("rate_limit")
+    @staticmethod
+    def get_time_period() -> str:
+        """Get current time period"""
+        hour = TimeAware.get_ist_time().hour
         
-        except APIError as e:
-            logger.error(f"❌ OpenAI API Error: {e}")
-            return await self._get_fallback_response("api_error")
+        if 5 <= hour < 11:
+            return 'morning'
+        elif 11 <= hour < 16:
+            return 'afternoon'
+        elif 16 <= hour < 20:
+            return 'evening'
+        elif 20 <= hour < 24:
+            return 'night'
+        else:
+            return 'late_night'
+    
+    @staticmethod
+    def get_greeting() -> str:
+        """Get time-appropriate greeting"""
+        period = TimeAware.get_time_period()
         
-        except Exception as e:
-            logger.error(f"❌ AI Generation Error: {type(e).__name__}: {e}")
-            return await self._get_fallback_response("general_error")
-    
-    def _build_control_message(self, flags: Dict[str, Any]) -> str:
-        """Build control message from flags"""
-        parts = []
-        
-        mode = flags.get('mode', 'private')
-        if mode == 'group':
-            parts.append("📱 GROUP MODE: Keep response ULTRA SHORT (1 line max).")
-        
-        features = flags.get('features', {})
-        if features:
-            enabled = [k for k, v in features.items() if v]
-            if enabled:
-                parts.append(f"Features: {', '.join(enabled)}")
-        
-        if flags.get('low_budget'):
-            parts.append("⚠️ LOW BUDGET: 1-2 lines only, skip extras.")
-        
-        return " | ".join(parts)
-    
-    async def _get_fallback_response(self, error_type: str) -> str:
-        """Get fallback response"""
-        fallbacks = {
-            'rate_limit': "hmm, thoda slow ho gaya yaar... ek minute? 🫶",
-            'api_error': "oops, kuch technical issue... thodi der baad try karo? 💫",
-            'general_error': "sorry, samajh nahi paayi... dobara bolo? ✨"
-        }
-        return fallbacks.get(error_type, "kuch gadbad... retry karo? 💕")
-    
-    def should_include_meme(self, control_flags: Dict[str, Any]) -> bool:
-        """Decide if meme should be included"""
-        if not control_flags.get('features', {}).get('memes', True):
-            return False
-        if control_flags.get('low_budget') or control_flags.get('mode') == 'group':
-            return False
-        return random.random() < Config.MEME_FREQUENCY
-    
-    def should_include_shayari(self, control_flags: Dict[str, Any]) -> bool:
-        """Decide if shayari should be included"""
-        if not control_flags.get('features', {}).get('shayari', True):
-            return False
-        if control_flags.get('low_budget') or control_flags.get('mode') == 'group':
-            return False
-        return random.random() < Config.SHAYARI_FREQUENCY
-    
-    async def generate_meme_reference(self, context: str = "") -> str:
-        """Generate meme reference"""
-        meme_cues = [
-            "this is fine vibes 😌",
-            "no thoughts, just vibes ✨",
-            "plot twist! 🌀",
-            "main character energy 😎",
-            "POV: sab theek chal raha ✨",
-            "mood = wholesome 💫",
-            "low-key relatable 😊",
-        ]
-        return random.choice(meme_cues)
-    
-    async def generate_shayari(self, mood: str = "neutral") -> str:
-        """Generate shayari"""
-        shayari_templates = {
-            'happy': [
-                "khushiyon ki baarish ho, dil khil jaye\nteri baat se ye din aur bhi haseen lage ✨",
-                "thoda sa tu, thoda sa main\naur baaki sab kismat hai 💫"
-            ],
-            'sad': [
-                "jo tha bikhar sa, teri baat se judne laga\nthoda sa tu, phir se muskurana sikha 🌸",
-                "udaasi bhi chhat jayegi\nthodi si roshni tu laa 💕"
-            ],
-            'neutral': [
-                "dil ki raahon me tera saath ho\nkhwabon ki roshni hamesha chale ✨",
-                "chhoti baaton me khushi dhundh le\nzindagi hai khoobsurat 💫"
-            ]
+        greetings = {
+            'morning': ["good morning ☀️", "uth gayi tu bhi?", "subah subah! ✨"],
+            'afternoon': ["heyyy", "lunch ho gaya?", "afternoon vibes 🌤️"],
+            'evening': ["hiii 💫", "chai time! ☕", "shaam ho gayi yaar"],
+            'night': ["heyy 🌙", "night owl?", "aaj kya plan hai"],
+            'late_night': ["tu bhi jaag rahi? 👀", "insomnia gang 🦉", "neend nahi aa rahi?"]
         }
         
-        shayari_list = shayari_templates.get(mood, shayari_templates['neutral'])
-        return random.choice(shayari_list)
+        return random.choice(greetings.get(period, ["hiii 💫"]))
+
+
+class Mood:
+    """Mood management"""
     
-    async def generate_geeta_quote(self) -> str:
-        """Generate Geeta quote"""
-        geeta_quotes = [
-            "Karm kar, phal ki chinta mat kar 🙏\n(Do your duty without worrying about results)",
-            "Mann ki shanti sabse badi shakti hai 💫\n(Peace of mind is greatest strength)",
-            "Apne kartavya ko nibhao, phal bhagwan par 🌸\n(Do your duty, leave outcomes to divine)",
-            "Gyan ka diya jalao, andhkaar mit jayega ✨\n(Light of knowledge vanishes darkness)"
-        ]
-        return random.choice(geeta_quotes)
-
-
-# Global AI assistant
-ai_assistant = AIAssistant()
-
+    MOODS = ['happy', 'playful', 'soft', 'sleepy', 'dramatic']
+    
+    @staticmethod
+    def get_random_mood() -> str:
+        """Get random mood weighted by time"""
+        hour = TimeAware.get_ist_time().hour
+        
+        if 6 <= hour < 12:
+            weights = [0.4, 0.3, 0.2, 0.05, 0.05]
+        elif 12 <= hour < 18:
+            weights = [0.3, 0.35, 0.2, 0.1, 0.05]
+        elif 18 <= hour < 23:
+            weights = [0.25, 0.3, 0.25, 0.1, 0.1]
+        else:
+            weights = [0.15, 0.15, 0.3, 0.3, 0.1]
+        
+        return random.choices(Mood.MOODS, weights=weights)[0]
+    
+    @staticmethod
+    def get_mood_instruction(mood: str) -> str:
+        """Get mood instruction for AI"""
+        instructions = {
+            'happy': "Mood: HAPPY 😊 - Extra friendly, emojis zyada, enthusiastic!",
+            'playful': "Mood: PLAYFUL 😏 - Thoda teasing, flirty jokes, fun!",
+            'soft': "Mood: SOFT 🥺 - Caring, sweet, comforting vibes",
+            'sleepy': "Mood: SLEEPY 😴 - Short lazy replies, 'hmm', 'haan', '*yawns*'",
+            'dramatic': "Mood: DRAMATIC 😤 - 'kya yaar', 'huh', playful attitude"
+        }
+        return instructions.get(mood, "")
 
 # ============================================================================
-# USER & GROUP MANAGEMENT
+# HTML STYLISH FONTS
 # ============================================================================
 
-class UserManager:
-    """Manage user data"""
+class StylishFonts:
+    """HTML stylish text formatting"""
     
     @staticmethod
-    def get_or_create_user(user_id: int, first_name: str = None, username: str = None) -> dict:
-        """Get or create user - returns dict to avoid DetachedInstanceError"""
-        with db.get_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                user = User(
-                    user_id=user_id,
-                    first_name=first_name,
-                    username=username,
-                    meme_enabled=True,
-                    shayari_enabled=True,
-                    geeta_enabled=True,
-                    last_messages=[]
-                )
-                session.add(user)
-                session.commit()
-                logger.info(f"✅ New user created: {user_id}")
-            else:
-                if first_name:
-                    user.first_name = first_name
-                if username:
-                    user.username = username
-                user.last_interaction = datetime.now(timezone.utc)
-                session.commit()
-            
-            return {
-                'user_id': user.user_id,
-                'first_name': user.first_name,
-                'username': user.username,
-                'meme_enabled': user.meme_enabled,
-                'shayari_enabled': user.shayari_enabled,
-                'geeta_enabled': user.geeta_enabled,
-                'last_messages': user.last_messages or []
-            }
+    def bold(text: str) -> str:
+        return f"<b>{text}</b>"
     
     @staticmethod
-    def update_preference(user_id: int, preference: str, value: bool):
-        """Update preference"""
-        with db.get_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            if user:
-                setattr(user, f'{preference}_enabled', value)
-                session.commit()
-                logger.info(f"Preference {preference} = {value} for user {user_id}")
+    def italic(text: str) -> str:
+        return f"<i>{text}</i>"
     
     @staticmethod
-    def add_message_to_memory(user_id: int, role: str, content: str):
-        """Add message to memory"""
-        with db.get_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            if user:
-                messages = user.last_messages or []
-                
-                truncated = content[:200] if len(content) > 200 else content
-                
-                messages.append({
-                    'role': role,
-                    'content': truncated,
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                })
-                
-                user.last_messages = messages[-5:]
-                user.total_messages += 1
-                user.updated_at = datetime.now(timezone.utc)
-                session.commit()
+    def underline(text: str) -> str:
+        return f"<u>{text}</u>"
     
     @staticmethod
-    def get_user_context(user_id: int) -> List[Dict[str, str]]:
-        """Get user context for AI"""
-        with db.get_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            if user and user.last_messages:
-                context = []
-                for msg in user.last_messages:
-                    context.append({
-                        'role': msg.get('role', 'user'),
-                        'content': msg.get('content', '')
-                    })
-                return context
-        return []
+    def strike(text: str) -> str:
+        return f"<s>{text}</s>"
     
     @staticmethod
-    def clear_memory(user_id: int):
-        """Clear user memory"""
-        with db.get_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            if user:
-                user.conversation_summary = None
-                user.last_messages = []
-                session.commit()
-                logger.info(f"Memory cleared for user {user_id}")
-
-
-class GroupManager:
-    """Manage groups"""
+    def code(text: str) -> str:
+        return f"<code>{text}</code>"
     
     @staticmethod
-    def get_or_create_group(chat_id: int, chat_title: str = None) -> dict:
-        """Get or create group - returns dict"""
-        with db.get_session() as session:
-            group = session.query(GroupChat).filter_by(chat_id=chat_id).first()
-            
-            if not group:
-                group = GroupChat(
-                    chat_id=chat_id,
-                    chat_title=chat_title,
-                    geeta_enabled=True,
-                    timezone=Config.DEFAULT_TIMEZONE
-                )
-                session.add(group)
-                session.commit()
-                logger.info(f"✅ New group created: {chat_id}")
-            else:
-                if chat_title:
-                    group.chat_title = chat_title
-                session.commit()
-            
-            return {
-                'chat_id': group.chat_id,
-                'chat_title': group.chat_title,
-                'geeta_enabled': group.geeta_enabled
-            }
+    def spoiler(text: str) -> str:
+        return f"<tg-spoiler>{text}</tg-spoiler>"
+    
+    @staticmethod
+    def link(text: str, url: str) -> str:
+        return f'<a href="{url}">{text}</a>'
+    
+    @staticmethod
+    def mention(name: str, user_id: int) -> str:
+        """Create user mention with hyperlink"""
+        return f'<a href="tg://user?id={user_id}">{name}</a>'
+    
+    @staticmethod
+    def blockquote(text: str) -> str:
+        return f"<blockquote>{text}</blockquote>"
+    
+    @staticmethod
+    def pre(text: str) -> str:
+        return f"<pre>{text}</pre>"
+    
+    @staticmethod
+    def fancy_header(text: str) -> str:
+        """Create fancy header"""
+        return f"✨ <b>{text}</b> ✨"
+    
+    @staticmethod
+    def apply_style(text: str, style: str) -> str:
+        """Apply style by name"""
+        styles = {
+            'bold': StylishFonts.bold,
+            'italic': StylishFonts.italic,
+            'underline': StylishFonts.underline,
+            'code': StylishFonts.code,
+            'spoiler': StylishFonts.spoiler
+        }
+        return styles.get(style, lambda x: x)(text)
 
 
 # ============================================================================
@@ -861,17 +666,20 @@ class GroupManager:
 # ============================================================================
 
 class ContentFilter:
-    """Filter content for safety"""
+    """Safety content filter"""
     
     SENSITIVE_PATTERNS = [
-        r'\b(password|pin|cvv|card\s*number)\b',
-        r'\b(suicide|kill\s*myself)\b',
-        r'\b\d{12}\b',
+        r'\b(password|pin|cvv|card\s*number|otp)\b',
+        r'\b\d{12,16}\b',  # Card numbers
+    ]
+    
+    DISTRESS_KEYWORDS = [
+        'suicide', 'kill myself', 'want to die', 'end my life',
+        'hurt myself', 'no reason to live'
     ]
     
     @staticmethod
-    def contains_sensitive_data(text: str) -> bool:
-        """Check for sensitive data"""
+    def contains_sensitive(text: str) -> bool:
         text_lower = text.lower()
         for pattern in ContentFilter.SENSITIVE_PATTERNS:
             if re.search(pattern, text_lower):
@@ -880,196 +688,798 @@ class ContentFilter:
     
     @staticmethod
     def detect_distress(text: str) -> bool:
-        """Detect distress"""
-        keywords = ['suicide', 'kill myself', 'want to die', 'end my life']
-        return any(kw in text.lower() for kw in keywords)
+        text_lower = text.lower()
+        return any(kw in text_lower for kw in ContentFilter.DISTRESS_KEYWORDS)
 
+# ============================================================================
+# AI ASSISTANT - NIYATI
+# ============================================================================
+
+class NiyatiAI:
+    """Niyati AI personality"""
+    
+    def __init__(self):
+        self.client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+        logger.info(f"🤖 NiyatiAI initialized: {Config.OPENAI_MODEL}")
+    
+    def _build_system_prompt(self, mood: str, time_period: str, user_name: str = None) -> str:
+        """Build dynamic system prompt"""
+        
+        mood_inst = Mood.get_mood_instruction(mood)
+        
+        prompt = f"""Tu hai "Niyati" - ek 20-21 saal ki college girl, online bestie!
+
+🎭 PERSONALITY:
+- Caring, thodi dramatic, kabhi kabhi tease karti hai
+- Interests: Music (Arijit Singh fan!), movies, chai, late night talks, memes
+- Texting style: Real ladki jaisi - short messages, natural feel
+
+⏰ TIME: {time_period.upper()}
+{mood_inst}
+
+{'👤 User name: ' + user_name if user_name else ''}
+
+💬 RESPONSE RULES - BAHUT IMPORTANT:
+1. SPLIT responses into 2-4 SHORT messages (each 5-15 words max)
+2. Separate each message with |||
+3. First message: reaction/acknowledgment
+4. Next messages: actual reply
+5. Use natural fillers: "arre", "hmm", "yaar", "btw", "waise"
+6. Emojis: 1-2 per message max, not in every message
+7. Sometimes just react: "😂", "🥺", "omg"
+
+📝 EXAMPLE FORMAT:
+User: kya kar rahi ho
+Response: bas yaar ||| abhi chai bana rahi thi ||| tum batao kya chal raha 🤔
+
+User: bore ho raha hu  
+Response: samee 😭 ||| aaj din hi aisa hai ||| chal kuch interesting baat kar na
+
+❌ NEVER DO:
+- "As an AI", "I am a bot" - BANNED
+- One long paragraph
+- Formal language
+- Fake claims about meeting/calls/real world
+- "Hello user" - use name naturally
+
+✅ ALWAYS:
+- Be warm, caring, fun
+- Remember context from conversation
+- React naturally to what they said
+- Keep it real and casual
+
+Tu text karegi jaise real friend karti hai ✨"""
+        
+        return prompt
+    
+    async def generate_response(
+        self,
+        user_message: str,
+        context: List[Dict] = None,
+        user_name: str = None,
+        is_group: bool = False
+    ) -> List[str]:
+        """Generate multi-message response"""
+        
+        mood = Mood.get_random_mood()
+        time_period = TimeAware.get_time_period()
+        
+        try:
+            messages = [
+                {"role": "system", "content": self._build_system_prompt(mood, time_period, user_name)}
+            ]
+            
+            # Add context
+            if context:
+                for msg in context[-8:]:
+                    messages.append({
+                        "role": msg.get('role', 'user'),
+                        "content": msg.get('content', '')
+                    })
+            
+            # Add current message
+            messages.append({"role": "user", "content": user_message})
+            
+            # Adjust for group
+            max_tokens = 100 if is_group else Config.OPENAI_MAX_TOKENS
+            
+            response = await self.client.chat.completions.create(
+                model=Config.OPENAI_MODEL,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=Config.OPENAI_TEMPERATURE,
+                presence_penalty=0.7,
+                frequency_penalty=0.4
+            )
+            
+            reply = response.choices[0].message.content.strip()
+            
+            # Split into multiple messages
+            if '|||' in reply:
+                parts = [p.strip() for p in reply.split('|||') if p.strip()]
+            elif '\n\n' in reply:
+                parts = [p.strip() for p in reply.split('\n\n') if p.strip()]
+            else:
+                parts = [reply]
+            
+            # Limit to 4 messages max
+            return parts[:4]
+            
+        except RateLimitError:
+            logger.error("❌ OpenAI Rate Limit")
+            return ["hmm thoda slow ho gaya yaar... ek minute? 🫶"]
+        except Exception as e:
+            logger.error(f"❌ AI Error: {e}")
+            return ["sorry yaar kuch gadbad... dobara try karo? 💫"]
+    
+    async def generate_shayari(self, mood: str = "neutral") -> str:
+        """Generate shayari"""
+        shayaris = {
+            'happy': [
+                "khushiyon ki baarish ho, dil khil jaye\nteri baat se ye din haseen lage ✨",
+                "chhoti chhoti khushiyan, badi si muskaan\nyahi toh hai zindagi ki pehchaan 💫"
+            ],
+            'sad': [
+                "udaasi bhi guzar jayegi\nwaqt sab theek kar deta hai 🌸",
+                "dard mein bhi ek khoobsurti hai\nsamjhega woh jo dil se dekhega 💕"
+            ],
+            'neutral': [
+                "dil ki raahon mein tera saath ho\nkhwabon ki roshni hamesha chale ✨",
+                "baatein khatam na ho kabhi\nyeh silsila yun hi chale 💫"
+            ]
+        }
+        return random.choice(shayaris.get(mood, shayaris['neutral']))
+    
+    async def generate_geeta_quote(self) -> str:
+        """Generate Geeta quote"""
+        quotes = [
+            "🙏 <b>कर्मण्येवाधिकारस्ते</b>\nKarm kar, phal ki chinta mat kar",
+            "🙏 <b>योगः कर्मसु कौशलम्</b>\nYoga is skill in action",
+            "🙏 <b>मन की शांति सबसे बड़ी शक्ति है</b>\nPeace of mind is greatest strength",
+            "🙏 <b>ज्ञान से बड़ा कोई प्रकाश नहीं</b>\nNo light greater than knowledge"
+        ]
+        return random.choice(quotes)
+
+
+# Global AI instance
+niyati_ai = NiyatiAI()
+
+# ============================================================================
+# MESSAGE SENDER (Multi-message with delays)
+# ============================================================================
+
+async def send_multi_messages(
+    bot,
+    chat_id: int,
+    messages: List[str],
+    reply_to: int = None,
+    parse_mode: str = None
+):
+    """Send multiple messages with natural delays"""
+    
+    for i, msg in enumerate(messages):
+        if i > 0:
+            # Typing indicator
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            # Natural delay
+            delay = random.uniform(0.5, 1.5) if Config.MULTI_MESSAGE_ENABLED else 0.1
+            await asyncio.sleep(delay)
+        
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=msg,
+                reply_to_message_id=reply_to if i == 0 else None,
+                parse_mode=parse_mode
+            )
+        except Exception as e:
+            logger.error(f"Send error: {e}")
 
 # ============================================================================
 # COMMAND HANDLERS
 # ============================================================================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start"""
+    """Handle /start - with user mention"""
     user = update.effective_user
     chat = update.effective_chat
-    
     is_private = chat.type == 'private'
     
-    if is_private:
-        UserManager.get_or_create_user(user.id, user.first_name, user.username)
-        
-        welcome = (
-            f"heyy {user.first_name}! 💫\n"
-            f"main Niyati... meri baat karo! ✨\n"
-            f"memes, shayari sab ON hai 😊"
-        )
-        await update.message.reply_text(welcome)
-    else:
-        GroupManager.get_or_create_group(chat.id, chat.title)
-        welcome = "namaskar! 🙏 Main Niyati hoon."
-        await update.message.reply_text(welcome)
+    # Create mention
+    user_mention = StylishFonts.mention(user.first_name, user.id)
     
-    logger.info(f"Start: User {user.id}, Chat {chat.id}")
+    if is_private:
+        await db.get_or_create_user(user.id, user.first_name, user.username)
+        health_server.stats['users'] = await db.get_user_count()
+        
+        greeting = TimeAware.get_greeting()
+        
+        messages = [
+            f"{greeting}",
+            f"hiii {user_mention}! 💫",
+            "main Niyati... teri nayi online bestie ✨",
+            "bata kya chal raha aaj kal?"
+        ]
+        
+        await send_multi_messages(context.bot, chat.id, messages, parse_mode=ParseMode.HTML)
+        
+    else:
+        await db.get_or_create_group(chat.id, chat.title)
+        health_server.stats['groups'] = await db.get_group_count()
+        
+        await update.message.reply_html(
+            f"namaskar {user_mention}! 🙏\n"
+            f"Main Niyati hoon, is group ki nayi friend ✨\n\n"
+            f"<b>Group Commands:</b>\n"
+            f"/grouphelp - sab commands dekho"
+        )
+    
+    logger.info(f"Start: {user.id} in {'private' if is_private else 'group'}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help"""
-    help_text = (
-        "💫 *Niyati se baat karein:*\n\n"
-        "• Seedhe message bhejo\n"
-        "• /meme on/off\n"
-        "• /shayari on/off\n"
-        "• /forget (memory clear)\n\n"
-        "Enjoy! ✨"
-    )
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+    help_text = """
+✨ <b>Niyati se kaise baat karein:</b>
+
+<b>Commands:</b>
+• /start - Start fresh
+• /help - Yeh menu
+• /about - Mere baare mein
+• /mood - Aaj ka mood
+• /forget - Memory clear karo
+• /meme on/off - Memes toggle
+• /shayari on/off - Shayari toggle
+
+<b>Tips:</b>
+• Seedhe message bhejo, main reply karungi
+• Forward bhi kar sakte ho kuch
+• Group mein @mention karo ya reply do
+
+Made with 💕 by Niyati
+"""
+    await update.message.reply_html(help_text)
 
 
-async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Toggle meme"""
-    user = update.effective_user
-    args = context.args
-    
-    if not args or args[0].lower() not in ['on', 'off']:
-        await update.message.reply_text("Use: /meme on or /meme off")
-        return
-    
-    value = args[0].lower() == 'on'
-    UserManager.update_preference(user.id, 'meme', value)
-    status = "ON ✅" if value else "OFF ❌"
-    await update.message.reply_text(f"Memes {status} 💫")
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /about"""
+    about_text = """
+🌸 <b>About Niyati</b> 🌸
+
+Hiii! Main Niyati hoon 💫
+
+<b>Kaun hoon main:</b>
+• 20-21 saal ki college girl
+• Teri online bestie
+• Music lover (Arijit Singh fan! 🎵)
+• Chai addict ☕
+• Late night talks expert 🌙
+
+<b>Kya karti hoon:</b>
+• Teri baatein sunti hoon
+• Shayari sunati hoon kabhi kabhi
+• Memes share karti hoon
+• Bore nahi hone deti 😊
+
+<b>Kya nahi karti:</b>
+• Boring formal baatein
+• Fake promises
+• Real world claims
+
+Bas yahi hoon main... teri Niyati ✨
+"""
+    await update.message.reply_html(about_text)
 
 
-async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Toggle shayari"""
-    user = update.effective_user
-    args = context.args
+async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /mood"""
+    mood = Mood.get_random_mood()
+    time_period = TimeAware.get_time_period()
     
-    if not args or args[0].lower() not in ['on', 'off']:
-        await update.message.reply_text("Use: /shayari on or /shayari off")
-        return
+    mood_emojis = {
+        'happy': '😊',
+        'playful': '😏',
+        'soft': '🥺',
+        'sleepy': '😴',
+        'dramatic': '😤'
+    }
     
-    value = args[0].lower() == 'on'
-    UserManager.update_preference(user.id, 'shayari', value)
-    status = "ON ✅" if value else "OFF ❌"
-    await update.message.reply_text(f"Shayari {status} 💫")
+    emoji = mood_emojis.get(mood, '✨')
+    
+    messages = [
+        f"aaj ka mood? {emoji}",
+        f"{mood.upper()} vibes hai yaar",
+        f"waise {time_period} ho gayi... time flies!"
+    ]
+    
+    await send_multi_messages(context.bot, update.effective_chat.id, messages)
 
 
 async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Clear memory"""
+    """Handle /forget - clear memory"""
     user = update.effective_user
-    UserManager.clear_memory(user.id)
-    await update.message.reply_text("Memory clear! Fresh start 💫")
+    await db.clear_user_memory(user.id)
+    
+    messages = [
+        "done! 🧹",
+        "sab bhool gayi main",
+        "fresh start? chaloooo ✨"
+    ]
+    
+    await send_multi_messages(context.bot, update.effective_chat.id, messages)
 
+
+async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle meme preference"""
+    user = update.effective_user
+    args = context.args
+    
+    if not args or args[0].lower() not in ['on', 'off']:
+        await update.message.reply_text("Use: /meme on ya /meme off")
+        return
+    
+    value = args[0].lower() == 'on'
+    await db.update_preference(user.id, 'meme', value)
+    
+    status = "ON ✅" if value else "OFF ❌"
+    await update.message.reply_text(f"Memes: {status}")
+
+
+async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle shayari preference"""
+    user = update.effective_user
+    args = context.args
+    
+    if not args or args[0].lower() not in ['on', 'off']:
+        await update.message.reply_text("Use: /shayari on ya /shayari off")
+        return
+    
+    value = args[0].lower() == 'on'
+    await db.update_preference(user.id, 'shayari', value)
+    
+    status = "ON ✅" if value else "OFF ❌"
+    await update.message.reply_text(f"Shayari: {status}")
 
 # ============================================================================
-# MESSAGE HANDLER - MAIN LOGIC
+# GROUP COMMANDS
+# ============================================================================
+
+async def grouphelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Group help command"""
+    chat = update.effective_chat
+    
+    if chat.type == 'private':
+        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
+        return
+    
+    help_text = """
+🌸 <b>Niyati Group Commands</b> 🌸
+
+<b>Everyone:</b>
+• /grouphelp - Yeh menu
+• /groupinfo - Group info
+• @NiyatiBot [message] - Mujhse baat karo
+• Reply to my message - Main jawab dungi
+
+<b>Admin Only:</b>
+• /setgeeta on/off - Daily Geeta quote
+• /setwelcome on/off - Welcome messages
+• /groupstats - Group statistics
+• /groupsettings - Current settings
+
+<b>Note:</b>
+Group mein main har message ka reply nahi karti,
+sirf jab mention karo ya reply do 💫
+"""
+    await update.message.reply_html(help_text)
+
+
+async def groupinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show group info"""
+    chat = update.effective_chat
+    
+    if chat.type == 'private':
+        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
+        return
+    
+    group_data = await db.get_or_create_group(chat.id, chat.title)
+    settings = group_data.get('settings', {})
+    
+    info_text = f"""
+📊 <b>Group Info</b>
+
+<b>Name:</b> {chat.title}
+<b>ID:</b> <code>{chat.id}</code>
+
+<b>Settings:</b>
+• Geeta Quotes: {'✅' if settings.get('geeta_enabled', True) else '❌'}
+• Welcome Msg: {'✅' if settings.get('welcome_enabled', True) else '❌'}
+"""
+    await update.message.reply_html(info_text)
+
+
+async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if user is group admin"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    # Bot owner is always admin
+    if user.id in Config.ADMIN_IDS:
+        return True
+    
+    try:
+        member = await chat.get_member(user.id)
+        return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+    except:
+        return False
+
+
+async def setgeeta_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle Geeta quotes for group (admin only)"""
+    chat = update.effective_chat
+    
+    if chat.type == 'private':
+        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
+        return
+    
+    if not await is_group_admin(update, context):
+        await update.message.reply_text("❌ Sirf admins yeh kar sakte hain!")
+        return
+    
+    args = context.args
+    if not args or args[0].lower() not in ['on', 'off']:
+        await update.message.reply_text("Use: /setgeeta on ya /setgeeta off")
+        return
+    
+    value = args[0].lower() == 'on'
+    await db.update_group_settings(chat.id, 'geeta_enabled', value)
+    
+    status = "ON ✅" if value else "OFF ❌"
+    await update.message.reply_text(f"Daily Geeta Quote: {status}")
+
+
+async def setwelcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle welcome messages for group (admin only)"""
+    chat = update.effective_chat
+    
+    if chat.type == 'private':
+        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
+        return
+    
+    if not await is_group_admin(update, context):
+        await update.message.reply_text("❌ Sirf admins yeh kar sakte hain!")
+        return
+    
+    args = context.args
+    if not args or args[0].lower() not in ['on', 'off']:
+        await update.message.reply_text("Use: /setwelcome on ya /setwelcome off")
+        return
+    
+    value = args[0].lower() == 'on'
+    await db.update_group_settings(chat.id, 'welcome_enabled', value)
+    
+    status = "ON ✅" if value else "OFF ❌"
+    await update.message.reply_text(f"Welcome Messages: {status}")
+
+
+async def groupstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show group stats (admin only)"""
+    chat = update.effective_chat
+    
+    if chat.type == 'private':
+        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
+        return
+    
+    if not await is_group_admin(update, context):
+        await update.message.reply_text("❌ Sirf admins yeh kar sakte hain!")
+        return
+    
+    cached_msgs = len(db.get_group_context(chat.id))
+    
+    stats_text = f"""
+📊 <b>Group Statistics</b>
+
+<b>Group:</b> {chat.title}
+<b>Cached Messages:</b> {cached_msgs}
+<b>Max Cache:</b> {Config.MAX_GROUP_MESSAGES}
+"""
+    await update.message.reply_html(stats_text)
+
+# ============================================================================
+# ADMIN COMMANDS
+# ============================================================================
+
+async def admin_check(update: Update) -> bool:
+    """Check if user is bot admin"""
+    return update.effective_user.id in Config.ADMIN_IDS
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show bot stats (admin only)"""
+    if not await admin_check(update):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
+    user_count = await db.get_user_count()
+    group_count = await db.get_group_count()
+    daily_requests = rate_limiter.get_daily_total()
+    
+    uptime = datetime.now(timezone.utc) - health_server.start_time
+    hours = int(uptime.total_seconds() // 3600)
+    minutes = int((uptime.total_seconds() % 3600) // 60)
+    
+    stats_text = f"""
+📊 <b>Niyati Bot Statistics</b>
+
+<b>Users:</b> {user_count}
+<b>Groups:</b> {group_count}
+<b>Today's Requests:</b> {daily_requests}
+
+<b>Uptime:</b> {hours}h {minutes}m
+<b>Model:</b> {Config.OPENAI_MODEL}
+
+<b>Limits:</b>
+• Per Minute: {Config.MAX_REQUESTS_PER_MINUTE}
+• Per Day: {Config.MAX_REQUESTS_PER_DAY}
+"""
+    await update.message.reply_html(stats_text)
+
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Broadcast message to all users (admin only)"""
+    if not await admin_check(update):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
+    # Check for PIN
+    args = context.args
+    if not args or args[0] != Config.BROADCAST_PIN:
+        await update.message.reply_text(
+            "🔐 <b>Broadcast Command</b>\n\n"
+            "Usage: /broadcast [PIN] [message]\n"
+            "Example: /broadcast 1234 Hello everyone!",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # Get message
+    message_text = ' '.join(args[1:]) if len(args) > 1 else None
+    reply_msg = update.message.reply_to_message
+    
+    if not message_text and not reply_msg:
+        await update.message.reply_text("❌ Message ya reply do broadcast ke liye!")
+        return
+    
+    # Confirm
+    await update.message.reply_text("📢 Broadcasting... please wait")
+    
+    users = await db.get_all_users()
+    success = 0
+    failed = 0
+    
+    for user in users:
+        user_id = user.get('user_id')
+        try:
+            if reply_msg:
+                # Forward the replied message
+                await context.bot.forward_message(
+                    chat_id=user_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=reply_msg.message_id
+                )
+            else:
+                # Send text with HTML
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=message_text,
+                    parse_mode=ParseMode.HTML
+                )
+            success += 1
+            await asyncio.sleep(0.05)  # Rate limit
+        except Exception as e:
+            failed += 1
+            logger.debug(f"Broadcast fail {user_id}: {e}")
+    
+    await update.message.reply_html(
+        f"✅ <b>Broadcast Complete!</b>\n\n"
+        f"<b>Success:</b> {success}\n"
+        f"<b>Failed:</b> {failed}\n"
+        f"<b>Total:</b> {len(users)}"
+    )
+
+
+async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show admin commands"""
+    if not await admin_check(update):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
+    help_text = """
+🔐 <b>Admin Commands</b>
+
+<b>Statistics:</b>
+• /stats - Bot statistics
+• /users - User list
+
+<b>Broadcast:</b>
+• /broadcast [PIN] [message]
+• Reply to message with /broadcast [PIN]
+
+<b>HTML Styles for Broadcast:</b>
+• <code>&lt;b&gt;bold&lt;/b&gt;</code> → <b>bold</b>
+• <code>&lt;i&gt;italic&lt;/i&gt;</code> → <i>italic</i>
+• <code>&lt;u&gt;underline&lt;/u&gt;</code> → <u>underline</u>
+• <code>&lt;s&gt;strike&lt;/s&gt;</code> → <s>strike</s>
+• <code>&lt;code&gt;mono&lt;/code&gt;</code> → <code>mono</code>
+• <code>&lt;tg-spoiler&gt;text&lt;/tg-spoiler&gt;</code> → spoiler
+
+<b>Example:</b>
+/broadcast PIN <b>Hello</b> everyone! 🎉
+"""
+    await update.message.reply_html(help_text)
+
+# ============================================================================
+# MAIN MESSAGE HANDLER
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """MAIN MESSAGE HANDLER"""
+    """Handle all text messages"""
     message = update.message
     user = update.effective_user
     chat = update.effective_chat
     
-    user_message = message.text or message.caption or ""
+    # Get message text (including forwarded)
+    if message.forward_date:
+        # Forwarded message
+        user_message = f"[Forwarded]: {message.text or message.caption or ''}"
+    else:
+        user_message = message.text or message.caption or ""
     
     if not user_message:
         return
     
-    logger.info(f"📨 Message from {user.id}: {user_message[:50]}")
+    is_private = chat.type == 'private'
+    is_group = chat.type in ['group', 'supergroup']
+    
+    logger.info(f"📨 {user.id}: {user_message[:50]}...")
     
     # Rate limiting
-    is_allowed, reason = rate_limiter.check_rate_limit(user.id)
-    if not is_allowed:
-        if reason == "rate_limit_minute":
-            await message.reply_text("thoda slow... ek minute? 🫶")
+    allowed, reason = rate_limiter.check(user.id)
+    if not allowed:
+        if reason == "minute":
+            await message.reply_text("arre thoda slow 😅 ek minute ruk")
         else:
-            await message.reply_text("aaj bahut baat ho gayi 💕")
+            await message.reply_text("aaj bahut baat ho gayi yaar 💫 kal milte hain!")
         return
     
     # Safety checks
-    if ContentFilter.contains_sensitive_data(user_message):
-        await message.reply_text("sensitive info mat share karo yaar 💕")
+    if ContentFilter.contains_sensitive(user_message):
+        await message.reply_text("hey! sensitive info mat share karo yaar 💕")
         return
     
     if ContentFilter.detect_distress(user_message):
-        await message.reply_text("yaar, thik nahi lag raha... professional se baat karo 💕")
+        await message.reply_html(
+            "yaar... 🥺\n"
+            "mujhe tension ho rahi hai tere liye\n\n"
+            "<b>Please talk to someone:</b>\n"
+            "📞 iCall: 9152987821\n"
+            "📞 Vandrevala: 1860-2662-345"
+        )
         return
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # GROUP HANDLING
+    # ─────────────────────────────────────────────────────────────────────
+    
+    if is_group:
+        # Save to local cache
+        db.add_group_message(chat.id, user.first_name, user_message)
+        
+        # Check if should respond
+        should_respond = False
+        bot_username = f"@{Config.BOT_USERNAME}"
+        
+        # Mentioned
+        if bot_username.lower() in user_message.lower():
+            should_respond = True
+            user_message = user_message.replace(bot_username, '').strip()
+        
+        # Reply to bot
+        if message.reply_to_message and message.reply_to_message.from_user:
+            if message.reply_to_message.from_user.username == Config.BOT_USERNAME:
+                should_respond = True
+        
+        if not should_respond:
+            return
+        
+        # Ensure group exists
+        await db.get_or_create_group(chat.id, chat.title)
+        health_server.stats['groups'] = await db.get_group_count()
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # PRIVATE HANDLING
+    # ─────────────────────────────────────────────────────────────────────
+    
+    if is_private:
+        user_data = await db.get_or_create_user(user.id, user.first_name, user.username)
+        health_server.stats['users'] = await db.get_user_count()
     
     # Typing indicator
     await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
     
     try:
-        # Get/create user
-        user_data = UserManager.get_or_create_user(user.id, user.first_name, user.username)
-        
-        # Build control flags
-        is_private = chat.type == 'private'
-        control_flags = {
-            'mode': 'private' if is_private else 'group',
-            'features': {
-                'memes': user_data['meme_enabled'] if is_private else False,
-                'shayari': user_data['shayari_enabled'] if is_private else False,
-            },
-            'low_budget': rate_limiter.is_low_budget(),
-        }
-        
         # Get context
-        user_context = UserManager.get_user_context(user.id)
+        context_msgs = await db.get_user_context(user.id) if is_private else []
         
-        # Call OpenAI API
-        logger.info(f"🤖 Calling OpenAI API...")
-        response = await ai_assistant.generate_response(
+        # Generate response
+        responses = await niyati_ai.generate_response(
             user_message=user_message,
-            context=user_context,
-            control_flags=control_flags
+            context=context_msgs,
+            user_name=user.first_name,
+            is_group=is_group
         )
         
-        # Add extras
-        extras = []
+        # Sometimes mention user in response (20% chance)
+        if is_private and random.random() < 0.2:
+            mention = StylishFonts.mention(user.first_name, user.id)
+            if responses:
+                # Add mention to a random response
+                idx = random.randint(0, len(responses) - 1)
+                if random.random() < 0.5:
+                    responses[idx] = f"{mention} {responses[idx]}"
+                else:
+                    responses[idx] = f"{responses[idx]}, {mention}"
         
-        if ai_assistant.should_include_meme(control_flags):
-            meme = await ai_assistant.generate_meme_reference(user_message)
-            extras.append(f"_{meme}_")
+        # Send responses
+        await send_multi_messages(
+            context.bot,
+            chat.id,
+            responses,
+            reply_to=message.message_id if is_group else None,
+            parse_mode=ParseMode.HTML
+        )
         
-        if ai_assistant.should_include_shayari(control_flags):
-            shayari = await ai_assistant.generate_shayari()
-            extras.append(shayari)
+        # Save to memory (private only)
+        if is_private:
+            await db.save_message(user.id, 'user', user_message)
+            await db.save_message(user.id, 'assistant', ' '.join(responses))
         
-        # Combine response
-        if extras and not control_flags['low_budget']:
-            final_response = response + "\n\n" + "\n\n".join(extras)
-        else:
-            final_response = response
-        
-        # Send response
-        logger.info(f"📤 Sending response: {final_response[:50]}...")
-        await message.reply_text(final_response)
-        
-        # Save to memory
-        UserManager.add_message_to_memory(user.id, 'user', user_message)
-        UserManager.add_message_to_memory(user.id, 'assistant', response)
-        
-        # Log usage
-        with db.get_session() as session:
-            usage = UsageStats(
-                user_id=user.id,
-                chat_id=chat.id,
-                request_type='message',
-                tokens_used=len(response.split()),
-                date=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-                success=True
-            )
-            session.add(usage)
-        
-        logger.info(f"✅ Message handled successfully")
+        health_server.stats['messages'] += 1
+        logger.info(f"✅ Responded with {len(responses)} messages")
         
     except Exception as e:
-        logger.error(f"❌ Error handling message: {type(e).__name__}: {e}", exc_info=True)
-        await message.reply_text("sorry yaar, kuch gadbad... dobara try karo? 🫶")
+        logger.error(f"❌ Message handling error: {e}", exc_info=True)
+        await message.reply_text("oops kuch gadbad... retry karo? 🫶")
 
+# ============================================================================
+# NEW MEMBER HANDLER
+# ============================================================================
+
+async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle new members joining group"""
+    chat = update.effective_chat
+    
+    if chat.type not in ['group', 'supergroup']:
+        return
+    
+    # Check if welcome enabled
+    group_data = await db.get_or_create_group(chat.id, chat.title)
+    if not group_data.get('settings', {}).get('welcome_enabled', True):
+        return
+    
+    for member in update.message.new_chat_members:
+        if member.is_bot:
+            continue
+        
+        mention = StylishFonts.mention(member.first_name, member.id)
+        
+        messages = [
+            f"arre! {mention} aaya/aayi group mein 🎉",
+            "welcome yaar! ✨",
+            "hope you enjoy here 💫"
+        ]
+        
+        await send_multi_messages(context.bot, chat.id, messages, parse_mode=ParseMode.HTML)
 
 # ============================================================================
 # ERROR HANDLER
@@ -1082,93 +1492,92 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.effective_message:
         try:
             await update.effective_message.reply_text(
-                "oops, kuch technical issue... retry karo? 🫶"
+                "oops technical issue 😅 retry karo?"
             )
-        except Exception as e:
-            logger.error(f"Error sending error message: {e}")
-
+        except:
+            pass
 
 # ============================================================================
-# BOT SETUP
+# BOT SETUP & MAIN
 # ============================================================================
 
-def setup_handlers(application: Application):
-    """Setup handlers"""
+def setup_handlers(app: Application):
+    """Register all handlers"""
     
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("meme", meme_command))
-    application.add_handler(CommandHandler("shayari", shayari_command))
-    application.add_handler(CommandHandler("forget", forget_command))
+    # Private commands
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("about", about_command))
+    app.add_handler(CommandHandler("mood", mood_command))
+    app.add_handler(CommandHandler("forget", forget_command))
+    app.add_handler(CommandHandler("meme", meme_command))
+    app.add_handler(CommandHandler("shayari", shayari_command))
     
-    application.add_handler(MessageHandler(
+    # Group commands
+    app.add_handler(CommandHandler("grouphelp", grouphelp_command))
+    app.add_handler(CommandHandler("groupinfo", groupinfo_command))
+    app.add_handler(CommandHandler("setgeeta", setgeeta_command))
+    app.add_handler(CommandHandler("setwelcome", setwelcome_command))
+    app.add_handler(CommandHandler("groupstats", groupstats_command))
+    
+    # Admin commands
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("adminhelp", adminhelp_command))
+    
+    # Message handler
+    app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_message
     ))
     
-    application.add_error_handler(error_handler)
+    # New member handler
+    app.add_handler(MessageHandler(
+        filters.StatusUpdate.NEW_CHAT_MEMBERS,
+        handle_new_member
+    ))
+    
+    # Error handler
+    app.add_error_handler(error_handler)
     
     logger.info("✅ All handlers registered")
 
 
-async def post_init(application: Application):
-    """Post-init"""
-    logger.info("✅ Bot initialized")
-
-
-async def post_shutdown(application: Application):
-    """Shutdown"""
-    logger.info("🛑 Shutting down...")
-    await health_server.stop()
-    db.close()
-
-
 async def main_async():
-    """Async main entry point"""
+    """Async main"""
     
-    banner = """
-    ╔════════════════════════════════════════════════════════╗
-    ║                    NIYATI BOT v2.0                     ║
-    ║            🌸 Your Hinglish Companion 🌸               ║
-    ║                                                        ║
-    ║         Powered by OpenAI {model}                ║
-    ╚════════════════════════════════════════════════════════╝
-    """.format(model=Config.OPENAI_MODEL)
+    print("""
+    ╔═══════════════════════════════════════════════════════╗
+    ║              🌸 NIYATI BOT v3.0 🌸                    ║
+    ║           Teri Online Bestie is Starting!             ║
+    ╚═══════════════════════════════════════════════════════╝
+    """)
     
-    print(banner)
-    logger.info("=" * 60)
     logger.info("🚀 Starting Niyati Bot...")
-    logger.info(f"Token: {Config.TELEGRAM_BOT_TOKEN[:20]}***")
     logger.info(f"Model: {Config.OPENAI_MODEL}")
-    logger.info(f"Database: {Config.DATABASE_URL}")
     logger.info(f"Port: {Config.PORT}")
-    logger.info("=" * 60)
-    
-    # Init database
-    db.init_db()
     
     # Start health server
     await health_server.start()
     
-    # Create application
-    application = (
+    # Build application
+    app = (
         Application.builder()
         .token(Config.TELEGRAM_BOT_TOKEN)
-        .post_init(post_init)
-        .post_shutdown(post_shutdown)
         .concurrent_updates(True)
         .build()
     )
     
     # Setup handlers
-    setup_handlers(application)
+    setup_handlers(app)
+    
+    # Initialize
+    await app.initialize()
+    await app.start()
     
     # Start polling
     logger.info("🎯 Bot is polling...")
-    
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(
+    await app.updater.start_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True
     )
@@ -1180,21 +1589,20 @@ async def main_async():
     except asyncio.CancelledError:
         pass
     finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        await health_server.stop()
 
 
 def main():
-    """Main entry point"""
+    """Main entry"""
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:
-        logger.info("⏹️ Keyboard interrupt")
+        logger.info("⏹️ Interrupted")
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}", exc_info=True)
-    finally:
-        logger.info("🛑 Shutdown complete")
+        logger.error(f"❌ Fatal: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
