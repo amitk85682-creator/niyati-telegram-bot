@@ -981,7 +981,7 @@ except Exception as e:
         
         # ---- CALL OPENAI API ----
     logger.info(f"🤖 Calling OpenAI API...")
-        response = await ai_assistant.generate_response(
+    response = await ai_assistant.generate_response(
             user_message=user_message,
             context=user_context,
             control_flags=control_flags
