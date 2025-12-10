@@ -1,5 +1,5 @@
 """
-Niyati Telegram Bot - FIXED VERSION
+Niyati Telegram Bot - FULLY FIXED VERSION
 A cute, charming, sweet Hinglish companion bot
 Production-Ready Implementation
 """
@@ -62,9 +62,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy. pool import QueuePool
+from sqlalchemy.pool import QueuePool
 
-# OpenAI - FIXED IMPORT
+# OpenAI
 from openai import AsyncOpenAI, RateLimitError, APIError
 
 # Utilities
@@ -93,10 +93,10 @@ class Config:
     # Telegram Bot Token
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
     
-    # OpenAI API Key - FIXED
+    # OpenAI API Key
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')  # Changed to more reliable model
-    OPENAI_MAX_TOKENS = int(os. getenv('OPENAI_MAX_TOKENS', '150'))
+    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
+    OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '150'))
     OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.8'))
     
     # Database
@@ -107,7 +107,7 @@ class Config:
     REDIS_ENABLED = os.getenv('REDIS_ENABLED', 'false').lower() == 'true' and REDIS_AVAILABLE
     
     # Admin Configuration
-    ADMIN_IDS = [int(x. strip()) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip()]
+    ADMIN_IDS = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip()]
     BROADCAST_PIN = os.getenv('BROADCAST_PIN', 'niyati2024')
     
     # Bot Behavior
@@ -116,7 +116,7 @@ class Config:
     
     # Geeta Quote Window
     GEETA_START_HOUR = int(os.getenv('GEETA_START_HOUR', '7'))
-    GEETA_END_HOUR = int(os. getenv('GEETA_END_HOUR', '10'))
+    GEETA_END_HOUR = int(os.getenv('GEETA_END_HOUR', '10'))
     
     # Rate Limiting
     MAX_REQUESTS_PER_MINUTE = int(os.getenv('MAX_REQUESTS_PER_MINUTE', '20'))
@@ -128,11 +128,11 @@ class Config:
     
     # Content frequencies
     MEME_FREQUENCY = float(os.getenv('MEME_FREQUENCY', '0.175'))
-    SHAYARI_FREQUENCY = float(os. getenv('SHAYARI_FREQUENCY', '0.125'))
+    SHAYARI_FREQUENCY = float(os.getenv('SHAYARI_FREQUENCY', '0.125'))
     
     # Logging
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-    LOG_FILE = os.getenv('LOG_FILE', 'niyati_bot. log')
+    LOG_FILE = os.getenv('LOG_FILE', 'niyati_bot.log')
     
     # Memory limits
     MAX_CONTEXT_MESSAGES = int(os.getenv('MAX_CONTEXT_MESSAGES', '5'))
@@ -148,7 +148,7 @@ class Config:
             raise ValueError("TELEGRAM_BOT_TOKEN is required!")
         if not cls.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is required!")
-        if not cls. ADMIN_IDS:
+        if not cls.ADMIN_IDS:
             print("Warning: No ADMIN_IDS configured!")
 
 
@@ -158,7 +158,7 @@ Config.validate()
 # LOGGING SETUP
 # ============================================================================
 
-import logging. handlers
+import logging.handlers
 
 def setup_logging():
     """Configure logging with both file and console handlers"""
@@ -182,7 +182,7 @@ def setup_logging():
     root_logger.addHandler(console_handler)
     
     file_handler = logging.handlers.RotatingFileHandler(
-        Config. LOG_FILE,
+        Config.LOG_FILE,
         maxBytes=10*1024*1024,
         backupCount=5,
         encoding='utf-8'
@@ -304,7 +304,7 @@ class Database:
     
     def init_db(self):
         """Initialize database"""
-        logger.info(f"Initializing database:  {Config.DATABASE_URL[: 20]}...")
+        logger.info(f"Initializing database: {Config.DATABASE_URL[:20]}...")
         
         self.engine = create_engine(
             Config.DATABASE_URL,
@@ -334,7 +334,7 @@ class Database:
             logger.error(f"Database session error: {e}")
             raise
         finally:
-            session. close()
+            session.close()
     
     def close(self):
         """Close database"""
@@ -357,10 +357,10 @@ class Cache:
     
     def __init__(self):
         self.redis_client = None
-        self. memory_cache = {}
-        self. cache_ttl = {}
+        self.memory_cache = {}
+        self.cache_ttl = {}
         
-        if Config.REDIS_ENABLED: 
+        if Config.REDIS_ENABLED:
             try:
                 self.redis_client = redis.from_url(
                     Config.REDIS_URL,
@@ -369,16 +369,16 @@ class Cache:
                 )
                 self.redis_client.ping()
                 logger.info("Redis initialized")
-            except Exception as e: 
-                logger.warning(f"Redis failed:  {e}. Using in-memory cache.")
+            except Exception as e:
+                logger.warning(f"Redis failed: {e}. Using in-memory cache.")
                 self.redis_client = None
     
-    def get(self, key:  str) -> Optional[Any]:
+    def get(self, key: str) -> Optional[Any]:
         """Get from cache"""
         try:
             if self.redis_client:
                 value = self.redis_client.get(key)
-                if value: 
+                if value:
                     return json.loads(value)
             else:
                 if key in self.memory_cache:
@@ -388,17 +388,17 @@ class Cache:
                     else:
                         return self.memory_cache[key]
         except Exception as e:
-            logger. error(f"Cache get error: {e}")
+            logger.error(f"Cache get error: {e}")
         return None
     
     def set(self, key: str, value: Any, ttl: int = 3600):
         """Set in cache"""
         try:
             if self.redis_client:
-                self.redis_client.setex(key, ttl, json. dumps(value))
+                self.redis_client.setex(key, ttl, json.dumps(value))
             else:
                 self.memory_cache[key] = value
-                self. cache_ttl[key] = datetime.now() + timedelta(seconds=ttl)
+                self.cache_ttl[key] = datetime.now() + timedelta(seconds=ttl)
         except Exception as e:
             logger.error(f"Cache set error: {e}")
     
@@ -421,7 +421,7 @@ cache = Cache()
 # RATE LIMITING
 # ============================================================================
 
-class RateLimiter: 
+class RateLimiter:
     """Rate limiting"""
     
     def __init__(self):
@@ -445,7 +445,7 @@ class RateLimiter:
             if len(user_requests['minute']) >= Config.MAX_REQUESTS_PER_MINUTE:
                 return False, "rate_limit_minute"
             
-            if len(user_requests['day']) >= Config.MAX_REQUESTS_PER_DAY: 
+            if len(user_requests['day']) >= Config.MAX_REQUESTS_PER_DAY:
                 return False, "rate_limit_day"
             
             user_requests['minute'].append(now)
@@ -455,7 +455,7 @@ class RateLimiter:
     
     def get_daily_count(self, user_id: int = None) -> int:
         """Get daily count"""
-        if user_id: 
+        if user_id:
             return len(self.request_counts[user_id]['day'])
         else:
             total = sum(len(data['day']) for data in self.request_counts.values())
@@ -471,21 +471,20 @@ rate_limiter = RateLimiter()
 
 
 # ============================================================================
-# OPENAI INTEGRATION - FIXED
+# OPENAI INTEGRATION
 # ============================================================================
 
 class AIAssistant:
-    """OpenAI GPT integration - FIXED"""
+    """OpenAI GPT integration"""
     
     def __init__(self):
-        # FIXED:  Proper AsyncOpenAI initialization
-        self. client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
+        self.client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
         self.system_prompt = self._build_system_prompt()
         logger.info(f"AIAssistant initialized with model: {Config.OPENAI_MODEL}")
     
     def _build_system_prompt(self) -> str:
         """Build system prompt for Niyati"""
-        return """You are "Niyati":  a cute, charming, sweet girl companion bot.  Warm, playful, caring. 
+        return """You are "Niyati": a cute, charming, sweet girl companion bot. Warm, playful, caring.
 
 CRITICAL RULES:
 - Never say you are AI/LLM/bot - be natural and human-like
@@ -495,25 +494,25 @@ CRITICAL RULES:
 - If asked "are you a bot?" - reply playfully without labels
 
 LANGUAGE & TONE:
-- Hinglish:  70% Hindi + 30% English mix
+- Hinglish: 70% Hindi + 30% English mix
 - Natural, cozy, feminine voice
 - Reply length: 1-3 lines ONLY
 - 1-2 emojis max per message
 - Use casual phrases like "haan", "hehe", "umm" sparingly
 - NEVER say "Hello user" or "Processing"
 
-CONTENT: 
+CONTENT:
 - Keep wholesome and clean
 - Light and playful tone
 - Warm and caring
 - Natural conversation
 
-SAFETY: 
+SAFETY:
 - No explicit content
 - No medical/legal/financial advice
-- If distressed:  short empathy + suggest professional help
+- If distressed: short empathy + suggest professional help
 
-BE BRIEF, BE REAL, BE NIYATI.  ✨"""
+BE BRIEF, BE REAL, BE NIYATI. ✨"""
     
     async def generate_response(
         self,
@@ -521,12 +520,10 @@ BE BRIEF, BE REAL, BE NIYATI.  ✨"""
         context: List[Dict[str, str]] = None,
         control_flags: Dict[str, Any] = None
     ) -> str:
-        """
-        Generate AI response using OpenAI API - FIXED
-        """
+        """Generate AI response using OpenAI API"""
         try:
             # Build messages list
-            messages = [{"role": "system", "content":  self.system_prompt}]
+            messages = [{"role": "system", "content": self.system_prompt}]
             
             # Add control flags
             if control_flags:
@@ -536,10 +533,9 @@ BE BRIEF, BE REAL, BE NIYATI.  ✨"""
             
             # Add conversation context
             if context:
-                # Take last N messages
                 for msg in context[-Config.MAX_CONTEXT_MESSAGES:]:
                     messages.append({
-                        "role": msg. get('role', 'user'),
+                        "role": msg.get('role', 'user'),
                         "content": msg.get('content', '')
                     })
             
@@ -551,10 +547,9 @@ BE BRIEF, BE REAL, BE NIYATI.  ✨"""
             if control_flags and control_flags.get('low_budget'):
                 max_tokens = min(max_tokens, 100)
             
-            # FIXED:  Proper async API call
             logger.debug(f"Calling OpenAI with {len(messages)} messages")
             
-            response = await self.client. chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=Config.OPENAI_MODEL,
                 messages=messages,
                 max_tokens=max_tokens,
@@ -565,22 +560,22 @@ BE BRIEF, BE REAL, BE NIYATI.  ✨"""
             )
             
             # Extract response
-            reply = response.choices[0].message.content. strip()
+            reply = response.choices[0].message.content.strip()
             
             # Enforce length limit
             lines = reply.split('\n')
-            if len(lines) > 4: 
-                reply = '\n'.join(lines[: 4])
+            if len(lines) > 4:
+                reply = '\n'.join(lines[:4])
             
-            logger. info(f"✅ AI Response generated: {len(reply)} chars")
+            logger.info(f"✅ AI Response generated: {len(reply)} chars")
             return reply
             
         except RateLimitError as e:
-            logger.error(f"❌ OpenAI Rate Limit:  {e}")
+            logger.error(f"❌ OpenAI Rate Limit: {e}")
             return await self._get_fallback_response("rate_limit")
         
-        except APIError as e: 
-            logger.error(f"❌ OpenAI API Error:  {e}")
+        except APIError as e:
+            logger.error(f"❌ OpenAI API Error: {e}")
             return await self._get_fallback_response("api_error")
         
         except Exception as e:
@@ -593,31 +588,31 @@ BE BRIEF, BE REAL, BE NIYATI.  ✨"""
         
         mode = flags.get('mode', 'private')
         if mode == 'group':
-            parts.append("📱 GROUP MODE:  Keep response ULTRA SHORT (1 line max).")
+            parts.append("📱 GROUP MODE: Keep response ULTRA SHORT (1 line max).")
         
         features = flags.get('features', {})
-        if features: 
+        if features:
             enabled = [k for k, v in features.items() if v]
             if enabled:
                 parts.append(f"Features: {', '.join(enabled)}")
         
         if flags.get('low_budget'):
-            parts.append("⚠️ LOW BUDGET:  1-2 lines only, skip extras.")
+            parts.append("⚠️ LOW BUDGET: 1-2 lines only, skip extras.")
         
         return " | ".join(parts)
     
     async def _get_fallback_response(self, error_type: str) -> str:
         """Get fallback response"""
         fallbacks = {
-            'rate_limit': "hmm, thoda slow ho gaya yaar...  ek minute?  🫶",
-            'api_error': "oops, kuch technical issue... thodi der baad try karo?  💫",
-            'general_error':  "sorry, samajh nahi paayi... dobara bolo?  ✨"
+            'rate_limit': "hmm, thoda slow ho gaya yaar... ek minute? 🫶",
+            'api_error': "oops, kuch technical issue... thodi der baad try karo? 💫",
+            'general_error': "sorry, samajh nahi paayi... dobara bolo? ✨"
         }
-        return fallbacks.get(error_type, "kuch gadbad...  retry karo? 💕")
+        return fallbacks.get(error_type, "kuch gadbad... retry karo? 💕")
     
     def should_include_meme(self, control_flags: Dict[str, Any]) -> bool:
         """Decide if meme should be included"""
-        if not control_flags. get('features', {}).get('memes', True):
+        if not control_flags.get('features', {}).get('memes', True):
             return False
         if control_flags.get('low_budget') or control_flags.get('mode') == 'group':
             return False
@@ -636,7 +631,7 @@ BE BRIEF, BE REAL, BE NIYATI.  ✨"""
         meme_cues = [
             "this is fine vibes 😌",
             "no thoughts, just vibes ✨",
-            "plot twist!  🌀",
+            "plot twist! 🌀",
             "main character energy 😎",
             "POV: sab theek chal raha ✨",
             "mood = wholesome 💫",
@@ -672,7 +667,7 @@ BE BRIEF, BE REAL, BE NIYATI.  ✨"""
             "Apne kartavya ko nibhao, phal bhagwan par 🌸\n(Do your duty, leave outcomes to divine)",
             "Gyan ka diya jalao, andhkaar mit jayega ✨\n(Light of knowledge vanishes darkness)"
         ]
-        return random. choice(geeta_quotes)
+        return random.choice(geeta_quotes)
 
 
 # Global AI assistant
@@ -687,8 +682,8 @@ class UserManager:
     """Manage user data"""
     
     @staticmethod
-    def get_or_create_user(user_id: int, first_name: str = None, username: str = None) -> User:
-        """Get or create user"""
+    def get_or_create_user(user_id: int, first_name: str = None, username: str = None) -> dict:
+        """Get or create user - returns dict to avoid DetachedInstanceError"""
         with db.get_session() as session:
             user = session.query(User).filter_by(user_id=user_id).first()
             
@@ -702,8 +697,8 @@ class UserManager:
                     geeta_enabled=True,
                     last_messages=[]
                 )
-                session. add(user)
-                session. commit()
+                session.add(user)
+                session.commit()
                 logger.info(f"✅ New user created: {user_id}")
             else:
                 if first_name:
@@ -711,10 +706,18 @@ class UserManager:
                 if username:
                     user.username = username
                 user.last_interaction = datetime.utcnow()
-                session. commit()
+                session.commit()
             
-            session.expunge(user)
-            return user
+            # Return dict instead of ORM object to avoid DetachedInstanceError
+            return {
+                'user_id': user.user_id,
+                'first_name': user.first_name,
+                'username': user.username,
+                'meme_enabled': user.meme_enabled,
+                'shayari_enabled': user.shayari_enabled,
+                'geeta_enabled': user.geeta_enabled,
+                'last_messages': user.last_messages or []
+            }
     
     @staticmethod
     def update_preference(user_id: int, preference: str, value: bool):
@@ -724,7 +727,7 @@ class UserManager:
             if user:
                 setattr(user, f'{preference}_enabled', value)
                 session.commit()
-                logger. info(f"Preference {preference} = {value} for user {user_id}")
+                logger.info(f"Preference {preference} = {value} for user {user_id}")
     
     @staticmethod
     def add_message_to_memory(user_id: int, role: str, content: str):
@@ -757,9 +760,9 @@ class UserManager:
             if user and user.last_messages:
                 context = []
                 for msg in user.last_messages:
-                    context. append({
-                        'role':  msg. get('role', 'user'),
-                        'content': msg. get('content', '')
+                    context.append({
+                        'role': msg.get('role', 'user'),
+                        'content': msg.get('content', '')
                     })
                 return context
         return []
@@ -768,8 +771,8 @@ class UserManager:
     def clear_memory(user_id: int):
         """Clear user memory"""
         with db.get_session() as session:
-            user = session. query(User).filter_by(user_id=user_id).first()
-            if user: 
+            user = session.query(User).filter_by(user_id=user_id).first()
+            if user:
                 user.conversation_summary = None
                 user.last_messages = []
                 session.commit()
@@ -780,12 +783,12 @@ class GroupManager:
     """Manage groups"""
     
     @staticmethod
-    def get_or_create_group(chat_id: int, chat_title: str = None) -> GroupChat:
-        """Get or create group"""
+    def get_or_create_group(chat_id: int, chat_title: str = None) -> dict:
+        """Get or create group - returns dict"""
         with db.get_session() as session:
             group = session.query(GroupChat).filter_by(chat_id=chat_id).first()
             
-            if not group: 
+            if not group:
                 group = GroupChat(
                     chat_id=chat_id,
                     chat_title=chat_title,
@@ -796,12 +799,15 @@ class GroupManager:
                 session.commit()
                 logger.info(f"✅ New group created: {chat_id}")
             else:
-                if chat_title: 
+                if chat_title:
                     group.chat_title = chat_title
                 session.commit()
             
-            session.expunge(group)
-            return group
+            return {
+                'chat_id': group.chat_id,
+                'chat_title': group.chat_title,
+                'geeta_enabled': group.geeta_enabled
+            }
 
 
 # ============================================================================
@@ -821,7 +827,7 @@ class ContentFilter:
     def contains_sensitive_data(text: str) -> bool:
         """Check for sensitive data"""
         text_lower = text.lower()
-        for pattern in ContentFilter. SENSITIVE_PATTERNS:
+        for pattern in ContentFilter.SENSITIVE_PATTERNS:
             if re.search(pattern, text_lower):
                 return True
         return False
@@ -844,12 +850,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     is_private = chat.type == 'private'
     
-    if is_private: 
+    if is_private:
         UserManager.get_or_create_user(user.id, user.first_name, user.username)
         
         welcome = (
-            f"heyy {user.first_name}!  💫\n"
-            f"main Niyati...  meri baat karo! ✨\n"
+            f"heyy {user.first_name}! 💫\n"
+            f"main Niyati... meri baat karo! ✨\n"
             f"memes, shayari sab ON hai 😊"
         )
         await update.message.reply_text(welcome)
@@ -858,18 +864,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome = "namaskar! 🙏 Main Niyati hoon."
         await update.message.reply_text(welcome)
     
-    logger.info(f"Start:  User {user.id}, Chat {chat.id}")
+    logger.info(f"Start: User {user.id}, Chat {chat.id}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help"""
     help_text = (
-        "💫 *Niyati se baat karein: *\n\n"
+        "💫 *Niyati se baat karein:*\n\n"
         "• Seedhe message bhejo\n"
         "• /meme on/off\n"
         "• /shayari on/off\n"
         "• /forget (memory clear)\n\n"
-        "Enjoy!  ✨"
+        "Enjoy! ✨"
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -879,12 +885,12 @@ async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     
-    if not args or args[0]. lower() not in ['on', 'off']: 
-        await update.message.reply_text("Use:  /meme on or /meme off")
+    if not args or args[0].lower() not in ['on', 'off']:
+        await update.message.reply_text("Use: /meme on or /meme off")
         return
     
     value = args[0].lower() == 'on'
-    UserManager.update_preference(user. id, 'meme', value)
+    UserManager.update_preference(user.id, 'meme', value)
     status = "ON ✅" if value else "OFF ❌"
     await update.message.reply_text(f"Memes {status} 💫")
 
@@ -892,51 +898,50 @@ async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Toggle shayari"""
     user = update.effective_user
-    args = context. args
+    args = context.args
     
-    if not args or args[0].lower() not in ['on', 'off']: 
+    if not args or args[0].lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /shayari on or /shayari off")
         return
     
     value = args[0].lower() == 'on'
-    UserManager.update_preference(user. id, 'shayari', value)
+    UserManager.update_preference(user.id, 'shayari', value)
     status = "ON ✅" if value else "OFF ❌"
     await update.message.reply_text(f"Shayari {status} 💫")
 
 
-async def forget_command(update:  Update, context: ContextTypes. DEFAULT_TYPE):
+async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Clear memory"""
-    user = update. effective_user
-    UserManager. clear_memory(user.id)
+    user = update.effective_user
+    UserManager.clear_memory(user.id)
     await update.message.reply_text("Memory clear! Fresh start 💫")
 
 
 # ============================================================================
-# MESSAGE HANDLER - MAIN LOGIC FIXED
+# MESSAGE HANDLER - MAIN LOGIC (FIXED)
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    MAIN MESSAGE HANDLER - FIXED
-    This is where the bot generates responses
+    MAIN MESSAGE HANDLER - FULLY FIXED
     """
     message = update.message
     user = update.effective_user
     chat = update.effective_chat
     
     # Get user message
-    user_message = message. text or message.caption or ""
+    user_message = message.text or message.caption or ""
     
     if not user_message:
         return
     
-    logger.info(f"📨 Message from {user.id}: {user_message[: 50]}")
+    logger.info(f"📨 Message from {user.id}: {user_message[:50]}")
     
     # ---- RATE LIMITING ----
     is_allowed, reason = rate_limiter.check_rate_limit(user.id)
     if not is_allowed:
         if reason == "rate_limit_minute":
-            await message.reply_text("thoda slow...  ek minute? 🫶")
+            await message.reply_text("thoda slow... ek minute? 🫶")
         else:
             await message.reply_text("aaj bahut baat ho gayi 💕")
         return
@@ -951,52 +956,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # ---- TYPING INDICATOR ----
-await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
-
-try:
-    # ---- GET/CREATE USER ----
-    user_obj = UserManager.get_or_create_user(user.id, user.first_name, user.username)
-
-    # ✅ IMPORTANT FIX — DetachedInstanceError ka ilaaj
-    session = SessionLocal()
-    user_obj = session.merge(user_obj)
-    session.refresh(user_obj)
-
-    # ---- BUILD CONTROL FLAGS ----
-    is_private = chat.type == 'private'
-    control_flags = {
-        'mode': 'private' if is_private else 'group',
-        'features': {
-            'memes': user_obj.meme_enabled if is_private else False,
-            'shayari': user_obj.shayari_enabled if is_private else False,
-        },
-        'low_budget': rate_limiter.is_low_budget(),
-    }
-
-except Exception as e:
-    logger.error(f"❌ Control flag error: {e}")
+    await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
+    
+    try:
+        # ---- GET/CREATE USER ----
+        user_data = UserManager.get_or_create_user(user.id, user.first_name, user.username)
+        
+        # ---- BUILD CONTROL FLAGS ----
+        is_private = chat.type == 'private'
+        control_flags = {
+            'mode': 'private' if is_private else 'group',
+            'features': {
+                'memes': user_data['meme_enabled'] if is_private else False,
+                'shayari': user_data['shayari_enabled'] if is_private else False,
+            },
+            'low_budget': rate_limiter.is_low_budget(),
+        }
         
         # ---- GET CONTEXT ----
-    user_context = UserManager.get_user_context(user.id)
+        user_context = UserManager.get_user_context(user.id)
         
         # ---- CALL OPENAI API ----
-    logger.info(f"🤖 Calling OpenAI API...")
-    response = await ai_assistant.generate_response(
+        logger.info(f"🤖 Calling OpenAI API...")
+        response = await ai_assistant.generate_response(
             user_message=user_message,
             context=user_context,
             control_flags=control_flags
         )
         
         # ---- ADD EXTRAS (MEME/SHAYARI) ----
-    extras = []
+        extras = []
         
-if ai_assistant.should_include_meme(control_flags):
-    meme = await ai_assistant.generate_meme_reference(user_message)
-    extras.append(f"_{meme}_")
-
-if ai_assistant.should_include_shayari(control_flags):
-    shayari = await ai_assistant.generate_shayari()
-    extras.append(shayari)
+        if ai_assistant.should_include_meme(control_flags):
+            meme = await ai_assistant.generate_meme_reference(user_message)
+            extras.append(f"_{meme}_")
+        
+        if ai_assistant.should_include_shayari(control_flags):
+            shayari = await ai_assistant.generate_shayari()
+            extras.append(shayari)
         
         # ---- COMBINE RESPONSE ----
         if extras and not control_flags['low_budget']:
@@ -1018,7 +1015,7 @@ if ai_assistant.should_include_shayari(control_flags):
                 user_id=user.id,
                 chat_id=chat.id,
                 request_type='message',
-                tokens_used=len(response. split()),
+                tokens_used=len(response.split()),
                 date=datetime.utcnow().strftime('%Y-%m-%d'),
                 success=True
             )
@@ -1028,7 +1025,7 @@ if ai_assistant.should_include_shayari(control_flags):
         
     except Exception as e:
         logger.error(f"❌ Error handling message: {type(e).__name__}: {e}", exc_info=True)
-        await message.reply_text("sorry yaar, kuch gadbad... dobara try karo?  🫶")
+        await message.reply_text("sorry yaar, kuch gadbad... dobara try karo? 🫶")
 
 
 # ============================================================================
@@ -1042,9 +1039,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.effective_message:
         try:
             await update.effective_message.reply_text(
-                "oops, kuch technical issue... retry karo?  🫶"
+                "oops, kuch technical issue... retry karo? 🫶"
             )
-        except Exception as e: 
+        except Exception as e:
             logger.error(f"Error sending error message: {e}")
 
 
@@ -1052,7 +1049,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # BOT SETUP
 # ============================================================================
 
-def setup_handlers(application:  Application):
+def setup_handlers(application: Application):
     """Setup handlers"""
     
     # Commands
@@ -1093,14 +1090,14 @@ def main():
     ║                    NIYATI BOT v2.0                     ║
     ║            🌸 Your Hinglish Companion 🌸               ║
     ║                                                        ║
-    ║         Powered by OpenAI GPT-3. 5-turbo               ║
+    ║         Powered by OpenAI GPT-3.5-turbo                ║
     ╚════════════════════════════════════════════════════════╝
     """
     
     print(banner)
     logger.info("=" * 60)
     logger.info("🚀 Starting Niyati Bot...")
-    logger.info(f"Token: {Config.TELEGRAM_BOT_TOKEN[: 20]}***")
+    logger.info(f"Token: {Config.TELEGRAM_BOT_TOKEN[:20]}***")
     logger.info(f"Model: {Config.OPENAI_MODEL}")
     logger.info(f"Database: {Config.DATABASE_URL}")
     logger.info("=" * 60)
@@ -1129,8 +1126,8 @@ def main():
             drop_pending_updates=True
         )
     except KeyboardInterrupt:
-        logger. info("⏹️ Keyboard interrupt")
-    except Exception as e: 
+        logger.info("⏹️ Keyboard interrupt")
+    except Exception as e:
         logger.error(f"❌ Fatal error: {e}", exc_info=True)
     finally:
         logger.info("🛑 Shutdown complete")
