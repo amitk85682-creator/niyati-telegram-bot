@@ -990,13 +990,13 @@ except Exception as e:
         # ---- ADD EXTRAS (MEME/SHAYARI) ----
     extras = []
         
-        if ai_assistant.should_include_meme(control_flags):
-            meme = await ai_assistant.generate_meme_reference(user_message)
-            extras.append(f"_{meme}_")
-        
-        if ai_assistant.should_include_shayari(control_flags):
-            shayari = await ai_assistant.generate_shayari()
-            extras.append(shayari)
+if ai_assistant.should_include_meme(control_flags):
+    meme = await ai_assistant.generate_meme_reference(user_message)
+    extras.append(f"_{meme}_")
+
+if ai_assistant.should_include_shayari(control_flags):
+    shayari = await ai_assistant.generate_shayari()
+    extras.append(shayari)
         
         # ---- COMBINE RESPONSE ----
         if extras and not control_flags['low_budget']:
