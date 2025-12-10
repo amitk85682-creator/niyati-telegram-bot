@@ -199,34 +199,40 @@ class Database:
         self._init_supabase()
     
     def _init_supabase(self):
-        """Initialize Supabase client"""
-        if not Config.SUPABASE_URL or not Config.SUPABASE_KEY:
-            logger.warning("⚠️ Supabase not configured")
-            return
+    """Initialize Supabase client - FIXED"""
+    if not Config.SUPABASE_URL or not Config.SUPABASE_KEY:
+        logger.warning("⚠️ Supabase not configured")
+        return
+    
+    try:
+        # The issue:  create_client() signature is simply: 
+        # create_client(url:  str, key: str) -> Client
+        # It does NOT accept proxy, options, or http_client parameters
         
-        try:
-            # Clear any proxy environment variables that might interfere
-            import os
-            proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']
-            saved_proxies = {}
-            for var in proxy_vars:
-                if var in os.environ:
-                    saved_proxies[var] = os.environ.pop(var)
-            
-            # Import and create client
-            from supabase import create_client
-            self.client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-            
-            # Restore proxy variables
-            for var, val in saved_proxies.items():
-                os.environ[var] = val
-            
-            logger.info("✅ Supabase connected")
-            
-        except Exception as e:
-            logger.error(f"❌ Supabase init error: {e}")
+        # Solution: Just pass URL and KEY - the supabase-py library
+        # will handle proxy settings automatically via environment variables
+        
+        self. client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+        
+        logger.info("✅ Supabase connected")
+        
+    except TypeError as e:
+        # This catches "unexpected keyword argument" errors
+        error_msg = str(e)
+        if "proxy" in error_msg.lower():
+            logger.error(f"❌ Supabase init error: {error_msg}")
             logger.info("📦 Using local cache fallback")
-            self.client = None
+            logger.info("💡 Tip: The error 'unexpected keyword argument proxy' means you're using")
+            logger.info("         an incompatible version of supabase-py. Update with:")
+            logger.info("         pip install --upgrade supabase>=2.3.4")
+        else:
+            logger.error(f"❌ Supabase init error: {e}")
+        self.client = None
+        
+    except Exception as e:
+        logger.error(f"❌ Supabase init error:  {e}")
+        logger.info("📦 Using local cache fallback")
+        self.client = None
     
     # ─────────────────────────────────────────────────────────────────────
     # USER OPERATIONS
