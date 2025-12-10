@@ -988,7 +988,7 @@ except Exception as e:
         )
         
         # ---- ADD EXTRAS (MEME/SHAYARI) ----
-        extras = []
+    extras = []
         
         if ai_assistant.should_include_meme(control_flags):
             meme = await ai_assistant.generate_meme_reference(user_message)
