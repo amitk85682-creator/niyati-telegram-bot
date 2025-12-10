@@ -194,49 +194,30 @@ class Database:
     
     def __init__(self):
         self.client = None
-        self.local_group_cache: Dict[int, List[Dict]] = defaultdict(list)
+        self.local_group_cache:  Dict[int, List[Dict]] = defaultdict(list)
         self.local_user_cache: Dict[int, Dict] = {}  # Fallback cache
         self._init_supabase()
     
-def _init_supabase(self):
-    """Initialize Supabase client - FIXED"""
-    if not Config.SUPABASE_URL or not Config.SUPABASE_KEY:
-        logger.warning("⚠️ Supabase not configured")
-        return
-    
-    try:
-        # The issue:  create_client() signature is simply: 
-        # create_client(url:  str, key: str) -> Client
-        # It does NOT accept proxy, options, or http_client parameters
+    def _init_supabase(self):
+        """Initialize Supabase client"""
+        if not Config.SUPABASE_URL or not Config.SUPABASE_KEY:
+            logger.warning("⚠️ Supabase not configured")
+            return
         
-        # Solution: Just pass URL and KEY - the supabase-py library
-        # will handle proxy settings automatically via environment variables
-        
-        self. client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-        
-        logger.info("✅ Supabase connected")
-        
-    except TypeError as e:
-        # This catches "unexpected keyword argument" errors
-        error_msg = str(e)
-        if "proxy" in error_msg.lower():
-            logger.error(f"❌ Supabase init error: {error_msg}")
-            logger.info("📦 Using local cache fallback")
-            logger.info("💡 Tip: The error 'unexpected keyword argument proxy' means you're using")
-            logger.info("         an incompatible version of supabase-py. Update with:")
-            logger.info("         pip install --upgrade supabase>=2.3.4")
-        else:
+        try:
+            # Simple initialization - create_client only takes url and key
+            # DO NOT pass proxy, options, or http_client parameters
+            self.client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+            logger.info("✅ Supabase connected")
+            
+        except Exception as e: 
             logger.error(f"❌ Supabase init error: {e}")
-        self.client = None
-        
-    except Exception as e:
-        logger.error(f"❌ Supabase init error:  {e}")
-        logger.info("📦 Using local cache fallback")
-        self.client = None
+            logger.info("📦 Using local cache fallback")
+            self.client = None
     
-    # ─────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────
     # USER OPERATIONS
-    # ─────────────────────────────────────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────
     
     async def get_or_create_user(self, user_id: int, first_name: str = None, 
                                   username: str = None) -> Dict:
@@ -252,7 +233,7 @@ def _init_supabase(self):
                     # Update name if changed
                     if first_name and user.get('first_name') != first_name:
                         self.client.table('users').update({
-                            'first_name': first_name,
+                            'first_name':  first_name,
                             'username': username,
                             'updated_at': datetime.now(timezone.utc).isoformat()
                         }).eq('user_id', user_id).execute()
@@ -273,10 +254,10 @@ def _init_supabase(self):
                         },
                         'total_messages': 0,
                         'created_at': datetime.now(timezone.utc).isoformat(),
-                        'updated_at': datetime.now(timezone.utc).isoformat()
+                        'updated_at':  datetime.now(timezone.utc).isoformat()
                     }
-                    self.client.table('users').insert(new_user).execute()
-                    logger.info(f"✅ New user: {user_id} ({first_name})")
+                    self.client. table('users').insert(new_user).execute()
+                    logger.info(f"✅ New user:  {user_id} ({first_name})")
                     return new_user
                     
             except Exception as e:
@@ -289,7 +270,7 @@ def _init_supabase(self):
                 'first_name': first_name,
                 'username': username,
                 'messages': [],
-                'preferences': {'meme_enabled': True, 'shayari_enabled': True}
+                'preferences':  {'meme_enabled': True, 'shayari_enabled': True}
             }
         return self.local_user_cache[user_id]
     
