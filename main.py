@@ -95,7 +95,7 @@ class Config:
     
     # OpenAI API Key
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
+    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
     OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '150'))
     OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.8'))
     
@@ -1090,7 +1090,7 @@ def main():
     ║                    NIYATI BOT v2.0                     ║
     ║            🌸 Your Hinglish Companion 🌸               ║
     ║                                                        ║
-    ║         Powered by OpenAI GPT-3.5-turbo                ║
+    ║         Powered by OpenAI gpt-4o-mini                ║
     ╚════════════════════════════════════════════════════════╝
     """
     
