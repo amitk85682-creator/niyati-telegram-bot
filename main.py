@@ -186,28 +186,47 @@ class HealthServer:
 health_server = HealthServer()
 
 # ============================================================================
-# SUPABASE DATABASE
+# SUPABASE DATABASE - FULLY FIXED
 # ============================================================================
 
 class Database:
     """Supabase database manager"""
     
     def __init__(self):
-        self.client: Optional[Client] = None
+        self.client = None
         self.local_group_cache: Dict[int, List[Dict]] = defaultdict(list)
+        self.local_user_cache: Dict[int, Dict] = {}  # Fallback cache
         self._init_supabase()
     
     def _init_supabase(self):
         """Initialize Supabase client"""
-        if Config.SUPABASE_URL and Config.SUPABASE_KEY:
-            try:
-                self.client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-                logger.info("✅ Supabase connected")
-            except Exception as e:
-                logger.error(f"❌ Supabase error: {e}")
-                self.client = None
-        else:
+        if not Config.SUPABASE_URL or not Config.SUPABASE_KEY:
             logger.warning("⚠️ Supabase not configured")
+            return
+        
+        try:
+            # Clear any proxy environment variables that might interfere
+            import os
+            proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']
+            saved_proxies = {}
+            for var in proxy_vars:
+                if var in os.environ:
+                    saved_proxies[var] = os.environ.pop(var)
+            
+            # Import and create client
+            from supabase import create_client
+            self.client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+            
+            # Restore proxy variables
+            for var, val in saved_proxies.items():
+                os.environ[var] = val
+            
+            logger.info("✅ Supabase connected")
+            
+        except Exception as e:
+            logger.error(f"❌ Supabase init error: {e}")
+            logger.info("📦 Using local cache fallback")
+            self.client = None
     
     # ─────────────────────────────────────────────────────────────────────
     # USER OPERATIONS
@@ -215,263 +234,271 @@ class Database:
     
     async def get_or_create_user(self, user_id: int, first_name: str = None, 
                                   username: str = None) -> Dict:
-        """Get or create user in Supabase"""
-        if not self.client:
-            return self._default_user(user_id, first_name, username)
+        """Get or create user"""
         
-        try:
-            # Check existing
-            result = self.client.table('users').select('*').eq('user_id', user_id).execute()
-            
-            if result.data:
-                user = result.data[0]
-                # Update name if changed
-                if first_name and user.get('first_name') != first_name:
-                    self.client.table('users').update({
+        # Try Supabase first
+        if self.client:
+            try:
+                result = self.client.table('users').select('*').eq('user_id', user_id).execute()
+                
+                if result.data:
+                    user = result.data[0]
+                    # Update name if changed
+                    if first_name and user.get('first_name') != first_name:
+                        self.client.table('users').update({
+                            'first_name': first_name,
+                            'username': username,
+                            'updated_at': datetime.now(timezone.utc).isoformat()
+                        }).eq('user_id', user_id).execute()
+                        user['first_name'] = first_name
+                        user['username'] = username
+                    return user
+                else:
+                    # Create new user
+                    new_user = {
+                        'user_id': user_id,
                         'first_name': first_name,
                         'username': username,
+                        'messages': [],
+                        'preferences': {
+                            'meme_enabled': True,
+                            'shayari_enabled': True,
+                            'geeta_enabled': True
+                        },
+                        'total_messages': 0,
+                        'created_at': datetime.now(timezone.utc).isoformat(),
                         'updated_at': datetime.now(timezone.utc).isoformat()
-                    }).eq('user_id', user_id).execute()
-                return user
-            else:
-                # Create new user
-                new_user = {
-                    'user_id': user_id,
-                    'first_name': first_name,
-                    'username': username,
-                    'messages': [],
-                    'preferences': {
-                        'meme_enabled': True,
-                        'shayari_enabled': True,
-                        'geeta_enabled': True
-                    },
-                    'total_messages': 0,
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'updated_at': datetime.now(timezone.utc).isoformat()
-                }
-                self.client.table('users').insert(new_user).execute()
-                logger.info(f"✅ New user: {user_id} ({first_name})")
-                return new_user
-                
-        except Exception as e:
-            logger.error(f"❌ User DB error: {e}")
-            return self._default_user(user_id, first_name, username)
-    
-    def _default_user(self, user_id: int, first_name: str, username: str) -> Dict:
-        return {
-            'user_id': user_id,
-            'first_name': first_name,
-            'username': username,
-            'messages': [],
-            'preferences': {'meme_enabled': True, 'shayari_enabled': True}
-        }
+                    }
+                    self.client.table('users').insert(new_user).execute()
+                    logger.info(f"✅ New user: {user_id} ({first_name})")
+                    return new_user
+                    
+            except Exception as e:
+                logger.error(f"❌ Supabase user error: {e}")
+        
+        # Fallback to local cache
+        if user_id not in self.local_user_cache:
+            self.local_user_cache[user_id] = {
+                'user_id': user_id,
+                'first_name': first_name,
+                'username': username,
+                'messages': [],
+                'preferences': {'meme_enabled': True, 'shayari_enabled': True}
+            }
+        return self.local_user_cache[user_id]
     
     async def save_message(self, user_id: int, role: str, content: str):
-        """Save message to user's conversation history"""
-        if not self.client:
-            return
+        """Save message to history"""
         
-        try:
-            result = self.client.table('users').select('messages').eq('user_id', user_id).execute()
-            
-            if result.data:
-                messages = result.data[0].get('messages', []) or []
+        if self.client:
+            try:
+                result = self.client.table('users').select('messages').eq('user_id', user_id).execute()
                 
-                # Add new message
-                messages.append({
-                    'role': role,
-                    'content': content[:500],  # Limit length
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                })
-                
-                # Keep only last N messages
-                messages = messages[-Config.MAX_PRIVATE_MESSAGES:]
-                
-                # Update
-                self.client.table('users').update({
-                    'messages': messages,
-                    'total_messages': len(messages),
-                    'updated_at': datetime.now(timezone.utc).isoformat()
-                }).eq('user_id', user_id).execute()
-                
-        except Exception as e:
-            logger.error(f"❌ Save message error: {e}")
+                if result.data:
+                    messages = result.data[0].get('messages', []) or []
+                    messages.append({
+                        'role': role,
+                        'content': content[:500],
+                        'timestamp': datetime.now(timezone.utc).isoformat()
+                    })
+                    messages = messages[-Config.MAX_PRIVATE_MESSAGES:]
+                    
+                    self.client.table('users').update({
+                        'messages': messages,
+                        'total_messages': len(messages),
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }).eq('user_id', user_id).execute()
+                return
+                    
+            except Exception as e:
+                logger.error(f"❌ Save message error: {e}")
+        
+        # Fallback
+        if user_id in self.local_user_cache:
+            msgs = self.local_user_cache[user_id].get('messages', [])
+            msgs.append({'role': role, 'content': content[:500]})
+            self.local_user_cache[user_id]['messages'] = msgs[-Config.MAX_PRIVATE_MESSAGES:]
     
     async def get_user_context(self, user_id: int) -> List[Dict]:
-        """Get conversation context for AI"""
-        if not self.client:
-            return []
+        """Get conversation context"""
         
-        try:
-            result = self.client.table('users').select('messages').eq('user_id', user_id).execute()
-            
-            if result.data and result.data[0].get('messages'):
-                return result.data[0]['messages'][-10:]  # Last 10 for context
-            return []
-            
-        except Exception as e:
-            logger.error(f"❌ Get context error: {e}")
-            return []
+        if self.client:
+            try:
+                result = self.client.table('users').select('messages').eq('user_id', user_id).execute()
+                if result.data and result.data[0].get('messages'):
+                    return result.data[0]['messages'][-10:]
+            except Exception as e:
+                logger.error(f"❌ Get context error: {e}")
+        
+        # Fallback
+        if user_id in self.local_user_cache:
+            return self.local_user_cache[user_id].get('messages', [])[-10:]
+        return []
     
     async def clear_user_memory(self, user_id: int):
-        """Clear user's conversation memory"""
-        if not self.client:
-            return
+        """Clear user memory"""
         
-        try:
-            self.client.table('users').update({
-                'messages': [],
-                'updated_at': datetime.now(timezone.utc).isoformat()
-            }).eq('user_id', user_id).execute()
-            logger.info(f"🧹 Memory cleared: {user_id}")
-        except Exception as e:
-            logger.error(f"❌ Clear memory error: {e}")
-    
-    async def update_preference(self, user_id: int, pref: str, value: bool):
-        """Update user preference"""
-        if not self.client:
-            return
-        
-        try:
-            result = self.client.table('users').select('preferences').eq('user_id', user_id).execute()
-            
-            if result.data:
-                prefs = result.data[0].get('preferences', {}) or {}
-                prefs[f'{pref}_enabled'] = value
-                
+        if self.client:
+            try:
                 self.client.table('users').update({
-                    'preferences': prefs,
+                    'messages': [],
                     'updated_at': datetime.now(timezone.utc).isoformat()
                 }).eq('user_id', user_id).execute()
-                
-        except Exception as e:
-            logger.error(f"❌ Update pref error: {e}")
+                logger.info(f"🧹 Memory cleared: {user_id}")
+                return
+            except Exception as e:
+                logger.error(f"❌ Clear memory error: {e}")
+        
+        # Fallback
+        if user_id in self.local_user_cache:
+            self.local_user_cache[user_id]['messages'] = []
+    
+    async def update_preference(self, user_id: int, pref: str, value: bool):
+        """Update preference"""
+        
+        if self.client:
+            try:
+                result = self.client.table('users').select('preferences').eq('user_id', user_id).execute()
+                if result.data:
+                    prefs = result.data[0].get('preferences', {}) or {}
+                    prefs[f'{pref}_enabled'] = value
+                    self.client.table('users').update({
+                        'preferences': prefs,
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }).eq('user_id', user_id).execute()
+                return
+            except Exception as e:
+                logger.error(f"❌ Update pref error: {e}")
+        
+        # Fallback
+        if user_id in self.local_user_cache:
+            prefs = self.local_user_cache[user_id].get('preferences', {})
+            prefs[f'{pref}_enabled'] = value
+            self.local_user_cache[user_id]['preferences'] = prefs
     
     async def get_all_users(self) -> List[Dict]:
         """Get all users for broadcast"""
-        if not self.client:
-            return []
         
-        try:
-            result = self.client.table('users').select('user_id, first_name').execute()
-            return result.data or []
-        except Exception as e:
-            logger.error(f"❌ Get users error: {e}")
-            return []
+        if self.client:
+            try:
+                result = self.client.table('users').select('user_id, first_name').execute()
+                return result.data or []
+            except Exception as e:
+                logger.error(f"❌ Get users error: {e}")
+        
+        return [{'user_id': uid, 'first_name': u.get('first_name')} 
+                for uid, u in self.local_user_cache.items()]
     
     async def get_user_count(self) -> int:
-        """Get total user count"""
-        if not self.client:
-            return 0
+        """Get user count"""
         
-        try:
-            result = self.client.table('users').select('user_id', count='exact').execute()
-            return result.count or 0
-        except Exception as e:
-            logger.error(f"❌ User count error: {e}")
-            return 0
+        if self.client:
+            try:
+                result = self.client.table('users').select('user_id', count='exact').execute()
+                return result.count or 0
+            except Exception as e:
+                logger.error(f"❌ User count error: {e}")
+        
+        return len(self.local_user_cache)
     
     # ─────────────────────────────────────────────────────────────────────
     # GROUP OPERATIONS
     # ─────────────────────────────────────────────────────────────────────
     
     async def get_or_create_group(self, chat_id: int, chat_title: str = None) -> Dict:
-        """Get or create group in Supabase"""
-        if not self.client:
-            return {'chat_id': chat_id, 'chat_title': chat_title, 'settings': {}}
+        """Get or create group"""
         
-        try:
-            result = self.client.table('groups').select('*').eq('chat_id', chat_id).execute()
-            
-            if result.data:
-                group = result.data[0]
-                if chat_title and group.get('chat_title') != chat_title:
-                    self.client.table('groups').update({
-                        'chat_title': chat_title,
-                        'updated_at': datetime.now(timezone.utc).isoformat()
-                    }).eq('chat_id', chat_id).execute()
-                return group
-            else:
-                new_group = {
-                    'chat_id': chat_id,
-                    'chat_title': chat_title,
-                    'settings': {
-                        'geeta_enabled': True,
-                        'welcome_enabled': True,
-                        'response_rate': 0.3
-                    },
-                    'is_active': True,
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'updated_at': datetime.now(timezone.utc).isoformat()
-                }
-                self.client.table('groups').insert(new_group).execute()
-                logger.info(f"✅ New group: {chat_id} ({chat_title})")
-                return new_group
+        default_group = {
+            'chat_id': chat_id, 
+            'chat_title': chat_title, 
+            'settings': {'geeta_enabled': True, 'welcome_enabled': True}
+        }
+        
+        if self.client:
+            try:
+                result = self.client.table('groups').select('*').eq('chat_id', chat_id).execute()
                 
-        except Exception as e:
-            logger.error(f"❌ Group DB error: {e}")
-            return {'chat_id': chat_id, 'chat_title': chat_title, 'settings': {}}
+                if result.data:
+                    group = result.data[0]
+                    if chat_title and group.get('chat_title') != chat_title:
+                        self.client.table('groups').update({
+                            'chat_title': chat_title,
+                            'updated_at': datetime.now(timezone.utc).isoformat()
+                        }).eq('chat_id', chat_id).execute()
+                    return group
+                else:
+                    new_group = {
+                        'chat_id': chat_id,
+                        'chat_title': chat_title,
+                        'settings': {'geeta_enabled': True, 'welcome_enabled': True, 'response_rate': 0.3},
+                        'is_active': True,
+                        'created_at': datetime.now(timezone.utc).isoformat(),
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }
+                    self.client.table('groups').insert(new_group).execute()
+                    logger.info(f"✅ New group: {chat_id}")
+                    return new_group
+                    
+            except Exception as e:
+                logger.error(f"❌ Group error: {e}")
+        
+        return default_group
     
-    async def update_group_settings(self, chat_id: int, setting: str, value: Any):
+    async def update_group_settings(self, chat_id: int, setting: str, value):
         """Update group setting"""
+        
         if not self.client:
             return
         
         try:
             result = self.client.table('groups').select('settings').eq('chat_id', chat_id).execute()
-            
             if result.data:
                 settings = result.data[0].get('settings', {}) or {}
                 settings[setting] = value
-                
                 self.client.table('groups').update({
                     'settings': settings,
                     'updated_at': datetime.now(timezone.utc).isoformat()
                 }).eq('chat_id', chat_id).execute()
-                
         except Exception as e:
             logger.error(f"❌ Update group error: {e}")
     
     async def get_group_count(self) -> int:
-        """Get total group count"""
-        if not self.client:
-            return 0
+        """Get group count"""
         
-        try:
-            result = self.client.table('groups').select('chat_id', count='exact').execute()
-            return result.count or 0
-        except Exception as e:
-            logger.error(f"❌ Group count error: {e}")
-            return 0
+        if self.client:
+            try:
+                result = self.client.table('groups').select('chat_id', count='exact').execute()
+                return result.count or 0
+            except:
+                pass
+        return 0
     
     async def get_all_groups(self) -> List[Dict]:
-        """Get all active groups"""
-        if not self.client:
-            return []
+        """Get all groups"""
         
-        try:
-            result = self.client.table('groups').select('chat_id, chat_title').eq('is_active', True).execute()
-            return result.data or []
-        except Exception as e:
-            logger.error(f"❌ Get groups error: {e}")
-            return []
+        if self.client:
+            try:
+                result = self.client.table('groups').select('chat_id, chat_title').eq('is_active', True).execute()
+                return result.data or []
+            except:
+                pass
+        return []
     
     # ─────────────────────────────────────────────────────────────────────
-    # GROUP LOCAL CACHE (Max 5-10 messages)
+    # LOCAL GROUP CACHE
     # ─────────────────────────────────────────────────────────────────────
     
     def add_group_message(self, chat_id: int, user_name: str, content: str):
-        """Add message to local group cache"""
+        """Add to local cache"""
         self.local_group_cache[chat_id].append({
             'user': user_name,
             'content': content[:200],
             'time': datetime.now(timezone.utc).isoformat()
         })
-        # Keep only last N
         self.local_group_cache[chat_id] = self.local_group_cache[chat_id][-Config.MAX_GROUP_MESSAGES:]
     
     def get_group_context(self, chat_id: int) -> List[Dict]:
-        """Get local group context"""
+        """Get local cache"""
         return self.local_group_cache.get(chat_id, [])
 
 
