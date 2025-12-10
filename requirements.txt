@@ -21,3 +21,4 @@ apscheduler==3.10.4
 
 # Timezone
 pytz==2023.3
+psycopg2-binary
