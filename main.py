@@ -951,22 +951,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # ---- TYPING INDICATOR ----
-    await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
-    
-    try:
-        # ---- GET/CREATE USER ----
-        user_obj = UserManager.get_or_create_user(user.id, user.first_name, user. username)
-        
-        # ---- BUILD CONTROL FLAGS ----
-        is_private = chat.type == 'private'
-        control_flags = {
-            'mode': 'private' if is_private else 'group',
-            'features': {
-                'memes': user_obj.meme_enabled if is_private else False,
-                'shayari': user_obj.shayari_enabled if is_private else False,
-            },
-            'low_budget': rate_limiter.is_low_budget(),
-        }
+await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
+
+try:
+    # ---- GET/CREATE USER ----
+    user_obj = UserManager.get_or_create_user(user.id, user.first_name, user.username)
+
+    # ✅ IMPORTANT FIX — DetachedInstanceError ka ilaaj
+    session = SessionLocal()
+    user_obj = session.merge(user_obj)
+    session.refresh(user_obj)
+
+    # ---- BUILD CONTROL FLAGS ----
+    is_private = chat.type == 'private'
+    control_flags = {
+        'mode': 'private' if is_private else 'group',
+        'features': {
+            'memes': user_obj.meme_enabled if is_private else False,
+            'shayari': user_obj.shayari_enabled if is_private else False,
+        },
+        'low_budget': rate_limiter.is_low_budget(),
+    }
+
+except Exception as e:
+    logger.error(f"❌ Control flag error: {e}")
+
         
         # ---- GET CONTEXT ----
         user_context = UserManager.get_user_context(user.id)
