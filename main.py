@@ -1,7 +1,7 @@
 """
-Niyati Telegram Bot - FULLY FIXED VERSION
+Niyati Telegram Bot - FULLY FIXED VERSION with Health Server
 A cute, charming, sweet Hinglish companion bot
-Production-Ready Implementation
+Production-Ready Implementation for Render.com
 """
 
 import os
@@ -11,11 +11,12 @@ import logging
 import asyncio
 import re
 import random
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
 import pytz
+from aiohttp import web
 
 # Third-party imports
 from telegram import (
@@ -60,8 +61,7 @@ from sqlalchemy import (
     JSON,
     Index
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
 
 # OpenAI
@@ -141,6 +141,9 @@ class Config:
     # Development mode
     DEV_MODE = os.getenv('DEV_MODE', 'false').lower() == 'true'
     
+    # Port for health check server
+    PORT = int(os.getenv('PORT', '10000'))
+    
     @classmethod
     def validate(cls):
         """Validate critical configuration"""
@@ -194,11 +197,64 @@ def setup_logging():
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('telegram').setLevel(logging.WARNING)
     logging.getLogger('apscheduler').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
     
     return logging.getLogger(__name__)
 
 
 logger = setup_logging()
+
+# ============================================================================
+# HEALTH CHECK SERVER (For Render.com)
+# ============================================================================
+
+class HealthServer:
+    """Simple HTTP health check server for Render.com"""
+    
+    def __init__(self):
+        self.app = web.Application()
+        self.app.router.add_get('/', self.health_check)
+        self.app.router.add_get('/health', self.health_check)
+        self.app.router.add_get('/status', self.status_check)
+        self.runner = None
+        self.start_time = datetime.now(timezone.utc)
+    
+    async def health_check(self, request):
+        """Basic health check endpoint"""
+        return web.json_response({
+            'status': 'healthy',
+            'bot': 'Niyati',
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+    
+    async def status_check(self, request):
+        """Detailed status endpoint"""
+        uptime = datetime.now(timezone.utc) - self.start_time
+        return web.json_response({
+            'status': 'running',
+            'bot_name': 'Niyati Bot',
+            'version': '2.0',
+            'uptime_seconds': int(uptime.total_seconds()),
+            'model': Config.OPENAI_MODEL,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+    
+    async def start(self):
+        """Start the health server"""
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        site = web.TCPSite(self.runner, '0.0.0.0', Config.PORT)
+        await site.start()
+        logger.info(f"🌐 Health server started on port {Config.PORT}")
+    
+    async def stop(self):
+        """Stop the health server"""
+        if self.runner:
+            await self.runner.cleanup()
+            logger.info("🛑 Health server stopped")
+
+
+health_server = HealthServer()
 
 # ============================================================================
 # DATABASE MODELS
@@ -224,9 +280,9 @@ class User(Base):
     last_messages = Column(JSON, nullable=True)
     
     total_messages = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_interaction = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    last_interaction = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     data_shared_warning_shown = Column(Boolean, default=False)
 
@@ -243,8 +299,8 @@ class GroupChat(Base):
     geeta_enabled = Column(Boolean, default=True)
     timezone = Column(String(50), default=Config.DEFAULT_TIMEZONE)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)
 
 
@@ -259,7 +315,7 @@ class UsageStats(Base):
     request_type = Column(String(50))
     tokens_used = Column(Integer, default=0)
     
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     date = Column(String(10), index=True)
     
     success = Column(Boolean, default=True)
@@ -281,7 +337,7 @@ class BroadcastLog(Base):
     successful_sends = Column(Integer, default=0)
     failed_sends = Column(Integer, default=0)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime, nullable=True)
     status = Column(String(20), default='pending')
 
@@ -382,7 +438,7 @@ class Cache:
                     return json.loads(value)
             else:
                 if key in self.memory_cache:
-                    if key in self.cache_ttl and datetime.now() > self.cache_ttl[key]:
+                    if key in self.cache_ttl and datetime.now(timezone.utc) > self.cache_ttl[key]:
                         del self.memory_cache[key]
                         del self.cache_ttl[key]
                     else:
@@ -398,7 +454,7 @@ class Cache:
                 self.redis_client.setex(key, ttl, json.dumps(value))
             else:
                 self.memory_cache[key] = value
-                self.cache_ttl[key] = datetime.now() + timedelta(seconds=ttl)
+                self.cache_ttl[key] = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         except Exception as e:
             logger.error(f"Cache set error: {e}")
     
@@ -430,7 +486,7 @@ class RateLimiter:
     
     def check_rate_limit(self, user_id: int) -> Tuple[bool, str]:
         """Check rate limits"""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         minute_ago = now - timedelta(minutes=1)
         day_ago = now - timedelta(days=1)
         
@@ -522,16 +578,13 @@ BE BRIEF, BE REAL, BE NIYATI. ✨"""
     ) -> str:
         """Generate AI response using OpenAI API"""
         try:
-            # Build messages list
             messages = [{"role": "system", "content": self.system_prompt}]
             
-            # Add control flags
             if control_flags:
                 control_msg = self._build_control_message(control_flags)
                 if control_msg:
                     messages.append({"role": "system", "content": control_msg})
             
-            # Add conversation context
             if context:
                 for msg in context[-Config.MAX_CONTEXT_MESSAGES:]:
                     messages.append({
@@ -539,10 +592,8 @@ BE BRIEF, BE REAL, BE NIYATI. ✨"""
                         "content": msg.get('content', '')
                     })
             
-            # Add current user message
             messages.append({"role": "user", "content": user_message})
             
-            # Determine max tokens
             max_tokens = Config.OPENAI_MAX_TOKENS
             if control_flags and control_flags.get('low_budget'):
                 max_tokens = min(max_tokens, 100)
@@ -559,10 +610,8 @@ BE BRIEF, BE REAL, BE NIYATI. ✨"""
                 top_p=0.9
             )
             
-            # Extract response
             reply = response.choices[0].message.content.strip()
             
-            # Enforce length limit
             lines = reply.split('\n')
             if len(lines) > 4:
                 reply = '\n'.join(lines[:4])
@@ -705,10 +754,9 @@ class UserManager:
                     user.first_name = first_name
                 if username:
                     user.username = username
-                user.last_interaction = datetime.utcnow()
+                user.last_interaction = datetime.now(timezone.utc)
                 session.commit()
             
-            # Return dict instead of ORM object to avoid DetachedInstanceError
             return {
                 'user_id': user.user_id,
                 'first_name': user.first_name,
@@ -737,19 +785,17 @@ class UserManager:
             if user:
                 messages = user.last_messages or []
                 
-                # Truncate long content
                 truncated = content[:200] if len(content) > 200 else content
                 
                 messages.append({
                     'role': role,
                     'content': truncated,
-                    'timestamp': datetime.utcnow().isoformat()
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 })
                 
-                # Keep only last 5
                 user.last_messages = messages[-5:]
                 user.total_messages += 1
-                user.updated_at = datetime.utcnow()
+                user.updated_at = datetime.now(timezone.utc)
                 session.commit()
     
     @staticmethod
@@ -918,18 +964,15 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================================
-# MESSAGE HANDLER - MAIN LOGIC (FIXED)
+# MESSAGE HANDLER - MAIN LOGIC
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    MAIN MESSAGE HANDLER - FULLY FIXED
-    """
+    """MAIN MESSAGE HANDLER"""
     message = update.message
     user = update.effective_user
     chat = update.effective_chat
     
-    # Get user message
     user_message = message.text or message.caption or ""
     
     if not user_message:
@@ -937,7 +980,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"📨 Message from {user.id}: {user_message[:50]}")
     
-    # ---- RATE LIMITING ----
+    # Rate limiting
     is_allowed, reason = rate_limiter.check_rate_limit(user.id)
     if not is_allowed:
         if reason == "rate_limit_minute":
@@ -946,7 +989,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("aaj bahut baat ho gayi 💕")
         return
     
-    # ---- SAFETY CHECKS ----
+    # Safety checks
     if ContentFilter.contains_sensitive_data(user_message):
         await message.reply_text("sensitive info mat share karo yaar 💕")
         return
@@ -955,14 +998,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("yaar, thik nahi lag raha... professional se baat karo 💕")
         return
     
-    # ---- TYPING INDICATOR ----
+    # Typing indicator
     await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
     
     try:
-        # ---- GET/CREATE USER ----
+        # Get/create user
         user_data = UserManager.get_or_create_user(user.id, user.first_name, user.username)
         
-        # ---- BUILD CONTROL FLAGS ----
+        # Build control flags
         is_private = chat.type == 'private'
         control_flags = {
             'mode': 'private' if is_private else 'group',
@@ -973,10 +1016,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'low_budget': rate_limiter.is_low_budget(),
         }
         
-        # ---- GET CONTEXT ----
+        # Get context
         user_context = UserManager.get_user_context(user.id)
         
-        # ---- CALL OPENAI API ----
+        # Call OpenAI API
         logger.info(f"🤖 Calling OpenAI API...")
         response = await ai_assistant.generate_response(
             user_message=user_message,
@@ -984,7 +1027,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             control_flags=control_flags
         )
         
-        # ---- ADD EXTRAS (MEME/SHAYARI) ----
+        # Add extras
         extras = []
         
         if ai_assistant.should_include_meme(control_flags):
@@ -995,28 +1038,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             shayari = await ai_assistant.generate_shayari()
             extras.append(shayari)
         
-        # ---- COMBINE RESPONSE ----
+        # Combine response
         if extras and not control_flags['low_budget']:
             final_response = response + "\n\n" + "\n\n".join(extras)
         else:
             final_response = response
         
-        # ---- SEND RESPONSE ----
+        # Send response
         logger.info(f"📤 Sending response: {final_response[:50]}...")
         await message.reply_text(final_response)
         
-        # ---- SAVE TO MEMORY ----
+        # Save to memory
         UserManager.add_message_to_memory(user.id, 'user', user_message)
         UserManager.add_message_to_memory(user.id, 'assistant', response)
         
-        # ---- LOG USAGE ----
+        # Log usage
         with db.get_session() as session:
             usage = UsageStats(
                 user_id=user.id,
                 chat_id=chat.id,
                 request_type='message',
                 tokens_used=len(response.split()),
-                date=datetime.utcnow().strftime('%Y-%m-%d'),
+                date=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
                 success=True
             )
             session.add(usage)
@@ -1052,20 +1095,17 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def setup_handlers(application: Application):
     """Setup handlers"""
     
-    # Commands
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("meme", meme_command))
     application.add_handler(CommandHandler("shayari", shayari_command))
     application.add_handler(CommandHandler("forget", forget_command))
     
-    # Messages
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_message
     ))
     
-    # Error
     application.add_error_handler(error_handler)
     
     logger.info("✅ All handlers registered")
@@ -1079,20 +1119,21 @@ async def post_init(application: Application):
 async def post_shutdown(application: Application):
     """Shutdown"""
     logger.info("🛑 Shutting down...")
+    await health_server.stop()
     db.close()
 
 
-def main():
-    """Main entry point"""
+async def main_async():
+    """Async main entry point"""
     
     banner = """
     ╔════════════════════════════════════════════════════════╗
     ║                    NIYATI BOT v2.0                     ║
     ║            🌸 Your Hinglish Companion 🌸               ║
     ║                                                        ║
-    ║         Powered by OpenAI gpt-4o-mini                ║
+    ║         Powered by OpenAI {model}                ║
     ╚════════════════════════════════════════════════════════╝
-    """
+    """.format(model=Config.OPENAI_MODEL)
     
     print(banner)
     logger.info("=" * 60)
@@ -1100,10 +1141,14 @@ def main():
     logger.info(f"Token: {Config.TELEGRAM_BOT_TOKEN[:20]}***")
     logger.info(f"Model: {Config.OPENAI_MODEL}")
     logger.info(f"Database: {Config.DATABASE_URL}")
+    logger.info(f"Port: {Config.PORT}")
     logger.info("=" * 60)
     
     # Init database
     db.init_db()
+    
+    # Start health server
+    await health_server.start()
     
     # Create application
     application = (
@@ -1115,16 +1160,35 @@ def main():
         .build()
     )
     
-    # Setup
+    # Setup handlers
     setup_handlers(application)
     
-    # Start
+    # Start polling
     logger.info("🎯 Bot is polling...")
+    
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
+    
+    # Keep running
     try:
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+
+
+def main():
+    """Main entry point"""
+    try:
+        asyncio.run(main_async())
     except KeyboardInterrupt:
         logger.info("⏹️ Keyboard interrupt")
     except Exception as e:
