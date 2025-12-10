@@ -977,7 +977,7 @@ except Exception as e:
     logger.error(f"❌ Control flag error: {e}")
         
         # ---- GET CONTEXT ----
-        user_context = UserManager.get_user_context(user.id)
+    user_context = UserManager.get_user_context(user.id)
         
         # ---- CALL OPENAI API ----
         logger.info(f"🤖 Calling OpenAI API...")
