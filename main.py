@@ -198,7 +198,7 @@ class Database:
         self.local_user_cache: Dict[int, Dict] = {}  # Fallback cache
         self._init_supabase()
     
-    def _init_supabase(self):
+def _init_supabase(self):
     """Initialize Supabase client - FIXED"""
     if not Config.SUPABASE_URL or not Config.SUPABASE_KEY:
         logger.warning("⚠️ Supabase not configured")
