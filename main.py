@@ -31,7 +31,6 @@ from dataclasses import dataclass, field
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from supabase.lib.client_options import ClientOptions
-self.client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 import threading
 import hashlib
 
