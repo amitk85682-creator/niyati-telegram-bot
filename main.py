@@ -856,7 +856,7 @@ Tu text karegi jaise real friend karti hai ✨"""
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=Config. OPENAI_TEMPERATURE,
-                presence_penalty=0. 7,
+                presence_penalty=0.7,
                 frequency_penalty=0.4
             )
             
