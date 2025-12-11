@@ -642,12 +642,18 @@ class Database:
         
         if self.connected and self.client:
             try:
-                users = await self.client.select('users', 'preferences', {'user_id': user_id})
+                # FIX: Variable naming and list access
+                users_list = await self.client.select('users', 'preferences', {'user_id': user_id})
                 
-                if users:
-                    prefs = users.get('preferences', '{}')
+                if users_list and len(users_list) > 0:
+                    user_data = users_list[0] # List se pehla item nikala
+                    
+                    prefs = user_data.get('preferences', '{}')
                     if isinstance(prefs, str):
-                        prefs = json.loads(prefs)
+                        try:
+                            prefs = json.loads(prefs)
+                        except:
+                            prefs = {}
                     
                     prefs[pref_key] = value
                     
@@ -659,6 +665,7 @@ class Database:
             except Exception as e:
                 logger.debug(f"Update preference error: {e}")
         
+        # Local fallback remains same
         if user_id in self.local_users:
             if 'preferences' not in self.local_users[user_id]:
                 self.local_users[user_id]['preferences'] = {}
@@ -668,11 +675,17 @@ class Database:
         """Get user preferences"""
         if self.connected and self.client:
             try:
-                users = await self.client.select('users', 'preferences', {'user_id': user_id})
-                if users:
-                    prefs = users.get('preferences', '{}')
+                users_list = await self.client.select('users', 'preferences', {'user_id': user_id})
+                
+                # FIX: List check
+                if users_list and len(users_list) > 0:
+                    user_data = users_list[0]
+                    prefs = user_data.get('preferences', '{}')
                     if isinstance(prefs, str):
-                        prefs = json.loads(prefs)
+                        try:
+                            prefs = json.loads(prefs)
+                        except:
+                            prefs = {}
                     return prefs
             except Exception as e:
                 logger.debug(f"Get preferences error: {e}")
@@ -768,12 +781,18 @@ class Database:
         """Update group settings"""
         if self.connected and self.client:
             try:
-                groups = await self.client.select('groups', 'settings', {'chat_id': chat_id})
+                groups_list = await self.client.select('groups', 'settings', {'chat_id': chat_id})
                 
-                if groups:
-                    settings = groups.get('settings', '{}')
+                # FIX: List check
+                if groups_list and len(groups_list) > 0:
+                    group_data = groups_list[0]
+                    
+                    settings = group_data.get('settings', '{}')
                     if isinstance(settings, str):
-                        settings = json.loads(settings)
+                        try:
+                            settings = json.loads(settings)
+                        except:
+                            settings = {}
                     
                     settings[key] = value
                     
@@ -794,11 +813,17 @@ class Database:
         """Get group settings"""
         if self.connected and self.client:
             try:
-                groups = await self.client.select('groups', 'settings', {'chat_id': chat_id})
-                if groups:
-                    settings = groups.get('settings', '{}')
+                groups_list = await self.client.select('groups', 'settings', {'chat_id': chat_id})
+                
+                # FIX: List check
+                if groups_list and len(groups_list) > 0:
+                    group_data = groups_list[0]
+                    settings = group_data.get('settings', '{}')
                     if isinstance(settings, str):
-                        settings = json.loads(settings)
+                        try:
+                            settings = json.loads(settings)
+                        except:
+                            settings = {}
                     return settings
             except Exception as e:
                 logger.debug(f"Get group settings error: {e}")
@@ -1478,11 +1503,12 @@ async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     
-    if not args or args.lower() not in ['on', 'off']:
+    # FIX: Access the first element of the list (args[0])
+    if not args or args[0].lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /meme on ya /meme off")
         return
     
-    value = args.lower() == 'on'
+    value = args[0].lower() == 'on'
     await db.update_preference(user.id, 'meme', value)
     
     status = "ON ✅" if value else "OFF ❌"
@@ -1494,11 +1520,12 @@ async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     
-    if not args or args.lower() not in ['on', 'off']:
+    # FIX: Access args[0]
+    if not args or args[0].lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /shayari on ya /shayari off")
         return
     
-    value = args.lower() == 'on'
+    value = args[0].lower() == 'on'
     await db.update_preference(user.id, 'shayari', value)
     
     status = "ON ✅" if value else "OFF ❌"
@@ -1640,20 +1667,20 @@ async def setgeeta_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not await is_group_admin(update, context):
-        await update.message.reply_text("❌ Sirf admins yeh kar sakte hain!")
+        await update.message.reply_text("❌ Sry baby, only admins can do this 😘💅")
         return
     
     args = context.args
-    if not args or args.lower() not in ['on', 'off']:
+    # FIX: Access args[0]
+    if not args or args[0].lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /setgeeta on ya /setgeeta off")
         return
     
-    value = args.lower() == 'on'
+    value = args[0].lower() == 'on'
     await db.update_group_settings(chat.id, 'geeta_enabled', value)
     
     status = "ON ✅" if value else "OFF ❌"
     await update.message.reply_text(f"Daily Geeta Quote: {status}")
-
 
 async def setwelcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Toggle welcome messages"""
@@ -1664,15 +1691,16 @@ async def setwelcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     if not await is_group_admin(update, context):
-        await update.message.reply_text("❌ Sirf admins yeh kar sakte hain!")
+        await update.message.reply_text("❌ Sry baby, only admins can do this 😘💅")
         return
     
     args = context.args
-    if not args or args.lower() not in ['on', 'off']:
+    # FIX: Access args[0]
+    if not args or args[0].lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /setwelcome on ya /setwelcome off")
         return
     
-    value = args.lower() == 'on'
+    value = args[0].lower() == 'on'
     await db.update_group_settings(chat.id, 'welcome_enabled', value)
     
     status = "ON ✅" if value else "OFF ❌"
@@ -1688,7 +1716,7 @@ async def groupstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     if not await is_group_admin(update, context):
-        await update.message.reply_text("❌ Sirf admins yeh kar sakte hain!")
+        await update.message.reply_text("❌ Sry baby, only admins can do this 😘💅")
         return
     
     cached_msgs = len(db.get_group_context(chat.id))
@@ -1712,7 +1740,7 @@ async def groupsettings_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
     
     if not await is_group_admin(update, context):
-        await update.message.reply_text("❌ Sirf admins yeh kar sakte hain!")
+        await update.message.reply_text("❌ Sry baby, only admins can do this 😘💅")
         return
     
     group_data = await db.get_or_create_group(chat.id, chat.title)
