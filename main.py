@@ -1885,7 +1885,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     
     # Get message text
-    if message.forward_date:
+    # FIXED: Support for PTB v21+ (forward_origin) and older versions (forward_date)
+    is_forward = getattr(message, 'forward_origin', None) is not None or getattr(message, 'forward_date', None) is not None
+
+    if is_forward:
         user_message = f"[Forwarded]: {message.text or message.caption or ''}"
     else:
         user_message = message.text or message.caption or ""
