@@ -30,6 +30,7 @@ from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from supabase.lib.client_options import ClientOption
 import threading
 import hashlib
 
