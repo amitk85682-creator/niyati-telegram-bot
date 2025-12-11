@@ -1872,7 +1872,7 @@ def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================================
-# MAIN MESSAGE HANDLER
+# MAIN MESSAGE HANDLER - FIXED
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1884,11 +1884,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
+    # ✅ FIXED: Use forward_origin instead of forward_date (v21+ compatibility)
+    is_forwarded = message.forward_origin is not None
+    
     # Get message text
-    # FIXED: Support for PTB v21+ (forward_origin) and older versions (forward_date)
-    is_forward = getattr(message, 'forward_origin', None) is not None or getattr(message, 'forward_date', None) is not None
-
-    if is_forward:
+    if is_forwarded:
         user_message = f"[Forwarded]: {message.text or message.caption or ''}"
     else:
         user_message = message.text or message.caption or ""
@@ -2030,7 +2030,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("oops kuch gadbad... retry karo? 🫶")
         except:
             pass
-
 
 # ============================================================================
 # NEW MEMBER HANDLER
