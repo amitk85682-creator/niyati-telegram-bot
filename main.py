@@ -1300,7 +1300,7 @@ Tu text karegi jaise real friend karti hai ✨"""
             "bro moment 😭"
         ]
         return random.choice(memes)
-
+niyati_ai = NiyatiAI()
 # ============================================================================
 # MESSAGE SENDER
 # ============================================================================
