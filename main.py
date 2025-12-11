@@ -472,7 +472,7 @@ class Database:
             if to_remove:
                 logger.info(f"🧹 Cleaned {len(to_remove)} groups from local cache")
     
-    # ========== USER OPERATIONS ==========
+# ========== USER OPERATIONS (FIXED) ==========
     
     async def get_or_create_user(self, user_id: int, first_name: str = None,
                                   username: str = None) -> Dict:
@@ -481,10 +481,13 @@ class Database:
         
         if self.connected and self.client:
             try:
-                users = await self.client.select('users', '*', {'user_id': user_id})
+                # Returns a LIST of users
+                users_list = await self.client.select('users', '*', {'user_id': user_id})
                 
-                if users:
-                    user = users
+                # FIX: Check if list is not empty and get index 0
+                if users_list and len(users_list) > 0:
+                    user = users_list[0]
+                    
                     if first_name and user.get('first_name') != first_name:
                         await self.client.update('users', {
                             'first_name': first_name,
@@ -508,11 +511,17 @@ class Database:
                         'updated_at': datetime.now(timezone.utc).isoformat()
                     }
                     result = await self.client.insert('users', new_user)
+                    
+                    # FIX: Handle insert returning a list
+                    if isinstance(result, list) and len(result) > 0:
+                         return result[0]
+                    
                     logger.info(f"✅ New user created: {user_id} ({first_name})")
-                    return result or new_user
+                    return new_user
                     
             except Exception as e:
                 logger.error(f"❌ Database user error: {e}")
+                # Fallback to local on error is handled below
         
         # Fallback to local cache
         if user_id not in self.local_users:
@@ -537,11 +546,22 @@ class Database:
         """Get user conversation context"""
         if self.connected and self.client:
             try:
-                users = await self.client.select('users', 'messages', {'user_id': user_id})
-                if users:
-                    messages = users.get('messages', '[]')
+                # FIX: Variable naming and list access
+                users_list = await self.client.select('users', 'messages', {'user_id': user_id})
+                if users_list and len(users_list) > 0:
+                    user_data = users_list[0]
+                    messages = user_data.get('messages', '[]')
+                    
                     if isinstance(messages, str):
-                        messages = json.loads(messages)
+                        try:
+                            messages = json.loads(messages)
+                        except json.JSONDecodeError:
+                            messages = []
+                    
+                    # Ensure it is a list
+                    if not isinstance(messages, list):
+                        messages = []
+                        
                     return messages[-Config.MAX_PRIVATE_MESSAGES:]
             except Exception as e:
                 logger.debug(f"Get context error: {e}")
@@ -561,17 +581,25 @@ class Database:
         
         if self.connected and self.client:
             try:
-                users = await self.client.select('users', 'messages,total_messages', {'user_id': user_id})
+                users_list = await self.client.select('users', 'messages,total_messages', {'user_id': user_id})
                 
-                if users:
-                    messages = users.get('messages', '[]')
+                if users_list and len(users_list) > 0:
+                    user_data = users_list[0]
+                    
+                    messages = user_data.get('messages', '[]')
                     if isinstance(messages, str):
-                        messages = json.loads(messages)
+                        try:
+                            messages = json.loads(messages)
+                        except:
+                            messages = []
+                    
+                    if not isinstance(messages, list):
+                        messages = []
                     
                     messages.append(new_msg)
                     messages = messages[-Config.MAX_PRIVATE_MESSAGES:]
                     
-                    total = users.get('total_messages', 0) + 1
+                    total = user_data.get('total_messages', 0) + 1
                     
                     await self.client.update('users', {
                         'messages': json.dumps(messages),
@@ -683,10 +711,14 @@ class Database:
         
         if self.connected and self.client:
             try:
-                groups = await self.client.select('groups', '*', {'chat_id': chat_id})
+                # 1. List fetch karo
+                groups_list = await self.client.select('groups', '*', {'chat_id': chat_id})
                 
-                if groups:
-                    group = groups
+                # 2. Check karo agar list mein item hai
+                if groups_list and len(groups_list) > 0:
+                    group = groups_list[0]  # Pehla item nikalo
+                    
+                    # Title update logic
                     if title and group.get('title') != title:
                         await self.client.update('groups', {
                             'title': title,
@@ -694,6 +726,7 @@ class Database:
                         }, {'chat_id': chat_id})
                     return group
                 else:
+                    # 3. Agar group nahi mila to naya banao
                     new_group = {
                         'chat_id': chat_id,
                         'title': title or 'Unknown Group',
@@ -705,13 +738,18 @@ class Database:
                         'updated_at': datetime.now(timezone.utc).isoformat()
                     }
                     result = await self.client.insert('groups', new_group)
+                    
+                    # Insert return ko bhi handle karo (kyunki wo bhi list ho sakta hai)
+                    if isinstance(result, list) and len(result) > 0:
+                        return result[0]
+                        
                     logger.info(f"✅ New group: {chat_id} ({title})")
                     return result or new_group
                     
             except Exception as e:
                 logger.debug(f"Group error: {e}")
         
-        # Local fallback
+        # Fallback to local cache (Previous logic remains same here)
         if chat_id not in self.local_groups:
             self.local_groups[chat_id] = {
                 'chat_id': chat_id,
@@ -871,10 +909,12 @@ class RateLimiter:
             
             reqs = self.requests[user_id]
             
-            # Clean old requests
-            while reqs['minute'] and reqs['minute'] < now - timedelta(minutes=1):
+            # Clean old requests (FIXED LOGIC HERE)
+            # Check the first element (oldest time) of the deque
+            while reqs['minute'] and reqs['minute'][0] < now - timedelta(minutes=1):
                 reqs['minute'].popleft()
-            while reqs['day'] and reqs['day'] < now - timedelta(days=1):
+            
+            while reqs['day'] and reqs['day'][0] < now - timedelta(days=1):
                 reqs['day'].popleft()
             
             # Check limits
