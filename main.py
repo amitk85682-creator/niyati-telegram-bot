@@ -15,6 +15,7 @@
 ║  ✅ Geeta quotes scheduler                                                ║
 ║  ✅ Random shayari & memes                                                ║
 ║  ✅ User analytics & cooldown system                                      ║
+║  ✅ Memory leak prevention & cleanup                                      ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -33,6 +34,7 @@ from contextlib import asynccontextmanager
 import threading
 import hashlib
 import time
+import weakref
 
 # Third-party imports
 from aiohttp import web
@@ -102,6 +104,11 @@ class Config:
     MAX_GROUP_MESSAGES = int(os.getenv('MAX_GROUP_MESSAGES', '5'))
     MAX_REQUESTS_PER_MINUTE = int(os.getenv('MAX_REQUESTS_PER_MINUTE', '15'))
     MAX_REQUESTS_PER_DAY = int(os.getenv('MAX_REQUESTS_PER_DAY', '500'))
+    
+    # Memory Management
+    MAX_LOCAL_USERS_CACHE = int(os.getenv('MAX_LOCAL_USERS_CACHE', '10000'))
+    MAX_LOCAL_GROUPS_CACHE = int(os.getenv('MAX_LOCAL_GROUPS_CACHE', '1000'))
+    CACHE_CLEANUP_INTERVAL = int(os.getenv('CACHE_CLEANUP_INTERVAL', '3600'))
     
     # Timezone
     DEFAULT_TIMEZONE = os.getenv('DEFAULT_TIMEZONE', 'Asia/Kolkata')
@@ -199,13 +206,13 @@ class HealthServer:
 health_server = HealthServer()
 
 # ============================================================================
-# SUPABASE CLIENT - FIXED VERSION
+# SUPABASE CLIENT - FULLY FIXED VERSION
 # ============================================================================
 
 class SupabaseClient:
     """
     Custom Supabase REST API Client
-    ✅ FIXED: Better error handling, proper URL encoding
+    ✅ FIXED: Better error handling, proper URL encoding, connection pooling
     """
     
     def __init__(self, url: str, key: str):
@@ -220,14 +227,16 @@ class SupabaseClient:
         self.rest_url = f"{self.url}/rest/v1"
         self._client = None
         self._verified = False
+        self._lock = asyncio.Lock()
         logger.info("✅ SupabaseClient initialized")
     
     def _get_client(self) -> httpx.AsyncClient:
-        """Get or create async client"""
+        """Get or create async client with connection pooling"""
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 headers=self.headers,
-                timeout=30.0
+                timeout=30.0,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
             )
         return self._client
     
@@ -235,46 +244,44 @@ class SupabaseClient:
         """Close the client"""
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+            logger.info("✅ Supabase client closed")
     
     async def verify_connection(self) -> bool:
         """Verify database connection and tables exist"""
         if self._verified:
             return True
         
-        try:
-            client = self._get_client()
-            # Try to access users table
-            response = await client.get(f"{self.rest_url}/users?select=user_id&limit=1")
-            
-            if response.status_code == 200:
-                self._verified = True
-                logger.info("✅ Supabase tables verified")
+        async with self._lock:
+            if self._verified:
                 return True
-            elif response.status_code == 404:
-                logger.error("❌ Supabase table 'users' not found! Run the SQL setup.")
+            
+            try:
+                client = self._get_client()
+                response = await client.get(f"{self.rest_url}/users?select=user_id&limit=1")
+                
+                if response.status_code == 200:
+                    self._verified = True
+                    logger.info("✅ Supabase tables verified")
+                    return True
+                elif response.status_code == 404:
+                    logger.error("❌ Supabase table 'users' not found! Run the SQL setup.")
+                    return False
+                else:
+                    logger.error(f"❌ Supabase verification failed: {response.status_code}")
+                    return False
+            except Exception as e:
+                logger.error(f"❌ Supabase connection error: {e}")
                 return False
-            else:
-                logger.error(f"❌ Supabase verification failed: {response.status_code}")
-                return False
-        except Exception as e:
-            logger.error(f"❌ Supabase connection error: {e}")
-            return False
-    
-    # ========== TABLE OPERATIONS ==========
     
     async def select(self, table: str, columns: str = '*', 
                      filters: Dict = None, limit: int = None) -> List[Dict]:
         """SELECT from table"""
         try:
             client = self._get_client()
-            
-            # Build URL properly
             url = f"{self.rest_url}/{table}?select={columns}"
             
-            # Add filters
             if filters:
                 for key, value in filters.items():
-                    # Handle different value types
                     if isinstance(value, str):
                         url += f"&{key}=eq.{value}"
                     else:
@@ -285,14 +292,10 @@ class SupabaseClient:
             
             response = await client.get(url)
             
-            # Handle different status codes
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 404:
-                logger.warning(f"Table '{table}' not found")
-                return []
-            elif response.status_code == 400:
-                logger.error(f"Bad request for {table}: {response.text}")
+                logger.debug(f"Table '{table}' not found")
                 return []
             else:
                 logger.error(f"Supabase SELECT error {response.status_code}: {response.text}")
@@ -312,9 +315,8 @@ class SupabaseClient:
             
             if response.status_code in [200, 201]:
                 result = response.json()
-                return result[0] if isinstance(result, list) and result else data
+                return result if isinstance(result, list) and result else data
             elif response.status_code == 409:
-                # Conflict - record already exists
                 logger.debug(f"Record already exists in {table}")
                 return data
             else:
@@ -329,8 +331,6 @@ class SupabaseClient:
         """UPDATE table"""
         try:
             client = self._get_client()
-            
-            # Build URL with filters
             filter_parts = [f"{key}=eq.{value}" for key, value in filters.items()]
             url = f"{self.rest_url}/{table}?" + "&".join(filter_parts)
             
@@ -338,7 +338,7 @@ class SupabaseClient:
             
             if response.status_code == 200:
                 result = response.json()
-                return result[0] if isinstance(result, list) and result else data
+                return result if isinstance(result, list) and result else data
             else:
                 logger.error(f"Supabase UPDATE error {response.status_code}: {response.text}")
                 return None
@@ -347,8 +347,7 @@ class SupabaseClient:
             logger.error(f"Supabase UPDATE exception: {e}")
             return None
     
-    async def upsert(self, table: str, data: Dict, 
-                     on_conflict: str = None) -> Optional[Dict]:
+    async def upsert(self, table: str, data: Dict) -> Optional[Dict]:
         """UPSERT (insert or update) into table"""
         try:
             client = self._get_client()
@@ -361,7 +360,7 @@ class SupabaseClient:
             
             if response.status_code in [200, 201]:
                 result = response.json()
-                return result[0] if isinstance(result, list) and result else data
+                return result if isinstance(result, list) and result else data
             else:
                 logger.error(f"Supabase UPSERT error {response.status_code}: {response.text}")
                 return None
@@ -374,7 +373,6 @@ class SupabaseClient:
         """DELETE from table"""
         try:
             client = self._get_client()
-            
             filter_parts = [f"{key}=eq.{value}" for key, value in filters.items()]
             url = f"{self.rest_url}/{table}?" + "&".join(filter_parts)
             
@@ -386,58 +384,107 @@ class SupabaseClient:
             return False
 
 # ============================================================================
-# DATABASE CLASS - COMPLETE IMPLEMENTATION
+# DATABASE CLASS - COMPLETE FIXED IMPLEMENTATION
 # ============================================================================
 
 class Database:
-    """Database manager with Supabase REST API + Local fallback"""
+    """Database manager with Supabase REST API + Local fallback + Memory optimization"""
     
     def __init__(self):
         self.client: Optional[SupabaseClient] = None
         self.connected = False
+        self._initialized = False
+        self._lock = asyncio.Lock()
         
-        # Local cache (fallback)
+        # Local cache (fallback) with size limits
         self.local_users: Dict[int, Dict] = {}
         self.local_groups: Dict[int, Dict] = {}
-        self.local_group_messages: Dict[int, List[Dict]] = defaultdict(list)
-        self.local_activities: List[Dict] = []
+        self.local_group_messages: Dict[int, deque] = defaultdict(lambda: deque(maxlen=Config.MAX_GROUP_MESSAGES))
+        self.local_activities: deque = deque(maxlen=1000)
         
-        self._init_database()
+        # Cache access tracking for LRU cleanup
+        self._user_access_times: Dict[int, datetime] = {}
+        self._group_access_times: Dict[int, datetime] = {}
+        
+        logger.info("✅ Database manager initialized")
     
-def _init_database(self):
-    """Initialize database connection"""
-    if Config.SUPABASE_URL and Config.SUPABASE_KEY:
-        try:
-            self.client = SupabaseClient(
-                Config.SUPABASE_URL.strip(),
-                Config.SUPABASE_KEY.strip()
-            )
-            self.connected = True
-            logger.info("✅ Supabase client created")
-
-        except Exception as e:
-            logger.error(f"❌ Supabase init failed: {e}")
-            self.connected = False
-    else:
-        logger.warning("⚠️ Supabase not configured - using local storage")
-        self.connected = False
-
+    async def initialize(self):
+        """Initialize database connection asynchronously"""
+        async with self._lock:
+            if self._initialized:
+                return
+            
+            if Config.SUPABASE_URL and Config.SUPABASE_KEY:
+                try:
+                    self.client = SupabaseClient(
+                        Config.SUPABASE_URL.strip(),
+                        Config.SUPABASE_KEY.strip()
+                    )
+                    
+                    # Verify connection
+                    self.connected = await self.client.verify_connection()
+                    
+                    if self.connected:
+                        logger.info("✅ Supabase connected and verified")
+                    else:
+                        logger.warning("⚠️ Supabase verification failed - using local storage")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Supabase init failed: {e}")
+                    self.connected = False
+            else:
+                logger.warning("⚠️ Supabase not configured - using local storage")
+                self.connected = False
+            
+            self._initialized = True
+    
+    async def cleanup_local_cache(self):
+        """Cleanup old entries from local cache to prevent memory leaks"""
+        now = datetime.now(timezone.utc)
+        cutoff_time = now - timedelta(hours=24)
+        
+        # Cleanup users
+        if len(self.local_users) > Config.MAX_LOCAL_USERS_CACHE:
+            to_remove = []
+            for user_id, last_access in self._user_access_times.items():
+                if last_access < cutoff_time:
+                    to_remove.append(user_id)
+            
+            for user_id in to_remove[:len(self.local_users) - Config.MAX_LOCAL_USERS_CACHE]:
+                self.local_users.pop(user_id, None)
+                self._user_access_times.pop(user_id, None)
+            
+            if to_remove:
+                logger.info(f"🧹 Cleaned {len(to_remove)} users from local cache")
+        
+        # Cleanup groups
+        if len(self.local_groups) > Config.MAX_LOCAL_GROUPS_CACHE:
+            to_remove = []
+            for group_id, last_access in self._group_access_times.items():
+                if last_access < cutoff_time:
+                    to_remove.append(group_id)
+            
+            for group_id in to_remove[:len(self.local_groups) - Config.MAX_LOCAL_GROUPS_CACHE]:
+                self.local_groups.pop(group_id, None)
+                self._group_access_times.pop(group_id, None)
+                self.local_group_messages.pop(group_id, None)
+            
+            if to_remove:
+                logger.info(f"🧹 Cleaned {len(to_remove)} groups from local cache")
     
     # ========== USER OPERATIONS ==========
     
     async def get_or_create_user(self, user_id: int, first_name: str = None,
                                   username: str = None) -> Dict:
         """Get or create user"""
+        self._user_access_times[user_id] = datetime.now(timezone.utc)
         
-        # Try Supabase first
         if self.connected and self.client:
             try:
-                # Check if user exists
                 users = await self.client.select('users', '*', {'user_id': user_id})
                 
                 if users:
-                    user = users[0]
-                    # Update if name changed
+                    user = users
                     if first_name and user.get('first_name') != first_name:
                         await self.client.update('users', {
                             'first_name': first_name,
@@ -446,7 +493,6 @@ def _init_database(self):
                         }, {'user_id': user_id})
                     return user
                 else:
-                    # Create new user
                     new_user = {
                         'user_id': user_id,
                         'first_name': first_name or 'User',
@@ -489,19 +535,17 @@ def _init_database(self):
     
     async def get_user_context(self, user_id: int) -> List[Dict]:
         """Get user conversation context"""
-        
         if self.connected and self.client:
             try:
                 users = await self.client.select('users', 'messages', {'user_id': user_id})
                 if users:
-                    messages = users[0].get('messages', '[]')
+                    messages = users.get('messages', '[]')
                     if isinstance(messages, str):
                         messages = json.loads(messages)
                     return messages[-Config.MAX_PRIVATE_MESSAGES:]
             except Exception as e:
-                logger.error(f"Get context error: {e}")
+                logger.debug(f"Get context error: {e}")
         
-        # Local fallback
         if user_id in self.local_users:
             return self.local_users[user_id].get('messages', [])[-Config.MAX_PRIVATE_MESSAGES:]
         
@@ -509,7 +553,6 @@ def _init_database(self):
     
     async def save_message(self, user_id: int, role: str, content: str):
         """Save message to user history"""
-        
         new_msg = {
             'role': role,
             'content': content,
@@ -518,18 +561,17 @@ def _init_database(self):
         
         if self.connected and self.client:
             try:
-                # Get current messages
                 users = await self.client.select('users', 'messages,total_messages', {'user_id': user_id})
                 
                 if users:
-                    messages = users[0].get('messages', '[]')
+                    messages = users.get('messages', '[]')
                     if isinstance(messages, str):
                         messages = json.loads(messages)
                     
                     messages.append(new_msg)
                     messages = messages[-Config.MAX_PRIVATE_MESSAGES:]
                     
-                    total = users[0].get('total_messages', 0) + 1
+                    total = users.get('total_messages', 0) + 1
                     
                     await self.client.update('users', {
                         'messages': json.dumps(messages),
@@ -538,7 +580,7 @@ def _init_database(self):
                     }, {'user_id': user_id})
                 return
             except Exception as e:
-                logger.error(f"Save message error: {e}")
+                logger.debug(f"Save message error: {e}")
         
         # Local fallback
         if user_id in self.local_users:
@@ -547,10 +589,11 @@ def _init_database(self):
             self.local_users[user_id]['messages'].append(new_msg)
             self.local_users[user_id]['messages'] = \
                 self.local_users[user_id]['messages'][-Config.MAX_PRIVATE_MESSAGES:]
+            self.local_users[user_id]['total_messages'] = \
+                self.local_users[user_id].get('total_messages', 0) + 1
     
     async def clear_user_memory(self, user_id: int):
         """Clear user conversation memory"""
-        
         if self.connected and self.client:
             try:
                 await self.client.update('users', {
@@ -560,15 +603,13 @@ def _init_database(self):
                 logger.info(f"Memory cleared for user: {user_id}")
                 return
             except Exception as e:
-                logger.error(f"Clear memory error: {e}")
+                logger.debug(f"Clear memory error: {e}")
         
-        # Local fallback
         if user_id in self.local_users:
             self.local_users[user_id]['messages'] = []
     
     async def update_preference(self, user_id: int, key: str, value: bool):
         """Update user preference"""
-        
         pref_key = f"{key}_enabled"
         
         if self.connected and self.client:
@@ -576,7 +617,7 @@ def _init_database(self):
                 users = await self.client.select('users', 'preferences', {'user_id': user_id})
                 
                 if users:
-                    prefs = users[0].get('preferences', '{}')
+                    prefs = users.get('preferences', '{}')
                     if isinstance(prefs, str):
                         prefs = json.loads(prefs)
                     
@@ -588,9 +629,8 @@ def _init_database(self):
                     }, {'user_id': user_id})
                 return
             except Exception as e:
-                logger.error(f"Update preference error: {e}")
+                logger.debug(f"Update preference error: {e}")
         
-        # Local fallback
         if user_id in self.local_users:
             if 'preferences' not in self.local_users[user_id]:
                 self.local_users[user_id]['preferences'] = {}
@@ -598,19 +638,17 @@ def _init_database(self):
     
     async def get_user_preferences(self, user_id: int) -> Dict:
         """Get user preferences"""
-        
         if self.connected and self.client:
             try:
                 users = await self.client.select('users', 'preferences', {'user_id': user_id})
                 if users:
-                    prefs = users[0].get('preferences', '{}')
+                    prefs = users.get('preferences', '{}')
                     if isinstance(prefs, str):
                         prefs = json.loads(prefs)
                     return prefs
             except Exception as e:
-                logger.error(f"Get preferences error: {e}")
+                logger.debug(f"Get preferences error: {e}")
         
-        # Local fallback
         if user_id in self.local_users:
             return self.local_users[user_id].get('preferences', {})
         
@@ -618,24 +656,22 @@ def _init_database(self):
     
     async def get_all_users(self) -> List[Dict]:
         """Get all users"""
-        
         if self.connected and self.client:
             try:
                 return await self.client.select('users', 'user_id,first_name,username,created_at')
             except Exception as e:
-                logger.error(f"Get all users error: {e}")
+                logger.debug(f"Get all users error: {e}")
         
         return list(self.local_users.values())
     
     async def get_user_count(self) -> int:
         """Get total user count"""
-        
         if self.connected and self.client:
             try:
                 users = await self.client.select('users', 'user_id')
                 return len(users)
             except Exception as e:
-                logger.error(f"User count error: {e}")
+                logger.debug(f"User count error: {e}")
         
         return len(self.local_users)
     
@@ -643,13 +679,14 @@ def _init_database(self):
     
     async def get_or_create_group(self, chat_id: int, title: str = None) -> Dict:
         """Get or create group"""
+        self._group_access_times[chat_id] = datetime.now(timezone.utc)
         
         if self.connected and self.client:
             try:
                 groups = await self.client.select('groups', '*', {'chat_id': chat_id})
                 
                 if groups:
-                    group = groups[0]
+                    group = groups
                     if title and group.get('title') != title:
                         await self.client.update('groups', {
                             'title': title,
@@ -672,7 +709,7 @@ def _init_database(self):
                     return result or new_group
                     
             except Exception as e:
-                logger.error(f"Group error: {e}")
+                logger.debug(f"Group error: {e}")
         
         # Local fallback
         if chat_id not in self.local_groups:
@@ -691,13 +728,12 @@ def _init_database(self):
     
     async def update_group_settings(self, chat_id: int, key: str, value: bool):
         """Update group settings"""
-        
         if self.connected and self.client:
             try:
                 groups = await self.client.select('groups', 'settings', {'chat_id': chat_id})
                 
                 if groups:
-                    settings = groups[0].get('settings', '{}')
+                    settings = groups.get('settings', '{}')
                     if isinstance(settings, str):
                         settings = json.loads(settings)
                     
@@ -709,9 +745,8 @@ def _init_database(self):
                     }, {'chat_id': chat_id})
                 return
             except Exception as e:
-                logger.error(f"Update group settings error: {e}")
+                logger.debug(f"Update group settings error: {e}")
         
-        # Local fallback
         if chat_id in self.local_groups:
             if 'settings' not in self.local_groups[chat_id]:
                 self.local_groups[chat_id]['settings'] = {}
@@ -719,19 +754,17 @@ def _init_database(self):
     
     async def get_group_settings(self, chat_id: int) -> Dict:
         """Get group settings"""
-        
         if self.connected and self.client:
             try:
                 groups = await self.client.select('groups', 'settings', {'chat_id': chat_id})
                 if groups:
-                    settings = groups[0].get('settings', '{}')
+                    settings = groups.get('settings', '{}')
                     if isinstance(settings, str):
                         settings = json.loads(settings)
                     return settings
             except Exception as e:
-                logger.error(f"Get group settings error: {e}")
+                logger.debug(f"Get group settings error: {e}")
         
-        # Local fallback
         if chat_id in self.local_groups:
             return self.local_groups[chat_id].get('settings', {})
         
@@ -739,24 +772,22 @@ def _init_database(self):
     
     async def get_all_groups(self) -> List[Dict]:
         """Get all groups"""
-        
         if self.connected and self.client:
             try:
                 return await self.client.select('groups', '*')
             except Exception as e:
-                logger.error(f"Get all groups error: {e}")
+                logger.debug(f"Get all groups error: {e}")
         
         return list(self.local_groups.values())
     
     async def get_group_count(self) -> int:
         """Get total group count"""
-        
         if self.connected and self.client:
             try:
                 groups = await self.client.select('groups', 'chat_id')
                 return len(groups)
             except Exception as e:
-                logger.error(f"Group count error: {e}")
+                logger.debug(f"Group count error: {e}")
         
         return len(self.local_groups)
     
@@ -769,19 +800,15 @@ def _init_database(self):
             'content': content,
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
-        # Keep only last N messages
-        self.local_group_messages[chat_id] = \
-            self.local_group_messages[chat_id][-Config.MAX_GROUP_MESSAGES:]
     
     def get_group_context(self, chat_id: int) -> List[Dict]:
         """Get group message context"""
-        return self.local_group_messages.get(chat_id, [])
+        return list(self.local_group_messages.get(chat_id, []))
     
     # ========== ACTIVITY LOGGING ==========
     
     async def log_user_activity(self, user_id: int, activity_type: str):
         """Log user activity"""
-        
         activity = {
             'user_id': user_id,
             'activity_type': activity_type,
@@ -795,34 +822,41 @@ def _init_database(self):
             except Exception as e:
                 logger.debug(f"Activity log error: {e}")
         
-        # Local fallback
         self.local_activities.append(activity)
-        # Keep only last 1000 activities
-        self.local_activities = self.local_activities[-1000:]
     
     # ========== CLEANUP ==========
     
     async def close(self):
-        """Close database connections"""
+        """Close database connections and cleanup"""
         if self.client:
             await self.client.close()
-            logger.info("Database connection closed")
+        
+        # Clear local caches
+        self.local_users.clear()
+        self.local_groups.clear()
+        self.local_group_messages.clear()
+        self.local_activities.clear()
+        self._user_access_times.clear()
+        self._group_access_times.clear()
+        
+        logger.info("✅ Database connection closed and caches cleared")
 
 
-# Initialize database
+# Initialize database (will be initialized asynchronously in main)
 db = Database()
 
 # ============================================================================
-# RATE LIMITER WITH COOLDOWN
+# RATE LIMITER WITH COOLDOWN - MEMORY OPTIMIZED
 # ============================================================================
 
 class RateLimiter:
-    """Rate limiting with cooldown system"""
+    """Rate limiting with cooldown system and memory optimization"""
     
     def __init__(self):
         self.requests = defaultdict(lambda: {'minute': deque(), 'day': deque()})
         self.cooldowns: Dict[int, datetime] = {}
         self.lock = threading.Lock()
+        self._last_cleanup = datetime.now(timezone.utc)
     
     def check(self, user_id: int) -> Tuple[bool, str]:
         """Check rate limits"""
@@ -838,9 +872,9 @@ class RateLimiter:
             reqs = self.requests[user_id]
             
             # Clean old requests
-            while reqs['minute'] and reqs['minute'][0] < now - timedelta(minutes=1):
+            while reqs['minute'] and reqs['minute'] < now - timedelta(minutes=1):
                 reqs['minute'].popleft()
-            while reqs['day'] and reqs['day'][0] < now - timedelta(days=1):
+            while reqs['day'] and reqs['day'] < now - timedelta(days=1):
                 reqs['day'].popleft()
             
             # Check limits
@@ -860,15 +894,32 @@ class RateLimiter:
         return sum(len(r['day']) for r in self.requests.values())
     
     def cleanup_cooldowns(self):
-        """Remove old cooldowns to prevent memory leak"""
+        """Remove old cooldowns and requests to prevent memory leak"""
         now = datetime.now(timezone.utc)
+        
+        # Only cleanup once per hour
+        if (now - self._last_cleanup).total_seconds() < 3600:
+            return
+        
         with self.lock:
-            expired = [uid for uid, time in self.cooldowns.items()
-                       if (now - time).total_seconds() > 3600]
-            for uid in expired:
+            # Remove old cooldowns
+            expired_cooldowns = [uid for uid, time in self.cooldowns.items()
+                                 if (now - time).total_seconds() > 3600]
+            for uid in expired_cooldowns:
                 del self.cooldowns[uid]
-            if expired:
-                logger.debug(f"Cleaned up {len(expired)} cooldowns")
+            
+            # Remove old requests
+            expired_requests = []
+            for uid, reqs in self.requests.items():
+                if not reqs['day']:
+                    expired_requests.append(uid)
+            for uid in expired_requests:
+                del self.requests[uid]
+            
+            self._last_cleanup = now
+            
+            if expired_cooldowns or expired_requests:
+                logger.info(f"🧹 Cleaned {len(expired_cooldowns)} cooldowns, {len(expired_requests)} request histories")
 
 
 rate_limiter = RateLimiter()
@@ -938,7 +989,7 @@ class Mood:
         else:
             weights = [0.15, 0.15, 0.3, 0.3, 0.1]
         
-        return random.choices(Mood.MOODS, weights=weights)[0]
+        return random.choices(Mood.MOODS, weights=weights)
     
     @staticmethod
     def get_mood_instruction(mood: str) -> str:
@@ -1040,7 +1091,7 @@ class ContentFilter:
 # ============================================================================
 
 class NiyatiAI:
-    """Niyati AI personality"""
+    """Niyati AI personality with optimized prompts"""
     
     def __init__(self):
         self.client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
@@ -1048,7 +1099,6 @@ class NiyatiAI:
     
     def _build_system_prompt(self, mood: str, time_period: str, user_name: str = None) -> str:
         """Build dynamic system prompt"""
-        
         mood_inst = Mood.get_mood_instruction(mood)
         
         prompt = f"""Tu hai "Niyati" - ek 20-21 saal ki college girl, online bestie!
@@ -1104,7 +1154,6 @@ Tu text karegi jaise real friend karti hai ✨"""
         is_group: bool = False
     ) -> List[str]:
         """Generate multi-message response"""
-        
         mood = Mood.get_random_mood()
         time_period = TimeAware.get_time_period()
         
@@ -1133,7 +1182,7 @@ Tu text karegi jaise real friend karti hai ✨"""
                 frequency_penalty=0.4
             )
             
-            reply = response.choices[0].message.content.strip()
+            reply = response.choices.message.content.strip()
             
             # Split on ||| or newlines
             if '|||' in reply:
@@ -1225,7 +1274,6 @@ async def send_multi_messages(
     parse_mode: str = None
 ):
     """Send multiple messages with natural delays"""
-    
     for i, msg in enumerate(messages):
         if not msg or not msg.strip():
             continue
@@ -1391,11 +1439,11 @@ async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     
-    if not args or args[0].lower() not in ['on', 'off']:
+    if not args or args.lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /meme on ya /meme off")
         return
     
-    value = args[0].lower() == 'on'
+    value = args.lower() == 'on'
     await db.update_preference(user.id, 'meme', value)
     
     status = "ON ✅" if value else "OFF ❌"
@@ -1407,11 +1455,11 @@ async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     
-    if not args or args[0].lower() not in ['on', 'off']:
+    if not args or args.lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /shayari on ya /shayari off")
         return
     
-    value = args[0].lower() == 'on'
+    value = args.lower() == 'on'
     await db.update_preference(user.id, 'shayari', value)
     
     status = "ON ✅" if value else "OFF ❌"
@@ -1423,7 +1471,6 @@ async def user_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     user_data = await db.get_or_create_user(user.id, user.first_name, user.username)
     
-    # Handle messages
     messages = user_data.get('messages', [])
     if isinstance(messages, str):
         try:
@@ -1431,7 +1478,6 @@ async def user_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except:
             messages = []
     
-    # Handle preferences
     prefs = user_data.get('preferences', {})
     if isinstance(prefs, str):
         try:
@@ -1559,11 +1605,11 @@ async def setgeeta_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     args = context.args
-    if not args or args[0].lower() not in ['on', 'off']:
+    if not args or args.lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /setgeeta on ya /setgeeta off")
         return
     
-    value = args[0].lower() == 'on'
+    value = args.lower() == 'on'
     await db.update_group_settings(chat.id, 'geeta_enabled', value)
     
     status = "ON ✅" if value else "OFF ❌"
@@ -1583,11 +1629,11 @@ async def setwelcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     args = context.args
-    if not args or args[0].lower() not in ['on', 'off']:
+    if not args or args.lower() not in ['on', 'off']:
         await update.message.reply_text("Use: /setwelcome on ya /setwelcome off")
         return
     
-    value = args[0].lower() == 'on'
+    value = args.lower() == 'on'
     await db.update_group_settings(chat.id, 'welcome_enabled', value)
     
     status = "ON ✅" if value else "OFF ❌"
@@ -1693,6 +1739,11 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 <b>Limits:</b>
 • Per Minute: {Config.MAX_REQUESTS_PER_MINUTE}
 • Per Day: {Config.MAX_REQUESTS_PER_DAY}
+
+<b>Memory:</b>
+• Local Users: {len(db.local_users)}
+• Local Groups: {len(db.local_groups)}
+• Rate Limiter Cooldowns: {len(rate_limiter.cooldowns)}
 """
     await update.message.reply_html(stats_text)
 
@@ -1735,7 +1786,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     args = context.args
-    if not args or args[0] != Config.BROADCAST_PIN:
+    if not args or args != Config.BROADCAST_PIN:
         await update.message.reply_html(
             "🔐 <b>Broadcast Command</b>\n\n"
             "Usage: /broadcast [PIN] [message]\n"
@@ -1905,32 +1956,34 @@ async def send_daily_geeta(context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"📿 Daily Geeta sent to {sent} groups")
 
 
-def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
-    """Cleanup old cooldowns"""
+async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
+    """Periodic cleanup of rate limiter and database caches"""
     rate_limiter.cleanup_cooldowns()
+    await db.cleanup_local_cache()
+    logger.info("🧹 Periodic cleanup completed")
 
 
 # ============================================================================
-# MAIN MESSAGE HANDLER - FIXED
+# MAIN MESSAGE HANDLER - FULLY FIXED
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all text messages"""
     message = update.message
-    if not message:
+    if not message or not message.text:
         return
         
     user = update.effective_user
     chat = update.effective_chat
     
-    # ✅ FIXED: Use forward_origin instead of forward_date (v21+ compatibility)
+    # Check if forwarded (v21+ compatible)
     is_forwarded = message.forward_origin is not None
     
     # Get message text
     if is_forwarded:
-        user_message = f"[Forwarded]: {message.text or message.caption or ''}"
+        user_message = f"[Forwarded]: {message.text}"
     else:
-        user_message = message.text or message.caption or ""
+        user_message = message.text
     
     if not user_message or user_message.startswith('/'):
         return
@@ -1940,11 +1993,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"📨 {user.id}: {user_message[:50]}...")
     
-    # Rate limiting with cooldown
+    # Rate limiting
     allowed, reason = rate_limiter.check(user.id)
     if not allowed:
         if reason == "cooldown":
-            return  # Silent cooldown
+            return
         elif reason == "minute":
             await message.reply_text("arre thoda slow 😅 ek minute ruk")
         else:
@@ -1984,7 +2037,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if message.reply_to_message.from_user.username == Config.BOT_USERNAME:
                 should_respond = True
         
-        # Random response rate
+        # Random response
         if not should_respond:
             if random.random() < Config.GROUP_RESPONSE_RATE:
                 should_respond = True
@@ -1993,7 +2046,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await db.get_or_create_group(chat.id, chat.title)
         health_server.stats['groups'] = await db.get_group_count()
-        
         await db.log_user_activity(user.id, f"group_message:{chat.id}")
     
     # PRIVATE HANDLING
@@ -2020,14 +2072,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_group=is_group
         )
         
-        # Random bonus (shayari/meme) for private
+        # Random bonus (private only)
         if is_private:
             prefs = await db.get_user_preferences(user.id)
             
-            if random.random() < 0.1:  # 10% chance
+            if random.random() < 0.1:
                 bonus = await niyati_ai.get_random_bonus()
                 if bonus:
-                    # Check preferences
                     if "shayari" in str(bonus).lower() and not prefs.get('shayari_enabled', True):
                         bonus = None
                     if bonus and "meme" in str(bonus).lower() and not prefs.get('meme_enabled', True):
@@ -2036,7 +2087,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if bonus:
                         responses.append(bonus)
         
-        # Sometimes mention user in response
+        # Sometimes mention user
         if is_private and random.random() < 0.2:
             mention = StylishFonts.mention(user.first_name, user.id)
             if responses:
@@ -2106,7 +2157,6 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         
         await send_multi_messages(context.bot, chat.id, messages, parse_mode=ParseMode.HTML)
-        
         await db.log_user_activity(member.id, f"joined_group:{chat.id}")
 
 
@@ -2197,11 +2247,11 @@ async def setup_jobs(app: Application):
         name='daily_geeta'
     )
     
-    # Cleanup cooldowns every hour
+    # Cleanup job every hour
     job_queue.run_repeating(
-        lambda ctx: rate_limiter.cleanup_cooldowns(),
-        interval=3600,
-        first=3600,
+        cleanup_job,
+        interval=Config.CACHE_CLEANUP_INTERVAL,
+        first=Config.CACHE_CLEANUP_INTERVAL,
         name='cleanup'
     )
     
@@ -2209,7 +2259,7 @@ async def setup_jobs(app: Application):
 
 
 # ============================================================================
-# MAIN FUNCTION
+# MAIN FUNCTION - FULLY FIXED
 # ============================================================================
 
 async def main_async():
@@ -2225,6 +2275,10 @@ async def main_async():
     logger.info("🚀 Starting Niyati Bot...")
     logger.info(f"Model: {Config.OPENAI_MODEL}")
     logger.info(f"Port: {Config.PORT}")
+    
+    # Initialize database asynchronously
+    await db.initialize()
+    
     logger.info(f"Database: {'Connected' if db.connected else 'Local Mode'}")
     logger.info(f"Privacy Mode: {'ON' if Config.PRIVACY_MODE else 'OFF'}")
     
