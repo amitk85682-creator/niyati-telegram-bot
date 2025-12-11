@@ -1143,7 +1143,7 @@ async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user statistics (admin only)"""
     if not await admin_check(update):
-        await update.message.reply_text("❌ Admin only!")
+        await update.message.reply_text("Sry baby, only admins can do this 😘💅")
         return
     
     users = await db.get_all_users()
@@ -1347,7 +1347,7 @@ async def admin_check(update:  Update) -> bool:
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show bot stats (admin only)"""
     if not await admin_check(update):
-        await update.message.reply_text("❌ Admin only!")
+        await update.message.reply_text("Sry baby, only admins can do this 😘💅")
         return
     
     user_count = await db.get_user_count()
@@ -1378,7 +1378,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Broadcast message to all users"""
     if not await admin_check(update):
-        await update.message.reply_text("❌ Admin only!")
+        await update.message.reply_text("Sry baby, only admins can do this 😘💅")
         return
     
     args = context.args
@@ -1491,7 +1491,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show admin commands"""
     if not await admin_check(update):
-        await update.message.reply_text("❌ Admin only!")
+        await update.message.reply_text("Sry baby, only admins can do this 😘💅")
         return
     
     help_text = """
