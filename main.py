@@ -404,7 +404,7 @@ class Database:
         
         self._init_database()
     
-    def _init_database(self):
+def _init_database(self):
     """Initialize database connection"""
     if Config.SUPABASE_URL and Config.SUPABASE_KEY:
         try:
@@ -414,16 +414,14 @@ class Database:
             )
             self.connected = True
             logger.info("✅ Supabase client created")
-            
-            # Note: Actual verification happens on first query
-            # This is because we can't do async in __init__
-            
+
         except Exception as e:
             logger.error(f"❌ Supabase init failed: {e}")
             self.connected = False
     else:
         logger.warning("⚠️ Supabase not configured - using local storage")
         self.connected = False
+
     
     # ========== USER OPERATIONS ==========
     
