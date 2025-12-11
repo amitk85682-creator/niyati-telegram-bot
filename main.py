@@ -1000,11 +1000,11 @@ class TimeAware:
         period = TimeAware.get_time_period()
         
         greetings = {
-            'morning': ["good morning ☀️", "uth gayi tu bhi?", "subah subah! ✨"],
+            'morning': ["good morning ☀️", "uth gaye aap bhi?", "subah subah! ✨"],
             'afternoon': ["heyyy", "lunch ho gaya?", "afternoon vibes 🌤️"],
             'evening': ["hiii 💫", "chai time! ☕", "shaam ho gayi yaar"],
             'night': ["heyy 🌙", "night owl?", "aaj kya plan hai"],
-            'late_night': ["tu bhi jaag rahi? 👀", "insomnia gang 🦉", "neend nahi aa rahi?"]
+            'late_night': ["tu bhi jaag rahe ho? 👀", "insomnia gang 🦉", "neend nahi aa rahi?"]
         }
         
         return random.choice(greetings.get(period, ["hiii 💫"]))
@@ -1029,7 +1029,8 @@ class Mood:
         else:
             weights = [0.15, 0.15, 0.3, 0.3, 0.1]
         
-        return random.choices(Mood.MOODS, weights=weights)
+        # FIX: Added [0] at the end because choices returns a list ['mood']
+        return random.choices(Mood.MOODS, weights=weights, k=1)[0]
     
     @staticmethod
     def get_mood_instruction(mood: str) -> str:
@@ -1041,8 +1042,8 @@ class Mood:
             'sleepy': "Mood: SLEEPY 😴 - Short lazy replies, 'hmm', 'haan', '*yawns*'",
             'dramatic': "Mood: DRAMATIC 😤 - 'kya yaar', 'huh', playful attitude"
         }
-        return instructions.get(mood, "")
-
+        # Safe get incase mood is somehow invalid
+        return instructions.get(mood, "Mood: HAPPY 😊 - Friendly vibes")
 # ============================================================================
 # HTML STYLISH FONTS
 # ============================================================================
