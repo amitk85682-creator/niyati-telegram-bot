@@ -1,17 +1,15 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║                           NIYATI BOT v3.0                                  ║
+║                           NIYATI BOT v3.1 (FIXED)                          ║
 ║                    🌸 Teri Online Bestie 🌸                                ║
 ║                                                                            ║
-║  Features:                                                                 ║
-║  ✅ Real girl texting style (multiple short messages)                     ║
-║  ✅ Supabase cloud database for memory                                    ║
-║  ✅ Time-aware & mood-based responses                                     ║
-║  ✅ User mentions with hyperlinks                                         ║
-║  ✅ Forward message support                                               ║
-║  ✅ Group commands (admin + user)                                         ║
-║  ✅ Broadcast with HTML stylish fonts                                     ║
-║  ✅ Health server for Render.com                                          ║
+║  FIXES:                                                                    ║
+║  ✅ Supabase initialization (no proxy)                                    ║
+║  ✅ Group broadcast support                                               ║
+║  ✅ HTML formatting preserved                                             ║
+║  ✅ No "Forwarded" label (uses copy_message)                              ║
+║  ✅ /users command added                                                  ║
+║  ✅ Daily Geeta scheduler                                                 ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -95,8 +93,8 @@ class Config:
     BROADCAST_PIN = os.getenv('BROADCAST_PIN', 'niyati2024')
     
     # Limits
-    MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '20'))  # Store last 20 for context
-    MAX_GROUP_MESSAGES = int(os.getenv('MAX_GROUP_MESSAGES', '5'))  # Local only
+    MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '20'))
+    MAX_GROUP_MESSAGES = int(os.getenv('MAX_GROUP_MESSAGES', '5'))
     MAX_REQUESTS_PER_MINUTE = int(os.getenv('MAX_REQUESTS_PER_MINUTE', '15'))
     MAX_REQUESTS_PER_DAY = int(os.getenv('MAX_REQUESTS_PER_DAY', '500'))
     
@@ -109,6 +107,10 @@ class Config:
     # Features
     MULTI_MESSAGE_ENABLED = os.getenv('MULTI_MESSAGE_ENABLED', 'true').lower() == 'true'
     TYPING_DELAY_MS = int(os.getenv('TYPING_DELAY_MS', '800'))
+    
+    # Daily Geeta Time (IST)
+    GEETA_HOUR = int(os.getenv('GEETA_HOUR', '7'))  # 7 AM IST
+    GEETA_MINUTE = int(os.getenv('GEETA_MINUTE', '0'))
     
     @classmethod
     def validate(cls):
@@ -161,7 +163,7 @@ class HealthServer:
         self.stats = {'messages': 0, 'users': 0, 'groups': 0}
     
     async def health(self, request):
-        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.0'})
+        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.1'})
     
     async def status(self, request):
         uptime = datetime.now(timezone.utc) - self.start_time
@@ -186,33 +188,39 @@ class HealthServer:
 health_server = HealthServer()
 
 # ============================================================================
-# SUPABASE DATABASE - FULLY FIXED
+# SUPABASE DATABASE - COMPLETELY FIXED
 # ============================================================================
 
 class Database:
     """Supabase database manager"""
     
     def __init__(self):
-        self.client = None
-        self.local_group_cache:  Dict[int, List[Dict]] = defaultdict(list)
-        self.local_user_cache: Dict[int, Dict] = {}  # Fallback cache
+        self.client: Optional[Client] = None
+        self.local_group_cache: Dict[int, List[Dict]] = defaultdict(list)
+        self.local_user_cache: Dict[int, Dict] = {}
+        self.local_group_data: Dict[int, Dict] = {}
         self._init_supabase()
     
     def _init_supabase(self):
-        """Initialize Supabase client"""
+        """Initialize Supabase client - FIXED: No extra parameters"""
         if not Config.SUPABASE_URL or not Config.SUPABASE_KEY:
-            logger.warning("⚠️ Supabase not configured")
+            logger.warning("⚠️ Supabase not configured - using local storage")
             return
         
         try:
-            # Simple initialization - create_client only takes url and key
-            # DO NOT pass proxy, options, or http_client parameters
-            self.client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
-            logger.info("✅ Supabase connected")
+            # FIXED: Only pass url and key - no other parameters
+            self.client = create_client(
+                supabase_url=Config.SUPABASE_URL,
+                supabase_key=Config.SUPABASE_KEY
+            )
             
-        except Exception as e: 
+            # Test connection
+            self.client.table('users').select('user_id').limit(1).execute()
+            logger.info("✅ Supabase connected successfully!")
+            
+        except Exception as e:
             logger.error(f"❌ Supabase init error: {e}")
-            logger.info("📦 Using local cache fallback")
+            logger.info("📦 Falling back to local cache")
             self.client = None
     
     # ────────────────────────────────────────────────────────────────
@@ -223,17 +231,15 @@ class Database:
                                   username: str = None) -> Dict:
         """Get or create user"""
         
-        # Try Supabase first
         if self.client:
             try:
                 result = self.client.table('users').select('*').eq('user_id', user_id).execute()
                 
                 if result.data:
                     user = result.data[0]
-                    # Update name if changed
                     if first_name and user.get('first_name') != first_name:
                         self.client.table('users').update({
-                            'first_name':  first_name,
+                            'first_name': first_name,
                             'username': username,
                             'updated_at': datetime.now(timezone.utc).isoformat()
                         }).eq('user_id', user_id).execute()
@@ -241,7 +247,6 @@ class Database:
                         user['username'] = username
                     return user
                 else:
-                    # Create new user
                     new_user = {
                         'user_id': user_id,
                         'first_name': first_name,
@@ -253,24 +258,26 @@ class Database:
                             'geeta_enabled': True
                         },
                         'total_messages': 0,
+                        'is_active': True,
                         'created_at': datetime.now(timezone.utc).isoformat(),
-                        'updated_at':  datetime.now(timezone.utc).isoformat()
+                        'updated_at': datetime.now(timezone.utc).isoformat()
                     }
-                    self.client. table('users').insert(new_user).execute()
-                    logger.info(f"✅ New user:  {user_id} ({first_name})")
+                    self.client.table('users').insert(new_user).execute()
+                    logger.info(f"✅ New user: {user_id} ({first_name})")
                     return new_user
                     
             except Exception as e:
                 logger.error(f"❌ Supabase user error: {e}")
         
-        # Fallback to local cache
+        # Fallback
         if user_id not in self.local_user_cache:
             self.local_user_cache[user_id] = {
                 'user_id': user_id,
                 'first_name': first_name,
                 'username': username,
                 'messages': [],
-                'preferences':  {'meme_enabled': True, 'shayari_enabled': True}
+                'preferences': {'meme_enabled': True, 'shayari_enabled': True},
+                'is_active': True
             }
         return self.local_user_cache[user_id]
     
@@ -317,7 +324,6 @@ class Database:
             except Exception as e:
                 logger.error(f"❌ Get context error: {e}")
         
-        # Fallback
         if user_id in self.local_user_cache:
             return self.local_user_cache[user_id].get('messages', [])[-10:]
         return []
@@ -336,7 +342,6 @@ class Database:
             except Exception as e:
                 logger.error(f"❌ Clear memory error: {e}")
         
-        # Fallback
         if user_id in self.local_user_cache:
             self.local_user_cache[user_id]['messages'] = []
     
@@ -357,24 +362,23 @@ class Database:
             except Exception as e:
                 logger.error(f"❌ Update pref error: {e}")
         
-        # Fallback
         if user_id in self.local_user_cache:
             prefs = self.local_user_cache[user_id].get('preferences', {})
             prefs[f'{pref}_enabled'] = value
             self.local_user_cache[user_id]['preferences'] = prefs
     
     async def get_all_users(self) -> List[Dict]:
-        """Get all users for broadcast"""
+        """Get all active users for broadcast"""
         
         if self.client:
             try:
-                result = self.client.table('users').select('user_id, first_name').execute()
+                result = self.client.table('users').select('user_id, first_name, is_active').eq('is_active', True).execute()
                 return result.data or []
             except Exception as e:
                 logger.error(f"❌ Get users error: {e}")
         
-        return [{'user_id': uid, 'first_name': u.get('first_name')} 
-                for uid, u in self.local_user_cache.items()]
+        return [{'user_id': uid, 'first_name': u.get('first_name'), 'is_active': True} 
+                for uid, u in self.local_user_cache.items() if u.get('is_active', True)]
     
     async def get_user_count(self) -> int:
         """Get user count"""
@@ -383,10 +387,25 @@ class Database:
             try:
                 result = self.client.table('users').select('user_id', count='exact').execute()
                 return result.count or 0
-            except Exception as e:
-                logger.error(f"❌ User count error: {e}")
+            except:
+                pass
         
         return len(self.local_user_cache)
+    
+    async def mark_user_inactive(self, user_id: int):
+        """Mark user as inactive (blocked bot)"""
+        
+        if self.client:
+            try:
+                self.client.table('users').update({
+                    'is_active': False,
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }).eq('user_id', user_id).execute()
+            except:
+                pass
+        
+        if user_id in self.local_user_cache:
+            self.local_user_cache[user_id]['is_active'] = False
     
     # ─────────────────────────────────────────────────────────────────────
     # GROUP OPERATIONS
@@ -398,7 +417,8 @@ class Database:
         default_group = {
             'chat_id': chat_id, 
             'chat_title': chat_title, 
-            'settings': {'geeta_enabled': True, 'welcome_enabled': True}
+            'settings': {'geeta_enabled': True, 'welcome_enabled': True},
+            'is_active': True
         }
         
         if self.client:
@@ -429,25 +449,33 @@ class Database:
             except Exception as e:
                 logger.error(f"❌ Group error: {e}")
         
-        return default_group
+        # Local fallback
+        if chat_id not in self.local_group_data:
+            self.local_group_data[chat_id] = default_group
+        return self.local_group_data.get(chat_id, default_group)
     
     async def update_group_settings(self, chat_id: int, setting: str, value):
         """Update group setting"""
         
-        if not self.client:
-            return
+        if self.client:
+            try:
+                result = self.client.table('groups').select('settings').eq('chat_id', chat_id).execute()
+                if result.data:
+                    settings = result.data[0].get('settings', {}) or {}
+                    settings[setting] = value
+                    self.client.table('groups').update({
+                        'settings': settings,
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }).eq('chat_id', chat_id).execute()
+                return
+            except Exception as e:
+                logger.error(f"❌ Update group error: {e}")
         
-        try:
-            result = self.client.table('groups').select('settings').eq('chat_id', chat_id).execute()
-            if result.data:
-                settings = result.data[0].get('settings', {}) or {}
-                settings[setting] = value
-                self.client.table('groups').update({
-                    'settings': settings,
-                    'updated_at': datetime.now(timezone.utc).isoformat()
-                }).eq('chat_id', chat_id).execute()
-        except Exception as e:
-            logger.error(f"❌ Update group error: {e}")
+        # Local fallback
+        if chat_id in self.local_group_data:
+            settings = self.local_group_data[chat_id].get('settings', {})
+            settings[setting] = value
+            self.local_group_data[chat_id]['settings'] = settings
     
     async def get_group_count(self) -> int:
         """Get group count"""
@@ -458,21 +486,37 @@ class Database:
                 return result.count or 0
             except:
                 pass
-        return 0
+        return len(self.local_group_data)
     
     async def get_all_groups(self) -> List[Dict]:
-        """Get all groups"""
+        """Get all active groups"""
         
         if self.client:
             try:
-                result = self.client.table('groups').select('chat_id, chat_title').eq('is_active', True).execute()
+                result = self.client.table('groups').select('chat_id, chat_title, settings, is_active').eq('is_active', True).execute()
                 return result.data or []
+            except Exception as e:
+                logger.error(f"❌ Get groups error: {e}")
+        
+        return [g for g in self.local_group_data.values() if g.get('is_active', True)]
+    
+    async def mark_group_inactive(self, chat_id: int):
+        """Mark group as inactive (bot removed)"""
+        
+        if self.client:
+            try:
+                self.client.table('groups').update({
+                    'is_active': False,
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }).eq('chat_id', chat_id).execute()
             except:
                 pass
-        return []
+        
+        if chat_id in self.local_group_data:
+            self.local_group_data[chat_id]['is_active'] = False
     
     # ─────────────────────────────────────────────────────────────────────
-    # LOCAL GROUP CACHE
+    # LOCAL GROUP MESSAGE CACHE
     # ─────────────────────────────────────────────────────────────────────
     
     def add_group_message(self, chat_id: int, user_name: str, content: str):
@@ -510,7 +554,6 @@ class RateLimiter:
         with self.lock:
             reqs = self.requests[user_id]
             
-            # Clean old
             while reqs['minute'] and reqs['minute'][0] < now - timedelta(minutes=1):
                 reqs['minute'].popleft()
             while reqs['day'] and reqs['day'][0] < now - timedelta(days=1):
@@ -663,16 +706,9 @@ class StylishFonts:
         return f"✨ <b>{text}</b> ✨"
     
     @staticmethod
-    def apply_style(text: str, style: str) -> str:
-        """Apply style by name"""
-        styles = {
-            'bold': StylishFonts.bold,
-            'italic': StylishFonts.italic,
-            'underline': StylishFonts.underline,
-            'code': StylishFonts.code,
-            'spoiler': StylishFonts.spoiler
-        }
-        return styles.get(style, lambda x: x)(text)
+    def escape_html(text: str) -> str:
+        """Escape HTML special characters"""
+        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
 # ============================================================================
@@ -684,7 +720,7 @@ class ContentFilter:
     
     SENSITIVE_PATTERNS = [
         r'\b(password|pin|cvv|card\s*number|otp)\b',
-        r'\b\d{12,16}\b',  # Card numbers
+        r'\b\d{12,16}\b',
     ]
     
     DISTRESS_KEYWORDS = [
@@ -711,6 +747,17 @@ class ContentFilter:
 
 class NiyatiAI:
     """Niyati AI personality"""
+    
+    GEETA_QUOTES = [
+        "🙏 <b>कर्मण्येवाधिकारस्ते मा फलेषु कदाचन</b>\n\n<i>Karm kar, phal ki chinta mat kar. Jo bhi karo, poore dil se karo!</i> ✨",
+        "🙏 <b>योगः कर्मसु कौशलम्</b>\n\n<i>Yoga is skill in action. Har kaam mein excellence laao!</i> 💫",
+        "🙏 <b>मन की शांति सबसे बड़ी शक्ति है</b>\n\n<i>Peace of mind is the greatest strength. Stay calm! 🧘</i>",
+        "🙏 <b>ज्ञान से बड़ा कोई प्रकाश नहीं</b>\n\n<i>No light greater than knowledge. Keep learning!</i> 📚",
+        "🙏 <b>क्रोध से भ्रम होता है</b>\n\n<i>Anger leads to confusion. Stay peaceful, stay wise!</i> 🕊️",
+        "🙏 <b>जो हुआ अच्छा हुआ, जो हो रहा है अच्छा हो रहा है</b>\n\n<i>Whatever happened, happened for good. Trust the process!</i> 🌸",
+        "🙏 <b>आत्मा अमर है</b>\n\n<i>The soul is eternal. Don't fear, be brave!</i> 💪",
+        "🙏 <b>श्रद्धावान् लभते ज्ञानम्</b>\n\n<i>The faithful attain wisdom. Have faith in yourself!</i> ✨"
+    ]
     
     def __init__(self):
         self.client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
@@ -783,7 +830,6 @@ Tu text karegi jaise real friend karti hai ✨"""
                 {"role": "system", "content": self._build_system_prompt(mood, time_period, user_name)}
             ]
             
-            # Add context
             if context:
                 for msg in context[-8:]:
                     messages.append({
@@ -791,10 +837,8 @@ Tu text karegi jaise real friend karti hai ✨"""
                         "content": msg.get('content', '')
                     })
             
-            # Add current message
             messages.append({"role": "user", "content": user_message})
             
-            # Adjust for group
             max_tokens = 100 if is_group else Config.OPENAI_MAX_TOKENS
             
             response = await self.client.chat.completions.create(
@@ -808,7 +852,6 @@ Tu text karegi jaise real friend karti hai ✨"""
             
             reply = response.choices[0].message.content.strip()
             
-            # Split into multiple messages
             if '|||' in reply:
                 parts = [p.strip() for p in reply.split('|||') if p.strip()]
             elif '\n\n' in reply:
@@ -816,7 +859,6 @@ Tu text karegi jaise real friend karti hai ✨"""
             else:
                 parts = [reply]
             
-            # Limit to 4 messages max
             return parts[:4]
             
         except RateLimitError:
@@ -826,33 +868,9 @@ Tu text karegi jaise real friend karti hai ✨"""
             logger.error(f"❌ AI Error: {e}")
             return ["sorry yaar kuch gadbad... dobara try karo? 💫"]
     
-    async def generate_shayari(self, mood: str = "neutral") -> str:
-        """Generate shayari"""
-        shayaris = {
-            'happy': [
-                "khushiyon ki baarish ho, dil khil jaye\nteri baat se ye din haseen lage ✨",
-                "chhoti chhoti khushiyan, badi si muskaan\nyahi toh hai zindagi ki pehchaan 💫"
-            ],
-            'sad': [
-                "udaasi bhi guzar jayegi\nwaqt sab theek kar deta hai 🌸",
-                "dard mein bhi ek khoobsurti hai\nsamjhega woh jo dil se dekhega 💕"
-            ],
-            'neutral': [
-                "dil ki raahon mein tera saath ho\nkhwabon ki roshni hamesha chale ✨",
-                "baatein khatam na ho kabhi\nyeh silsila yun hi chale 💫"
-            ]
-        }
-        return random.choice(shayaris.get(mood, shayaris['neutral']))
-    
-    async def generate_geeta_quote(self) -> str:
-        """Generate Geeta quote"""
-        quotes = [
-            "🙏 <b>कर्मण्येवाधिकारस्ते</b>\nKarm kar, phal ki chinta mat kar",
-            "🙏 <b>योगः कर्मसु कौशलम्</b>\nYoga is skill in action",
-            "🙏 <b>मन की शांति सबसे बड़ी शक्ति है</b>\nPeace of mind is greatest strength",
-            "🙏 <b>ज्ञान से बड़ा कोई प्रकाश नहीं</b>\nNo light greater than knowledge"
-        ]
-        return random.choice(quotes)
+    def get_random_geeta_quote(self) -> str:
+        """Get random Geeta quote"""
+        return random.choice(self.GEETA_QUOTES)
 
 
 # Global AI instance
@@ -873,9 +891,7 @@ async def send_multi_messages(
     
     for i, msg in enumerate(messages):
         if i > 0:
-            # Typing indicator
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-            # Natural delay
             delay = random.uniform(0.5, 1.5) if Config.MULTI_MESSAGE_ENABLED else 0.1
             await asyncio.sleep(delay)
         
@@ -886,6 +902,23 @@ async def send_multi_messages(
                 reply_to_message_id=reply_to if i == 0 else None,
                 parse_mode=parse_mode
             )
+        except Forbidden:
+            # User blocked bot
+            await db.mark_user_inactive(chat_id)
+            break
+        except BadRequest as e:
+            # Try without parse_mode if HTML fails
+            if parse_mode and "parse" in str(e).lower():
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=msg,
+                        reply_to_message_id=reply_to if i == 0 else None
+                    )
+                except:
+                    pass
+            else:
+                logger.error(f"Send error: {e}")
         except Exception as e:
             logger.error(f"Send error: {e}")
 
@@ -894,12 +927,11 @@ async def send_multi_messages(
 # ============================================================================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start - with user mention"""
+    """Handle /start"""
     user = update.effective_user
     chat = update.effective_chat
     is_private = chat.type == 'private'
     
-    # Create mention
     user_mention = StylishFonts.mention(user.first_name, user.id)
     
     if is_private:
@@ -944,6 +976,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • /forget - Memory clear karo
 • /meme on/off - Memes toggle
 • /shayari on/off - Shayari toggle
+• /geeta - Random Geeta quote
 
 <b>Tips:</b>
 • Seedhe message bhejo, main reply karungi
@@ -1010,7 +1043,7 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /forget - clear memory"""
+    """Handle /forget"""
     user = update.effective_user
     await db.clear_user_memory(user.id)
     
@@ -1054,6 +1087,12 @@ async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = "ON ✅" if value else "OFF ❌"
     await update.message.reply_text(f"Shayari: {status}")
 
+
+async def geeta_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send random Geeta quote"""
+    quote = niyati_ai.get_random_geeta_quote()
+    await update.message.reply_html(quote)
+
 # ============================================================================
 # GROUP COMMANDS
 # ============================================================================
@@ -1072,6 +1111,7 @@ async def grouphelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>Everyone:</b>
 • /grouphelp - Yeh menu
 • /groupinfo - Group info
+• /geeta - Geeta quote
 • @NiyatiBot [message] - Mujhse baat karo
 • Reply to my message - Main jawab dungi
 
@@ -1079,7 +1119,6 @@ async def grouphelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • /setgeeta on/off - Daily Geeta quote
 • /setwelcome on/off - Welcome messages
 • /groupstats - Group statistics
-• /groupsettings - Current settings
 
 <b>Note:</b>
 Group mein main har message ka reply nahi karti,
@@ -1102,7 +1141,7 @@ async def groupinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info_text = f"""
 📊 <b>Group Info</b>
 
-<b>Name:</b> {chat.title}
+<b>Name:</b> {StylishFonts.escape_html(chat.title or 'N/A')}
 <b>ID:</b> <code>{chat.id}</code>
 
 <b>Settings:</b>
@@ -1117,7 +1156,6 @@ async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     chat = update.effective_chat
     
-    # Bot owner is always admin
     if user.id in Config.ADMIN_IDS:
         return True
     
@@ -1129,7 +1167,7 @@ async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def setgeeta_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Toggle Geeta quotes for group (admin only)"""
+    """Toggle Geeta quotes for group"""
     chat = update.effective_chat
     
     if chat.type == 'private':
@@ -1153,7 +1191,7 @@ async def setgeeta_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def setwelcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Toggle welcome messages for group (admin only)"""
+    """Toggle welcome messages for group"""
     chat = update.effective_chat
     
     if chat.type == 'private':
@@ -1177,7 +1215,7 @@ async def setwelcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def groupstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show group stats (admin only)"""
+    """Show group stats"""
     chat = update.effective_chat
     
     if chat.type == 'private':
@@ -1193,14 +1231,14 @@ async def groupstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     stats_text = f"""
 📊 <b>Group Statistics</b>
 
-<b>Group:</b> {chat.title}
+<b>Group:</b> {StylishFonts.escape_html(chat.title or 'N/A')}
 <b>Cached Messages:</b> {cached_msgs}
 <b>Max Cache:</b> {Config.MAX_GROUP_MESSAGES}
 """
     await update.message.reply_html(stats_text)
 
 # ============================================================================
-# ADMIN COMMANDS
+# ADMIN COMMANDS - FIXED BROADCAST
 # ============================================================================
 
 async def admin_check(update: Update) -> bool:
@@ -1209,7 +1247,7 @@ async def admin_check(update: Update) -> bool:
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show bot stats (admin only)"""
+    """Show bot stats"""
     if not await admin_check(update):
         await update.message.reply_text("❌ Admin only!")
         return
@@ -1239,66 +1277,196 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(stats_text)
 
 
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all users (admin only)"""
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user list (admin only)"""
     if not await admin_check(update):
         await update.message.reply_text("❌ Admin only!")
         return
     
-    # Check for PIN
+    users = await db.get_all_users()
+    groups = await db.get_all_groups()
+    
+    # Build user list (max 50)
+    user_list = []
+    for u in users[:50]:
+        name = u.get('first_name', 'Unknown')
+        uid = u.get('user_id')
+        user_list.append(f"• {StylishFonts.escape_html(name)} (<code>{uid}</code>)")
+    
+    # Build group list (max 20)
+    group_list = []
+    for g in groups[:20]:
+        title = g.get('chat_title', 'Unknown')
+        gid = g.get('chat_id')
+        group_list.append(f"• {StylishFonts.escape_html(title)} (<code>{gid}</code>)")
+    
+    text = f"""
+👥 <b>Users ({len(users)} total):</b>
+{chr(10).join(user_list[:50]) if user_list else 'No users yet'}
+
+📢 <b>Groups ({len(groups)} total):</b>
+{chr(10).join(group_list[:20]) if group_list else 'No groups yet'}
+"""
+    
+    if len(users) > 50:
+        text += f"\n<i>...and {len(users) - 50} more users</i>"
+    if len(groups) > 20:
+        text += f"\n<i>...and {len(groups) - 20} more groups</i>"
+    
+    await update.message.reply_html(text)
+
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    FIXED Broadcast command:
+    - Sends to users AND groups
+    - Uses copy_message (no "Forwarded" label)
+    - Preserves HTML formatting
+    """
+    if not await admin_check(update):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
     args = context.args
-    if not args or args[0] != Config.BROADCAST_PIN:
-        await update.message.reply_text(
-            "🔐 <b>Broadcast Command</b>\n\n"
-            "Usage: /broadcast [PIN] [message]\n"
-            "Example: /broadcast 1234 Hello everyone!",
-            parse_mode=ParseMode.HTML
+    reply_msg = update.message.reply_to_message
+    
+    # Parse command: /broadcast [PIN] [users/groups/all] [message]
+    if not args:
+        await update.message.reply_html(
+            "📢 <b>Broadcast Command</b>\n\n"
+            "<b>Usage:</b>\n"
+            "<code>/broadcast PIN all [message]</code>\n"
+            "<code>/broadcast PIN users [message]</code>\n"
+            "<code>/broadcast PIN groups [message]</code>\n\n"
+            "<b>Or reply to a message:</b>\n"
+            "<code>/broadcast PIN all</code>\n\n"
+            "<b>HTML Styles:</b>\n"
+            "• <code>&lt;b&gt;bold&lt;/b&gt;</code> → <b>bold</b>\n"
+            "• <code>&lt;i&gt;italic&lt;/i&gt;</code> → <i>italic</i>\n"
+            "• <code>&lt;u&gt;underline&lt;/u&gt;</code> → <u>underline</u>\n"
+            "• <code>&lt;code&gt;mono&lt;/code&gt;</code> → <code>mono</code>\n\n"
+            "<b>Example:</b>\n"
+            "<code>/broadcast niyati2024 all &lt;b&gt;Hello!&lt;/b&gt; 🎉</code>"
         )
         return
     
-    # Get message
-    message_text = ' '.join(args[1:]) if len(args) > 1 else None
-    reply_msg = update.message.reply_to_message
+    # Check PIN
+    if args[0] != Config.BROADCAST_PIN:
+        await update.message.reply_text("❌ Wrong PIN!")
+        return
     
+    # Parse target
+    target = 'all'  # default
+    message_text = None
+    
+    if len(args) >= 2:
+        if args[1].lower() in ['users', 'groups', 'all']:
+            target = args[1].lower()
+            message_text = ' '.join(args[2:]) if len(args) > 2 else None
+        else:
+            # No target specified, assume 'all'
+            message_text = ' '.join(args[1:])
+    
+    # Check if we have content
     if not message_text and not reply_msg:
         await update.message.reply_text("❌ Message ya reply do broadcast ke liye!")
         return
     
     # Confirm
-    await update.message.reply_text("📢 Broadcasting... please wait")
+    status_msg = await update.message.reply_text(
+        f"📢 Broadcasting to <b>{target}</b>... please wait",
+        parse_mode=ParseMode.HTML
+    )
     
-    users = await db.get_all_users()
-    success = 0
-    failed = 0
+    # Get recipients
+    users = []
+    groups = []
     
+    if target in ['users', 'all']:
+        users = await db.get_all_users()
+    
+    if target in ['groups', 'all']:
+        groups = await db.get_all_groups()
+    
+    user_success = 0
+    user_failed = 0
+    group_success = 0
+    group_failed = 0
+    
+    # ─────────────────────────────────────────────────────────────────────
+    # BROADCAST TO USERS
+    # ─────────────────────────────────────────────────────────────────────
     for user in users:
         user_id = user.get('user_id')
         try:
             if reply_msg:
-                # Forward the replied message
-                await context.bot.forward_message(
+                # FIXED: Use copy_message instead of forward_message
+                # This copies the message WITHOUT "Forwarded from" label
+                await context.bot.copy_message(
                     chat_id=user_id,
                     from_chat_id=update.effective_chat.id,
                     message_id=reply_msg.message_id
                 )
             else:
-                # Send text with HTML
+                # Send text with HTML formatting preserved
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=message_text,
                     parse_mode=ParseMode.HTML
                 )
-            success += 1
+            user_success += 1
             await asyncio.sleep(0.05)  # Rate limit
+            
+        except Forbidden:
+            # User blocked bot
+            await db.mark_user_inactive(user_id)
+            user_failed += 1
         except Exception as e:
-            failed += 1
-            logger.debug(f"Broadcast fail {user_id}: {e}")
+            user_failed += 1
+            logger.debug(f"Broadcast fail user {user_id}: {e}")
     
-    await update.message.reply_html(
+    # ─────────────────────────────────────────────────────────────────────
+    # BROADCAST TO GROUPS
+    # ─────────────────────────────────────────────────────────────────────
+    for group in groups:
+        chat_id = group.get('chat_id')
+        try:
+            if reply_msg:
+                # FIXED: Use copy_message for groups too
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=reply_msg.message_id
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=message_text,
+                    parse_mode=ParseMode.HTML
+                )
+            group_success += 1
+            await asyncio.sleep(0.05)
+            
+        except Forbidden:
+            # Bot removed from group
+            await db.mark_group_inactive(chat_id)
+            group_failed += 1
+        except Exception as e:
+            group_failed += 1
+            logger.debug(f"Broadcast fail group {chat_id}: {e}")
+    
+    # Update status
+    await status_msg.edit_text(
         f"✅ <b>Broadcast Complete!</b>\n\n"
-        f"<b>Success:</b> {success}\n"
-        f"<b>Failed:</b> {failed}\n"
-        f"<b>Total:</b> {len(users)}"
+        f"<b>Target:</b> {target.upper()}\n\n"
+        f"<b>Users:</b>\n"
+        f"  ✅ Success: {user_success}\n"
+        f"  ❌ Failed: {user_failed}\n\n"
+        f"<b>Groups:</b>\n"
+        f"  ✅ Success: {group_success}\n"
+        f"  ❌ Failed: {group_failed}\n\n"
+        f"<b>Total Sent:</b> {user_success + group_success}",
+        parse_mode=ParseMode.HTML
     )
 
 
@@ -1313,11 +1481,13 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 <b>Statistics:</b>
 • /stats - Bot statistics
-• /users - User list
+• /users - User & group list
 
 <b>Broadcast:</b>
-• /broadcast [PIN] [message]
-• Reply to message with /broadcast [PIN]
+• <code>/broadcast [PIN] all [message]</code> - Send to everyone
+• <code>/broadcast [PIN] users [message]</code> - Send to users only
+• <code>/broadcast [PIN] groups [message]</code> - Send to groups only
+• Reply to message with <code>/broadcast [PIN] all</code>
 
 <b>HTML Styles for Broadcast:</b>
 • <code>&lt;b&gt;bold&lt;/b&gt;</code> → <b>bold</b>
@@ -1327,8 +1497,15 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • <code>&lt;code&gt;mono&lt;/code&gt;</code> → <code>mono</code>
 • <code>&lt;tg-spoiler&gt;text&lt;/tg-spoiler&gt;</code> → spoiler
 
+<b>Tips:</b>
+• Reply to any message to broadcast it (no "Forwarded" label!)
+• HTML formatting is preserved in broadcasts
+• Failed broadcasts auto-mark users/groups as inactive
+
 <b>Example:</b>
-/broadcast PIN <b>Hello</b> everyone! 🎉
+<code>/broadcast {Config.BROADCAST_PIN} all</code>
+<b>🎉 Hello everyone!</b>
+<i>This is a test broadcast</i>
 """
     await update.message.reply_html(help_text)
 
@@ -1344,7 +1521,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Get message text (including forwarded)
     if message.forward_date:
-        # Forwarded message
         user_message = f"[Forwarded]: {message.text or message.caption or ''}"
     else:
         user_message = message.text or message.caption or ""
@@ -1386,19 +1562,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─────────────────────────────────────────────────────────────────────
     
     if is_group:
-        # Save to local cache
         db.add_group_message(chat.id, user.first_name, user_message)
         
-        # Check if should respond
         should_respond = False
         bot_username = f"@{Config.BOT_USERNAME}"
         
-        # Mentioned
         if bot_username.lower() in user_message.lower():
             should_respond = True
             user_message = user_message.replace(bot_username, '').strip()
+            user_message = re.sub(rf'@{Config.BOT_USERNAME}', '', user_message, flags=re.IGNORECASE).strip()
         
-        # Reply to bot
         if message.reply_to_message and message.reply_to_message.from_user:
             if message.reply_to_message.from_user.username == Config.BOT_USERNAME:
                 should_respond = True
@@ -1406,7 +1579,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not should_respond:
             return
         
-        # Ensure group exists
         await db.get_or_create_group(chat.id, chat.title)
         health_server.stats['groups'] = await db.get_group_count()
     
@@ -1415,14 +1587,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─────────────────────────────────────────────────────────────────────
     
     if is_private:
-        user_data = await db.get_or_create_user(user.id, user.first_name, user.username)
+        await db.get_or_create_user(user.id, user.first_name, user.username)
         health_server.stats['users'] = await db.get_user_count()
     
     # Typing indicator
     await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
     
     try:
-        # Get context
+        # Get context (fixed variable name conflict)
         context_msgs = await db.get_user_context(user.id) if is_private else []
         
         # Generate response
@@ -1433,11 +1605,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_group=is_group
         )
         
-        # Sometimes mention user in response (20% chance)
+        # Sometimes mention user (20% chance in private)
         if is_private and random.random() < 0.2:
             mention = StylishFonts.mention(user.first_name, user.id)
             if responses:
-                # Add mention to a random response
                 idx = random.randint(0, len(responses) - 1)
                 if random.random() < 0.5:
                     responses[idx] = f"{mention} {responses[idx]}"
@@ -1476,7 +1647,6 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ['group', 'supergroup']:
         return
     
-    # Check if welcome enabled
     group_data = await db.get_or_create_group(chat.id, chat.title)
     if not group_data.get('settings', {}).get('welcome_enabled', True):
         return
@@ -1494,6 +1664,94 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         
         await send_multi_messages(context.bot, chat.id, messages, parse_mode=ParseMode.HTML)
+
+# ============================================================================
+# DAILY GEETA SCHEDULER
+# ============================================================================
+
+class GeetaScheduler:
+    """Daily Geeta quote scheduler"""
+    
+    def __init__(self):
+        self.task = None
+        self.running = False
+    
+    async def send_daily_geeta(self, bot):
+        """Send Geeta quote to all enabled groups"""
+        groups = await db.get_all_groups()
+        
+        quote = niyati_ai.get_random_geeta_quote()
+        header = "🌅 <b>Good Morning! Daily Geeta Quote:</b>\n\n"
+        full_message = header + quote
+        
+        sent = 0
+        for group in groups:
+            settings = group.get('settings', {})
+            if not settings.get('geeta_enabled', True):
+                continue
+            
+            chat_id = group.get('chat_id')
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=full_message,
+                    parse_mode=ParseMode.HTML
+                )
+                sent += 1
+                await asyncio.sleep(0.1)
+            except Forbidden:
+                await db.mark_group_inactive(chat_id)
+            except Exception as e:
+                logger.debug(f"Geeta send fail {chat_id}: {e}")
+        
+        logger.info(f"📿 Daily Geeta sent to {sent} groups")
+    
+    async def scheduler_loop(self, bot):
+        """Main scheduler loop"""
+        ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
+        
+        while self.running:
+            now = datetime.now(ist)
+            
+            # Calculate next run time
+            target_time = now.replace(
+                hour=Config.GEETA_HOUR,
+                minute=Config.GEETA_MINUTE,
+                second=0,
+                microsecond=0
+            )
+            
+            if now >= target_time:
+                # Already passed today, schedule for tomorrow
+                target_time += timedelta(days=1)
+            
+            # Wait until target time
+            wait_seconds = (target_time - now).total_seconds()
+            logger.info(f"📿 Next Geeta quote in {wait_seconds/3600:.1f} hours")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            if self.running:
+                await self.send_daily_geeta(bot)
+    
+    async def start(self, bot):
+        """Start scheduler"""
+        self.running = True
+        self.task = asyncio.create_task(self.scheduler_loop(bot))
+        logger.info("📿 Geeta scheduler started")
+    
+    async def stop(self):
+        """Stop scheduler"""
+        self.running = False
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+
+geeta_scheduler = GeetaScheduler()
 
 # ============================================================================
 # ERROR HANDLER
@@ -1526,6 +1784,7 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("forget", forget_command))
     app.add_handler(CommandHandler("meme", meme_command))
     app.add_handler(CommandHandler("shayari", shayari_command))
+    app.add_handler(CommandHandler("geeta", geeta_command))
     
     # Group commands
     app.add_handler(CommandHandler("grouphelp", grouphelp_command))
@@ -1536,6 +1795,7 @@ def setup_handlers(app: Application):
     
     # Admin commands
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("users", users_command))  # NEW
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("adminhelp", adminhelp_command))
     
@@ -1562,14 +1822,22 @@ async def main_async():
     
     print("""
     ╔═══════════════════════════════════════════════════════╗
-    ║              🌸 NIYATI BOT v3.0 🌸                    ║
+    ║              🌸 NIYATI BOT v3.1 🌸                    ║
     ║           Teri Online Bestie is Starting!             ║
+    ║                                                       ║
+    ║   FIXES:                                              ║
+    ║   ✅ Supabase init (no proxy error)                   ║
+    ║   ✅ Group broadcast working                          ║
+    ║   ✅ HTML formatting preserved                        ║
+    ║   ✅ No "Forwarded" label                             ║
+    ║   ✅ Daily Geeta scheduler                            ║
     ╚═══════════════════════════════════════════════════════╝
     """)
     
-    logger.info("🚀 Starting Niyati Bot...")
+    logger.info("🚀 Starting Niyati Bot v3.1...")
     logger.info(f"Model: {Config.OPENAI_MODEL}")
     logger.info(f"Port: {Config.PORT}")
+    logger.info(f"Geeta Time: {Config.GEETA_HOUR}:{Config.GEETA_MINUTE:02d} IST")
     
     # Start health server
     await health_server.start()
@@ -1589,6 +1857,9 @@ async def main_async():
     await app.initialize()
     await app.start()
     
+    # Start Geeta scheduler
+    await geeta_scheduler.start(app.bot)
+    
     # Start polling
     logger.info("🎯 Bot is polling...")
     await app.updater.start_polling(
@@ -1603,6 +1874,7 @@ async def main_async():
     except asyncio.CancelledError:
         pass
     finally:
+        await geeta_scheduler.stop()
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
