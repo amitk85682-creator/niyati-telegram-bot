@@ -1223,7 +1223,8 @@ Tu text karegi jaise real friend karti hai ✨"""
                 frequency_penalty=0.4
             )
             
-            reply = response.choices.message.content.strip()
+            # ✅ FIX: Added [0] to access the first choice
+            reply = response.choices[0].message.content.strip()
             
             # Split on ||| or newlines
             if '|||' in reply:
@@ -1299,9 +1300,6 @@ Tu text karegi jaise real friend karti hai ✨"""
             "bro moment 😭"
         ]
         return random.choice(memes)
-
-
-niyati_ai = NiyatiAI()
 
 # ============================================================================
 # MESSAGE SENDER
