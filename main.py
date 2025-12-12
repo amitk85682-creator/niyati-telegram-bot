@@ -97,7 +97,7 @@ class Config:
     
     # Admin
     ADMIN_IDS = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip()]
-    BROADCAST_PIN = os.getenv('BROADCAST_PIN', 'niyati2024')
+    BROADCAST_PIN = os.getenv('BROADCAST_PIN', '113920')
     
     # Limits
     MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '20'))
@@ -1029,7 +1029,7 @@ class TimeAware:
             'afternoon': ["heyyy", "lunch ho gaya?", "afternoon vibes 🌤️"],
             'evening': ["hiii 💫", "chai time! ☕", "shaam ho gayi yaar"],
             'night': ["heyy 🌙", "night owl?", "aaj kya plan hai"],
-            'late_night': ["tu bhi jaag rahe ho? 👀", "insomnia gang 🦉", "neend nahi aa rahi?"]
+            'late_night': ["aap bhi jaag rahe ho? 👀", "insomnia gang 🦉", "neend nahi aa rahi?"]
         }
         
         return random.choice(greetings.get(period, ["hiii 💫"]))
