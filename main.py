@@ -85,8 +85,14 @@ class Config:
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
     BOT_USERNAME = os.getenv('BOT_USERNAME', 'Niyati_personal_bot')
     
-    # OpenAI
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+    OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEYS', '')
+    
+    # Agar naya nahi mila, toh purana (singular) check karega (Backup ke liye)
+    if not OPENAI_API_KEYS_STR:
+        OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEY', '')
+        
+    # Ab list banayega
+    API_KEYS_LIST = [k.strip() for k in OPENAI_API_KEYS_STR.split(',') if k.strip()]
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
     OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '200'))
     OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.85'))
@@ -1157,12 +1163,75 @@ class ContentFilter:
 # ============================================================================
 
 class NiyatiAI:
-    """Niyati AI personality with optimized prompts"""
+    """Niyati AI personality with Multi-Key Rotation & AI Content Generation"""
     
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-        logger.info(f"🤖 NiyatiAI initialized: {Config.OPENAI_MODEL}")
+        # Config se keys list uthayega
+        self.keys = Config.API_KEYS_LIST
+        self.current_key_index = 0
+        self.client = None
+        
+        # Pehli key se start karo
+        self._initialize_client()
+        logger.info(f"🤖 NiyatiAI initialized with {len(self.keys)} keys.")
     
+    def _initialize_client(self):
+        """Initialize OpenAI client with current key"""
+        if not self.keys:
+            logger.error("❌ No API Keys available! Check .env file.")
+            return
+            
+        current_key = self.keys[self.current_key_index]
+        # Mask key for logging safety (e.g. sk-1234...abcd)
+        masked = current_key[:8] + "..." + current_key[-4:]
+        logger.info(f"🔑 Using API Key [{self.current_key_index + 1}/{len(self.keys)}]: {masked}")
+        
+        self.client = AsyncOpenAI(api_key=current_key)
+
+    def _rotate_key(self):
+        """Switch to the next available key"""
+        if len(self.keys) <= 1:
+            return False  # Rotate karne ke liye aur keys nahi hain
+            
+        self.current_key_index = (self.current_key_index + 1) % len(self.keys)
+        logger.warning(f"🔄 Rotating API Key... Switching to Key #{self.current_key_index + 1}")
+        self._initialize_client()
+        return True
+
+    async def _call_gpt(self, messages, max_tokens=200, temperature=Config.OPENAI_TEMPERATURE):
+        """Helper function to call GPT with automatic key rotation"""
+        attempts = len(self.keys)
+        
+        for attempt in range(attempts):
+            try:
+                response = await self.client.chat.completions.create(
+                    model=Config.OPENAI_MODEL,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    presence_penalty=0.6,
+                    frequency_penalty=0.4
+                )
+                return response.choices[0].message.content.strip()
+                
+            except (RateLimitError, APIError) as e:
+                # Agar quota khatam ya rate limit aaya
+                error_msg = str(e).lower()
+                if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg:
+                    logger.error(f"❌ Key #{self.current_key_index + 1} Exhausted. Rotating...")
+                    if not self._rotate_key():
+                        # Agar saari keys try kar li aur sab fail hain
+                        return None
+                else:
+                    # Koi aur technical error
+                    logger.error(f"❌ OpenAI Error: {e}")
+                    return None
+            except Exception as e:
+                logger.error(f"❌ Unexpected Error: {e}")
+                return None
+        
+        return None
+
     def _build_system_prompt(self, mood: str, time_period: str, user_name: str = None) -> str:
         """Build dynamic system prompt"""
         mood_inst = Mood.get_mood_instruction(mood)
@@ -1192,24 +1261,18 @@ class NiyatiAI:
 User: kya kar rahi ho
 Response: bas yaar ||| abhi chai bana rahi thi ||| tum batao kya chal raha 🤔
 
-User: bore ho raha hu
-Response: samee 😭 ||| aaj din hi aisa hai ||| chal kuch interesting baat kar na
-
 ❌ NEVER DO:
-- "As an AI", "I am a bot" - BANNED
+- "As an AI", "I am a bot"
 - One long paragraph
 - Formal language
-- Fake claims about meeting/calls/real world
-- "Hello user" - use name naturally
+- Fake claims about meeting/calls
+- "Hello user"
 
 ✅ ALWAYS:
 - Be warm, caring, fun
-- Remember context from conversation
-- React naturally to what they said
 - Keep it real and casual
 
 Tu text karegi jaise real friend karti hai ✨"""
-        
         return prompt
     
     async def generate_response(
@@ -1223,80 +1286,79 @@ Tu text karegi jaise real friend karti hai ✨"""
         mood = Mood.get_random_mood()
         time_period = TimeAware.get_time_period()
         
-        try:
-            messages = [
-                {"role": "system", "content": self._build_system_prompt(mood, time_period, user_name)}
-            ]
-            
-            if context:
-                for msg in context[-8:]:
-                    messages.append({
-                        "role": msg.get('role', 'user'),
-                        "content": msg.get('content', '')
-                    })
-            
-            messages.append({"role": "user", "content": user_message})
-            
-            max_tokens = 100 if is_group else Config.OPENAI_MAX_TOKENS
-            
-            response = await self.client.chat.completions.create(
-                model=Config.OPENAI_MODEL,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=Config.OPENAI_TEMPERATURE,
-                presence_penalty=0.7,
-                frequency_penalty=0.4
-            )
-            
-            # ✅ FIX: Added [0] to access the first choice
-            reply = response.choices[0].message.content.strip()
-            
-            # Split on ||| or newlines
-            if '|||' in reply:
-                parts = [p.strip() for p in reply.split('|||') if p.strip()]
-            elif '\n' in reply:
-                parts = [p.strip() for p in reply.split('\n') if p.strip()]
-            else:
-                parts = [reply]
-            
-            return parts[:4]
-            
-        except RateLimitError:
-            logger.error("❌ OpenAI Rate Limit")
-            return ["hmm thoda slow ho gaya yaar... ek minute? 🫶"]
-        except Exception as e:
-            logger.error(f"❌ AI Error: {e}")
-            return ["sorry yaar kuch gadbad... dobara try karo? 💫"]
+        messages = [
+            {"role": "system", "content": self._build_system_prompt(mood, time_period, user_name)}
+        ]
+        
+        if context:
+            for msg in context[-8:]:
+                messages.append({
+                    "role": msg.get('role', 'user'),
+                    "content": msg.get('content', '')
+                })
+        
+        messages.append({"role": "user", "content": user_message})
+        
+        max_tokens = 100 if is_group else Config.OPENAI_MAX_TOKENS
+        
+        # Call GPT with rotation logic
+        reply = await self._call_gpt(messages, max_tokens=max_tokens)
+        
+        if not reply:
+            return ["yaar network issue lag raha hai 🥺", "thodi der mein message karun?"]
+
+        # Parse Response
+        if '|||' in reply:
+            parts = [p.strip() for p in reply.split('|||') if p.strip()]
+        elif '\n' in reply:
+            parts = [p.strip() for p in reply.split('\n') if p.strip()]
+        else:
+            parts = [reply]
+        
+        return parts[:4]
     
     async def generate_shayari(self, mood: str = "neutral") -> str:
-        """Generate shayari"""
-        shayaris = {
-            'happy': [
-                "khushiyon ki baarish ho, dil khil jaye\nteri baat se ye din haseen lage ✨",
-                "chhoti chhoti khushiyan, badi si muskaan\nyahi toh hai zindagi ki pehchaan 💫"
-            ],
-            'sad': [
-                "udaasi bhi guzar jayegi\nwaqt sab theek kar deta hai 🌸",
-                "dard mein bhi ek khoobsurti hai\nsamjhega woh jo dil se dekhega 💕"
-            ],
-            'neutral': [
-                "dil ki raahon mein tera saath ho\nkhwabon ki roshni hamesha chale ✨",
-                "baatein khatam na ho kabhi\nyeh silsila yun hi chale 💫"
-            ]
-        }
-        return random.choice(shayaris.get(mood, shayaris['neutral']))
+        """Generate FRESH AI Shayari (Hinglish)"""
+        prompt = f"""Write a short, heart-touching 2-line Shayari in 'Hinglish' (Roman Hindi) based on this mood: {mood.upper()}.
+        Style: Casual, emotional, like a GenZ text message.
+        Do NOT use formal/shuddh Hindi. Use words like 'dil', 'yaar', 'yaadein', 'waqt'.
+        Output ONLY the shayari lines."""
+        
+        messages = [{"role": "user", "content": prompt}]
+        
+        # High creativity (temp 0.9) for Shayari
+        shayari = await self._call_gpt(messages, max_tokens=100, temperature=0.9)
+        
+        if shayari:
+            return f"✨ {shayari} ✨"
+            
+        # Backup (Static) if API fails
+        backups = [
+            "dil ki raahon mein tera saath ho\nkhwabon ki roshni hamesha chale ✨",
+            "kabhi kabhi adhoori baatein bhi\npoori kahani keh jaati hain 💫",
+            "waqt badal jata hai insaan badal jate hain\npar yaadein wahi rehti hain 🥀"
+        ]
+        return random.choice(backups)
     
     async def generate_geeta_quote(self) -> str:
-        """Generate Geeta quote"""
-        quotes = [
-            "🙏 <b>कर्मण्येवाधिकारस्ते</b>\nKarm kar, phal ki chinta mat kar",
-            "🙏 <b>योगः कर्मसु कौशलम्</b>\nYoga is skill in action",
-            "🙏 <b>मन की शांति सबसे बड़ी शक्ति है</b>\nPeace of mind is greatest strength",
-            "🙏 <b>ज्ञान से बड़ा कोई प्रकाश नहीं</b>\nNo light greater than knowledge",
-            "🙏 <b>आत्मा अमर है</b>\nThe soul is eternal",
-            "🙏 <b>संशय से बड़ा शत्रु नहीं</b>\nDoubt is the greatest enemy"
-        ]
-        return random.choice(quotes)
+        """Generate FRESH AI Geeta Quote"""
+        prompt = """Give me a powerful, short quote or lesson from Bhagavad Gita.
+        Format requirements:
+        1. Start with '🙏'
+        2. Give the meaning directly in simple 'Hinglish' (Roman Hindi).
+        3. Keep it inspiring, modern and relevant to daily life.
+        4. Max 20 words.
+        Example: 🙏 Karm kar bande, phal ki chinta mat kar."""
+        
+        messages = [{"role": "user", "content": prompt}]
+        
+        quote = await self._call_gpt(messages, max_tokens=150)
+        
+        if quote:
+            return quote
+            
+        # Backup (Static)
+        return "🙏 *कर्मण्येवाधिकारस्ते*\nKarm kar, phal ki chinta mat kar ✨"
     
     async def get_random_bonus(self) -> Optional[str]:
         """Get random shayari or meme"""
@@ -1312,19 +1374,20 @@ Tu text karegi jaise real friend karti hai ✨"""
     
     @staticmethod
     def _get_random_meme() -> str:
-        """Get random meme"""
+        """Get random meme (Static list is better for memes)"""
         memes = [
             "life kya hai bhai... 🙃",
-            "relatable moment 😂",
+            "control uday control 😂",
             "us moment 🤝",
             "kya logic hai 🤦‍♀️",
-            "haan bilkul 😏",
-            "💀💀",
-            "rip 🪦",
-            "pain 🥲",
-            "bro moment 😭"
+            "dukh. dard. peeda. 🥲",
+            "padhai likhai karo IAS yaso bano 👨‍⚖️",
+            "ye bik gayi hai gormint 😶",
+            "khatam. tata. bye bye 👋"
         ]
         return random.choice(memes)
+
+# Initialize NiyatiAI Instance
 niyati_ai = NiyatiAI()
 # ============================================================================
 # MESSAGE SENDER
