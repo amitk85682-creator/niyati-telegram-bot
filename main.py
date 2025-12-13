@@ -85,14 +85,17 @@ class Config:
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
     BOT_USERNAME = os.getenv('BOT_USERNAME', 'Niyati_personal_bot')
     
+    # OpenAI (Multi-Key Support)
+    # Pehle naya variable check karega
     OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEYS', '')
     
-    # Agar naya nahi mila, toh purana (singular) check karega (Backup ke liye)
+    # Agar naya nahi mila, toh purana check karega
     if not OPENAI_API_KEYS_STR:
         OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEY', '')
         
-    # Ab list banayega
+    # List banayega
     API_KEYS_LIST = [k.strip() for k in OPENAI_API_KEYS_STR.split(',') if k.strip()]
+    
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
     OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '200'))
     OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.85'))
@@ -103,7 +106,7 @@ class Config:
     
     # Admin
     ADMIN_IDS = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip()]
-    BROADCAST_PIN = os.getenv('BROADCAST_PIN', '113920')
+    BROADCAST_PIN = os.getenv('BROADCAST_PIN', 'niyati2024')
     
     # Limits
     MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '20'))
@@ -143,8 +146,11 @@ class Config:
         errors = []
         if not cls.TELEGRAM_BOT_TOKEN:
             errors.append("TELEGRAM_BOT_TOKEN required")
-        if not cls.OPENAI_API_KEY:
-            errors.append("OPENAI_API_KEY required")
+        
+        # YAHAN FIX KIYA HAI: Ab ye API_KEYS_LIST check karega
+        if not cls.API_KEYS_LIST:
+            errors.append("OPENAI_API_KEYS required")
+            
         if not cls.SUPABASE_URL or not cls.SUPABASE_KEY:
             print("⚠️ Supabase not configured - using local storage only")
         if errors:
