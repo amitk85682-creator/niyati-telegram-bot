@@ -73,6 +73,17 @@ from telegram.error import (
 
 # OpenAI
 from openai import AsyncOpenAI, RateLimitError, APIError
+# Groq
+from groq import AsyncGroq
+# Gemini
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+# Local
+from config import Config
+from helpers import Mood, TimeAware
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # CONFIGURATION
@@ -99,6 +110,11 @@ class Config:
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
     OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '200'))
     OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.85'))
+    # Config class mein yeh add karo:
+    GROQ_API_KEYS_LIST = [...]  # Groq keys list
+    GEMINI_API_KEYS_LIST = [...]  # Gemini keys list
+    GROQ_MODEL = "llama-3.3-70b-versatile"
+    GEMINI_MODEL = "gemini-2.5-flash-preview-05-20"
     
     # Supabase (Cloud PostgreSQL)
     SUPABASE_URL = os.getenv('SUPABASE_URL', '')
@@ -1187,78 +1203,314 @@ class ContentFilter:
 # ============================================================================
 
 class NiyatiAI:
-    """Niyati AI personality with Multi-Key Rotation & AI Content Generation"""
+    """Niyati AI personality with Multi-Key Rotation & Multi-Provider Fallback"""
     
     def __init__(self):
-        # Config se keys list uthayega
-        self.keys = Config.API_KEYS_LIST
-        self.current_key_index = 0
-        self.client = None
+        # ═══════════════════════════════════════
+        # 🔑 OPENAI SETUP
+        # ═══════════════════════════════════════
+        self.openai_keys = Config.OPENAI_API_KEYS_LIST or []
+        self.openai_key_index = 0
+        self.openai_client: Optional[AsyncOpenAI] = None
+        self.openai_exhausted = False
         
-        # Pehli key se start karo
-        self._initialize_client()
-        logger.info(f"🤖 NiyatiAI initialized with {len(self.keys)} keys.")
+        # ═══════════════════════════════════════
+        # 🔑 GROQ SETUP
+        # ═══════════════════════════════════════
+        self.groq_keys = Config.GROQ_API_KEYS_LIST or []
+        self.groq_key_index = 0
+        self.groq_client: Optional[AsyncGroq] = None
+        self.groq_exhausted = False
+        
+        # ═══════════════════════════════════════
+        # 🔑 GEMINI SETUP
+        # ═══════════════════════════════════════
+        self.gemini_keys = Config.GEMINI_API_KEYS_LIST or []
+        self.gemini_key_index = 0
+        self.gemini_model = None
+        self.gemini_exhausted = False
+        
+        # Current active provider
+        self.current_provider = "openai"  # openai, groq, gemini
+        
+        # Initialize all clients
+        self._init_all_clients()
+        logger.info(f"🤖 NiyatiAI initialized | OpenAI: {len(self.openai_keys)} keys | Groq: {len(self.groq_keys)} keys | Gemini: {len(self.gemini_keys)} keys")
     
-    def _initialize_client(self):
-        """Initialize OpenAI client with current key"""
-        if not self.keys:
-            logger.error("❌ No API Keys available! Check .env file.")
+    # ═══════════════════════════════════════════════════════════
+    # 🔧 INITIALIZATION
+    # ═══════════════════════════════════════════════════════════
+    
+    def _init_all_clients(self):
+        """Initialize all AI clients"""
+        self._init_openai()
+        self._init_groq()
+        self._init_gemini()
+    
+    def _init_openai(self):
+        """Initialize OpenAI client"""
+        if not self.openai_keys:
+            self.openai_exhausted = True
             return
-            
-        current_key = self.keys[self.current_key_index]
-        # Mask key for logging safety (e.g. sk-1234...abcd)
-        masked = current_key[:8] + "..." + current_key[-4:]
-        logger.info(f"🔑 Using API Key [{self.current_key_index + 1}/{len(self.keys)}]: {masked}")
+        key = self.openai_keys[self.openai_key_index]
+        self.openai_client = AsyncOpenAI(api_key=key)
+        logger.info(f"🔑 OpenAI Key [{self.openai_key_index + 1}/{len(self.openai_keys)}]: {key[:8]}...{key[-4:]}")
+    
+    def _init_groq(self):
+        """Initialize Groq client"""
+        if not self.groq_keys:
+            self.groq_exhausted = True
+            return
+        key = self.groq_keys[self.groq_key_index]
+        self.groq_client = AsyncGroq(api_key=key)
+        logger.info(f"🔑 Groq Key [{self.groq_key_index + 1}/{len(self.groq_keys)}]: {key[:8]}...{key[-4:]}")
+    
+    def _init_gemini(self):
+        """Initialize Gemini client"""
+        if not self.gemini_keys:
+            self.gemini_exhausted = True
+            return
+        key = self.gemini_keys[self.gemini_key_index]
+        genai.configure(api_key=key)
+        self.gemini_model = genai.GenerativeModel(
+            model_name=Config.GEMINI_MODEL,
+            generation_config={
+                "temperature": Config.OPENAI_TEMPERATURE,
+                "max_output_tokens": Config.OPENAI_MAX_TOKENS,
+            },
+            safety_settings={
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            }
+        )
+        logger.info(f"🔑 Gemini Key [{self.gemini_key_index + 1}/{len(self.gemini_keys)}]: {key[:8]}...{key[-4:]}")
+    
+    # ═══════════════════════════════════════════════════════════
+    # 🔄 KEY ROTATION
+    # ═══════════════════════════════════════════════════════════
+    
+    def _rotate_openai_key(self) -> bool:
+        """Rotate OpenAI key. Returns False if all exhausted."""
+        if len(self.openai_keys) <= 1:
+            self.openai_exhausted = True
+            return False
         
-        self.client = AsyncOpenAI(api_key=current_key)
-
-    def _rotate_key(self):
-        """Switch to the next available key"""
-        if len(self.keys) <= 1:
-            return False  # Rotate karne ke liye aur keys nahi hain
-            
-        self.current_key_index = (self.current_key_index + 1) % len(self.keys)
-        logger.warning(f"🔄 Rotating API Key... Switching to Key #{self.current_key_index + 1}")
-        self._initialize_client()
+        self.openai_key_index = (self.openai_key_index + 1) % len(self.openai_keys)
+        if self.openai_key_index == 0:
+            self.openai_exhausted = True
+            logger.warning("🔴 All OpenAI keys exhausted!")
+            return False
+        
+        logger.warning(f"🔄 Rotating OpenAI → Key #{self.openai_key_index + 1}")
+        self._init_openai()
         return True
-
-    async def _call_gpt(self, messages, max_tokens=200, temperature=Config.OPENAI_TEMPERATURE):
-        """Helper function to call GPT with automatic key rotation and delays"""
-        # Hum total keys se 2 baar zyada try karenge (Retry logic)
-        total_attempts = len(self.keys) + 1
+    
+    def _rotate_groq_key(self) -> bool:
+        """Rotate Groq key. Returns False if all exhausted."""
+        if len(self.groq_keys) <= 1:
+            self.groq_exhausted = True
+            return False
         
-        for attempt in range(total_attempts):
-            try:
-                response = await self.client.chat.completions.create(
-                    model=Config.OPENAI_MODEL,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    presence_penalty=0.6,
-                    frequency_penalty=0.4
-                )
-                return response.choices[0].message.content.strip()
-                
-            except (RateLimitError, APIError) as e:
-                # Agar quota khatam ya rate limit aaya
-                error_msg = str(e).lower()
-                if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg:
-                    logger.warning(f"⚠️ Key #{self.current_key_index + 1} Busy/Limit. Waiting 1s before rotating...")
-                    
-                    # 1 Second ka wait (Server ko saans lene do)
-                    await asyncio.sleep(1)
-                    
-                    if not self._rotate_key():
-                        return None
-                else:
-                    logger.error(f"❌ OpenAI Error: {e}")
-                    return None
-            except Exception as e:
-                logger.error(f"❌ Unexpected Error: {e}")
-                return None
+        self.groq_key_index = (self.groq_key_index + 1) % len(self.groq_keys)
+        if self.groq_key_index == 0:
+            self.groq_exhausted = True
+            logger.warning("🔴 All Groq keys exhausted!")
+            return False
+        
+        logger.warning(f"🔄 Rotating Groq → Key #{self.groq_key_index + 1}")
+        self._init_groq()
+        return True
+    
+    def _rotate_gemini_key(self) -> bool:
+        """Rotate Gemini key. Returns False if all exhausted."""
+        if len(self.gemini_keys) <= 1:
+            self.gemini_exhausted = True
+            return False
+        
+        self.gemini_key_index = (self.gemini_key_index + 1) % len(self.gemini_keys)
+        if self.gemini_key_index == 0:
+            self.gemini_exhausted = True
+            logger.warning("🔴 All Gemini keys exhausted!")
+            return False
+        
+        logger.warning(f"🔄 Rotating Gemini → Key #{self.gemini_key_index + 1}")
+        self._init_gemini()
+        return True
+    
+    def _switch_provider(self) -> bool:
+        """Switch to next provider. Returns False if all exhausted."""
+        if self.current_provider == "openai":
+            if not self.groq_exhausted and self.groq_keys:
+                self.current_provider = "groq"
+                logger.warning("🔀 Switching: OpenAI → GROQ")
+                return True
+            elif not self.gemini_exhausted and self.gemini_keys:
+                self.current_provider = "gemini"
+                logger.warning("🔀 Switching: OpenAI → GEMINI")
+                return True
+        
+        elif self.current_provider == "groq":
+            if not self.gemini_exhausted and self.gemini_keys:
+                self.current_provider = "gemini"
+                logger.warning("🔀 Switching: GROQ → GEMINI")
+                return True
+        
+        elif self.current_provider == "gemini":
+            # Reset and try OpenAI again (cooldown might be over)
+            if self.openai_keys:
+                self.openai_exhausted = False
+                self.openai_key_index = 0
+                self._init_openai()
+                self.current_provider = "openai"
+                logger.warning("🔀 Switching: GEMINI → OPENAI (reset)")
+                return True
+        
+        logger.error("🔴 All providers exhausted!")
+        return False
+    
+    # ═══════════════════════════════════════════════════════════
+    # 🧠 API CALLS
+    # ═══════════════════════════════════════════════════════════
+    
+    async def _call_openai(self, messages: List[Dict], max_tokens: int, temperature: float) -> Tuple[Optional[str], bool]:
+        """Call OpenAI. Returns (response, should_fallback)"""
+        if self.openai_exhausted or not self.openai_client:
+            return None, True
+        
+        try:
+            response = await self.openai_client.chat.completions.create(
+                model=Config.OPENAI_MODEL,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                presence_penalty=0.6,
+                frequency_penalty=0.4
+            )
+            return response.choices[0].message.content.strip(), False
+        
+        except (RateLimitError, APIError) as e:
+            error_msg = str(e).lower()
+            if any(x in error_msg for x in ["rate limit", "quota", "429", "insufficient"]):
+                logger.warning(f"⚠️ OpenAI Limit: {e}")
+                await asyncio.sleep(0.5)
+                if self._rotate_openai_key():
+                    return None, False  # Retry with new key
+                return None, True  # Fallback
+            logger.error(f"❌ OpenAI Error: {e}")
+            return None, True
+        
+        except Exception as e:
+            logger.error(f"❌ OpenAI Error: {e}")
+            return None, True
+    
+    async def _call_groq(self, messages: List[Dict], max_tokens: int, temperature: float) -> Tuple[Optional[str], bool]:
+        """Call Groq. Returns (response, should_fallback)"""
+        if self.groq_exhausted or not self.groq_client:
+            return None, True
+        
+        try:
+            response = await self.groq_client.chat.completions.create(
+                model=Config.GROQ_MODEL,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            return response.choices[0].message.content.strip(), False
+        
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(x in error_msg for x in ["rate", "limit", "quota", "429"]):
+                logger.warning(f"⚠️ Groq Limit: {e}")
+                await asyncio.sleep(0.5)
+                if self._rotate_groq_key():
+                    return None, False
+                return None, True
+            logger.error(f"❌ Groq Error: {e}")
+            return None, True
+    
+    async def _call_gemini(self, messages: List[Dict], max_tokens: int, temperature: float) -> Tuple[Optional[str], bool]:
+        """Call Gemini. Returns (response, should_fallback)"""
+        if self.gemini_exhausted or not self.gemini_model:
+            return None, True
+        
+        try:
+            # Convert to Gemini format
+            prompt = self._messages_to_gemini(messages)
+            
+            # Update config
+            self.gemini_model._generation_config["max_output_tokens"] = max_tokens
+            self.gemini_model._generation_config["temperature"] = temperature
+            
+            response = await asyncio.to_thread(
+                self.gemini_model.generate_content, prompt
+            )
+            
+            if response.text:
+                return response.text.strip(), False
+            return None, True
+        
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(x in error_msg for x in ["quota", "rate", "limit", "429", "resource"]):
+                logger.warning(f"⚠️ Gemini Limit: {e}")
+                if self._rotate_gemini_key():
+                    return None, False
+                return None, True
+            logger.error(f"❌ Gemini Error: {e}")
+            return None, True
+    
+    def _messages_to_gemini(self, messages: List[Dict]) -> str:
+        """Convert OpenAI format to Gemini prompt"""
+        parts = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                parts.append(f"[System Instructions]\n{content}\n")
+            elif role == "assistant":
+                parts.append(f"Niyati: {content}\n")
+            else:
+                parts.append(f"User: {content}\n")
+        parts.append("Niyati:")
+        return "\n".join(parts)
+    
+    # ═══════════════════════════════════════════════════════════
+    # 🎯 MAIN CALL METHOD
+    # ═══════════════════════════════════════════════════════════
+    
+    async def _call_ai(self, messages: List[Dict], max_tokens: int = 200, temperature: float = None) -> Optional[str]:
+        """Main AI call with automatic fallback"""
+        if temperature is None:
+            temperature = Config.OPENAI_TEMPERATURE
+        
+        max_attempts = 10
+        for _ in range(max_attempts):
+            result, should_fallback = None, False
+            
+            if self.current_provider == "openai":
+                result, should_fallback = await self._call_openai(messages, max_tokens, temperature)
+            elif self.current_provider == "groq":
+                result, should_fallback = await self._call_groq(messages, max_tokens, temperature)
+            elif self.current_provider == "gemini":
+                result, should_fallback = await self._call_gemini(messages, max_tokens, temperature)
+            
+            if result:
+                return result
+            
+            if should_fallback:
+                if not self._switch_provider():
+                    break
+            
+            await asyncio.sleep(0.3)
         
         return None
-
+    
+    # ═══════════════════════════════════════════════════════════
+    # 💬 SYSTEM PROMPT
+    # ═══════════════════════════════════════════════════════════
+    
     def _build_system_prompt(self, mood: str, time_period: str, user_name: str = None) -> str:
         """Build dynamic system prompt"""
         mood_inst = Mood.get_mood_instruction(mood)
@@ -1302,6 +1554,10 @@ Response: bas yaar ||| abhi chai bana rahi thi ||| tum batao kya chal raha 🤔
 Tu text karegi jaise real friend karti hai ✨"""
         return prompt
     
+    # ═══════════════════════════════════════════════════════════
+    # 📨 GENERATE RESPONSE
+    # ═══════════════════════════════════════════════════════════
+    
     async def generate_response(
         self,
         user_message: str,
@@ -1328,13 +1584,12 @@ Tu text karegi jaise real friend karti hai ✨"""
         
         max_tokens = 100 if is_group else Config.OPENAI_MAX_TOKENS
         
-        # Call GPT with rotation logic
-        reply = await self._call_gpt(messages, max_tokens=max_tokens)
+        reply = await self._call_ai(messages, max_tokens=max_tokens)
         
         if not reply:
             return ["yaar network issue lag raha hai 🥺", "thodi der mein message karun?"]
-
-        # Parse Response
+        
+        # Parse response
         if '|||' in reply:
             parts = [p.strip() for p in reply.split('|||') if p.strip()]
         elif '\n' in reply:
@@ -1344,22 +1599,23 @@ Tu text karegi jaise real friend karti hai ✨"""
         
         return parts[:4]
     
+    # ═══════════════════════════════════════════════════════════
+    # 📝 SHAYARI & GEETA QUOTE
+    # ═══════════════════════════════════════════════════════════
+    
     async def generate_shayari(self, mood: str = "neutral") -> str:
-        """Generate FRESH AI Shayari (Hinglish)"""
+        """Generate AI Shayari"""
         prompt = f"""Write a short, heart-touching 2-line Shayari in 'Hinglish' (Roman Hindi) based on this mood: {mood.upper()}.
         Style: Casual, emotional, like a GenZ text message.
         Do NOT use formal/shuddh Hindi. Use words like 'dil', 'yaar', 'yaadein', 'waqt'.
         Output ONLY the shayari lines."""
         
         messages = [{"role": "user", "content": prompt}]
-        
-        # High creativity (temp 0.9) for Shayari
-        shayari = await self._call_gpt(messages, max_tokens=100, temperature=0.9)
+        shayari = await self._call_ai(messages, max_tokens=100, temperature=0.9)
         
         if shayari:
             return f"✨ {shayari} ✨"
-            
-        # Backup (Static) if API fails
+        
         backups = [
             "dil ki raahon mein tera saath ho\nkhwabon ki roshni hamesha chale ✨",
             "kabhi kabhi adhoori baatein bhi\npoori kahani keh jaati hain 💫",
@@ -1368,23 +1624,17 @@ Tu text karegi jaise real friend karti hai ✨"""
         return random.choice(backups)
     
     async def generate_geeta_quote(self) -> str:
-        """Generate FRESH AI Geeta Quote"""
+        """Generate AI Geeta Quote"""
         prompt = """Give me a powerful, short quote or lesson from Bhagavad Gita.
-        Format requirements:
-        1. Start with '🙏'
-        2. Give the meaning directly in simple 'Hinglish' (Roman Hindi).
-        3. Keep it inspiring, modern and relevant to daily life.
-        4. Max 20 words.
+        Format: Start with '🙏', give meaning in simple 'Hinglish' (Roman Hindi).
+        Keep it inspiring, modern and relevant. Max 20 words.
         Example: 🙏 Karm kar bande, phal ki chinta mat kar."""
         
         messages = [{"role": "user", "content": prompt}]
-        
-        quote = await self._call_gpt(messages, max_tokens=150)
+        quote = await self._call_ai(messages, max_tokens=150)
         
         if quote:
             return quote
-            
-        # Backup (Static)
         return "🙏 *कर्मण्येवाधिकारस्ते*\nKarm kar, phal ki chinta mat kar ✨"
     
     async def get_random_bonus(self) -> Optional[str]:
@@ -1396,25 +1646,20 @@ Tu text karegi jaise real friend karti hai ✨"""
             return await self.generate_shayari(mood)
         elif rand < Config.RANDOM_SHAYARI_CHANCE + Config.RANDOM_MEME_CHANCE:
             return self._get_random_meme()
-        
         return None
     
     @staticmethod
     def _get_random_meme() -> str:
-        """Get random meme (Static list is better for memes)"""
+        """Get random meme"""
         memes = [
-            "life kya hai bhai... 🙃",
-            "control uday control 😂",
-            "us moment 🤝",
-            "kya logic hai 🤦‍♀️",
-            "dukh. dard. peeda. 🥲",
-            "padhai likhai karo IAS yaso bano 👨‍⚖️",
-            "ye bik gayi hai gormint 😶",
-            "khatam. tata. bye bye 👋"
+            "life kya hai bhai... 🙃", "control uday control 😂", "us moment 🤝",
+            "kya logic hai 🤦‍♀️", "dukh. dard. peeda. 🥲", "padhai likhai karo IAS yaso bano 👨‍⚖️",
+            "ye bik gayi hai gormint 😶", "khatam. tata. bye bye 👋"
         ]
         return random.choice(memes)
 
-# Initialize NiyatiAI Instance
+
+# Initialize
 niyati_ai = NiyatiAI()
 # ============================================================================
 # MESSAGE SENDER
