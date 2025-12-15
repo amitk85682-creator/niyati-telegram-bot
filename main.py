@@ -2375,6 +2375,75 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"❌ Error: {context.error}", exc_info=True)
 
 # ============================================================================
+# SCHEDULED JOBS (MISSING FUNCTIONS)
+# ============================================================================
+
+async def send_daily_geeta(context: ContextTypes.DEFAULT_TYPE):
+    """Send daily Geeta quote to all groups"""
+    groups = await db.get_all_groups()
+    quote = await niyati_ai.generate_geeta_quote()
+    
+    sent = 0
+    for group in groups:
+        chat_id = group.get('chat_id')
+        settings = group.get('settings', {})
+        if isinstance(settings, str):
+            try: settings = json.loads(settings)
+            except: settings = {}
+        
+        if not settings.get('geeta_enabled', True):
+            continue
+        
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=quote, parse_mode=ParseMode.HTML)
+            sent += 1
+            await asyncio.sleep(0.1)
+        except Exception:
+            pass # Ignore send errors
+            
+    logger.info(f"📿 Daily Geeta sent to {sent} groups")
+
+async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
+    """Periodic cleanup of rate limiter and database caches"""
+    rate_limiter.cleanup_cooldowns()
+    await db.cleanup_local_cache()
+    fsub_manager.cleanup_cache() # New FSub cache cleanup
+    logger.info("🧹 Periodic cleanup completed")
+
+# ============================================================================
+# JOB SETUP (UPDATED)
+# ============================================================================
+
+async def setup_jobs(app: Application):
+    """Setup scheduled jobs"""
+    job_queue = app.job_queue
+    if job_queue is None:
+        logger.warning("⚠️ JobQueue not available")
+        return
+
+    # 1. Cleanup Job (Every Hour)
+    job_queue.run_repeating(
+        cleanup_job,
+        interval=Config.CACHE_CLEANUP_INTERVAL,
+        first=60,
+        name='cleanup'
+    )
+
+    # 2. Daily Geeta Quote (At 6:00 AM IST)
+    ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
+    target_time = datetime.now(ist).replace(hour=6, minute=0, second=0, microsecond=0)
+    if target_time.time() < datetime.now(ist).time():
+        target_time += timedelta(days=1)
+        
+    job_queue.run_daily(
+        send_daily_geeta,
+        time=target_time.timetz(),
+        name='daily_geeta'
+    )
+    
+    logger.info("✅ Scheduled jobs setup")
+
+# ============================================================================
 # BOT SETUP
 # ============================================================================
 
@@ -2414,13 +2483,6 @@ def setup_handlers(app: Application):
     
     app.add_error_handler(error_handler)
     logger.info("✅ All handlers registered")
-
-async def setup_jobs(app: Application):
-    job_queue = app.job_queue
-    if job_queue:
-        # Cleanup Job
-        job_queue.run_repeating(cleanup_job, interval=Config.CACHE_CLEANUP_INTERVAL, first=60)
-        # Daily Geeta (Add your logic here)
 
 # ============================================================================
 # MAIN
