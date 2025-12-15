@@ -1916,14 +1916,14 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all users"""
+    """Broadcast message to all users AND groups"""
     if not await admin_check(update):
         await update.message.reply_text("Sry baby, only admins can do this 😘💅")
         return
     
     args = context.args
     
-    # 🔴 FIX: args ki jagah args[0] check karna hai
+    # PIN Check
     if not args or args[0] != Config.BROADCAST_PIN:
         await update.message.reply_html(
             "🔐 <b>Broadcast Command</b>\n\n"
@@ -1935,7 +1935,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Message nikalne ke liye PIN (index 0) ko chod kar baaki sab join karo
+    # Message Logic
     message_text = ' '.join(args[1:]) if len(args) > 1 else None
     reply_msg = update.message.reply_to_message
     
@@ -1943,88 +1943,70 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Message ya reply do broadcast ke liye!")
         return
     
-    await update.message.reply_text("📢 Broadcasting... please wait")
+    await update.message.reply_text("📢 Broadcasting to Users & Groups... please wait")
     
+    # --- STEP 1: BROADCAST TO USERS ---
     users = await db.get_all_users()
-    success = 0
-    failed = 0
+    user_success = 0
+    user_failed = 0
     
     for user in users:
         user_id = user.get('user_id')
+        if not user_id: continue
         
-        if not user_id or user_id <= 0:
-            failed += 1
-            continue
-        
-        retry_count = 0
         sent = False
-        
-        while retry_count < Config.BROADCAST_RETRY_ATTEMPTS and not sent:
-            try:
-                if reply_msg:
-                    if reply_msg.text:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=reply_msg.text,
-                            parse_mode=ParseMode.HTML
-                        )
-                    else:
-                        await context.bot.forward_message(
-                            chat_id=user_id,
-                            from_chat_id=update.effective_chat.id,
-                            message_id=reply_msg.message_id
-                        )
+        try:
+            if reply_msg:
+                if reply_msg.text:
+                    await context.bot.send_message(chat_id=user_id, text=reply_msg.text, parse_mode=ParseMode.HTML)
                 else:
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=message_text,
-                        parse_mode=ParseMode.HTML
-                    )
-                
-                success += 1
-                sent = True
-                await asyncio.sleep(Config.BROADCAST_RATE_LIMIT)
-                
-            except BadRequest as e:
-                logger.debug(f"BadRequest {user_id}: {e}")
-                failed += 1
-                sent = True
-                break
-                
-            except Forbidden:
-                logger.debug(f"Forbidden {user_id}")
-                failed += 1
-                sent = True
-                break
-                
-            except (NetworkError, TimedOut, RetryAfter) as e:
-                retry_count += 1
-                if retry_count < Config.BROADCAST_RETRY_ATTEMPTS:
-                    wait_time = min(2 ** retry_count, 10)
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.debug(f"Failed after retries {user_id}: {e}")
-                    failed += 1
-                    sent = True
-                    
-            except Exception as e:
-                logger.debug(f"Broadcast error {user_id}: {e}")
-                failed += 1
-                sent = True
+                    await context.bot.forward_message(chat_id=user_id, from_chat_id=update.effective_chat.id, message_id=reply_msg.message_id)
+            else:
+                await context.bot.send_message(chat_id=user_id, text=message_text, parse_mode=ParseMode.HTML)
+            
+            user_success += 1
+            sent = True
+            await asyncio.sleep(Config.BROADCAST_RATE_LIMIT) # Avoid flood limits
+            
+        except Exception as e:
+            user_failed += 1
+            # logger.debug(f"User broadcast failed: {e}")
+
+    # --- STEP 2: BROADCAST TO GROUPS ---
+    groups = await db.get_all_groups()
+    group_success = 0
+    group_failed = 0
     
+    for group in groups:
+        chat_id = group.get('chat_id')
+        if not chat_id: continue
+        
+        try:
+            if reply_msg:
+                if reply_msg.text:
+                    await context.bot.send_message(chat_id=chat_id, text=reply_msg.text, parse_mode=ParseMode.HTML)
+                else:
+                    await context.bot.forward_message(chat_id=chat_id, from_chat_id=update.effective_chat.id, message_id=reply_msg.message_id)
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=message_text, parse_mode=ParseMode.HTML)
+            
+            group_success += 1
+            await asyncio.sleep(Config.BROADCAST_RATE_LIMIT) # Avoid flood limits
+            
+        except Exception as e:
+            group_failed += 1
+            # logger.debug(f"Group broadcast failed: {e}")
+
+    # --- FINAL REPORT ---
     report = (
         f"✅ <b>Broadcast Complete!</b>\n\n"
-        f"<b>Success:</b> {success}\n"
-        f"<b>Failed:</b> {failed}\n"
-        f"<b>Total Users:</b> {len(users)}"
+        f"👤 <b>Users:</b> {user_success} sent, {user_failed} failed\n"
+        f"📢 <b>Groups:</b> {group_success} sent, {group_failed} failed\n"
+        f"📊 <b>Total Reach:</b> {user_success + group_success}"
     )
     
-    if failed > 0:
-        report += f"\n\n⚠️ <i>Failed users likely blocked or inactive</i>"
-    
     await update.message.reply_html(report)
-    logger.info(f"📢 Broadcast complete: {success} success, {failed} failed")
-
+    logger.info(f"📢 Broadcast: Users({user_success}/{len(users)}), Groups({group_success}/{len(groups)})")
 
 async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show admin commands"""
