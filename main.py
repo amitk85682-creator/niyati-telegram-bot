@@ -2120,9 +2120,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not user_message or user_message.startswith('/'): return
 
-    # --- 🔒 NEW FSUB LOGIC START ---
+    # 👇👇 YEH LINE ADD KARNI THI (Missing Definition) 👇👇
     is_group = chat.type in ['group', 'supergroup']
-    
+    is_private = chat.type == 'private'
+    # 👆👆 AB CODE KO PATA HAI KI PRIVATE HAI YA GROUP 👆👆
+
+    # --- 🔒 NEW FSUB LOGIC START ---
     if is_group:
         # 1. Database se channels ki list nikalo
         targets = await db.get_group_fsub_targets(chat.id)
@@ -2135,6 +2138,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 t_id = target.get('target_chat_id')
                 t_link = target.get('target_link')
                 
+                if not t_id: continue
+
                 try:
                     member = await context.bot.get_chat_member(chat_id=t_id, user_id=user.id)
                     if member.status in ['left', 'kicked', 'restricted']:
@@ -2167,52 +2172,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return # Code yahi rook do
     # --- 🔒 NEW FSUB LOGIC END ---
 
- 
-    # Rate limiting
-    allowed, reason = rate_limiter.check(user.id)
-    if not allowed:
-        if reason == "cooldown":
+    # --- Rate Limiting ---
+    allowed, _ = rate_limiter.check(user.id)
+    if not allowed: return
+
+    # --- Anti-Spam Check (Optional) ---
+    if is_group:
+        spam_keywords = ['cp', 'child porn', 'videos price', 'job', 'profit', 'investment', 'crypto']
+        if any(word in user_message.lower() for word in spam_keywords):
             return
-        elif reason == "minute":
-            await message.reply_text("arre thoda slow 😅 ek minute ruk")
-        else:
-            await message.reply_text("aaj bahut baat ho gayi yaar 💫 kal milte hain!")
-        return
-    
-    # Safety checks
-    if ContentFilter.contains_sensitive(user_message):
-        await message.reply_text("hey! sensitive info mat share karo yaar 💕")
-        return
-    
-    if ContentFilter.detect_distress(user_message):
-        await message.reply_html(
-            "yaar... 🥺\n"
-            "mujhe tension ho rahi hai tere liye\n\n"
-            "<b>Please talk to someone:</b>\n"
-            "📞 iCall: 9152987821\n"
-            "📞 Vandrevala: 1860-2662-345"
-        )
-        return
-    
-    # GROUP HANDLING
+
+    # --- Group Handling ---
     if is_group:
         db.add_group_message(chat.id, user.first_name, user_message)
         
         should_respond = False
         bot_username = f"@{Config.BOT_USERNAME}"
         
-        # Check if mentioned
         if bot_username.lower() in user_message.lower():
             should_respond = True
             user_message = user_message.replace(bot_username, '').strip()
             user_message = re.sub(rf'@{Config.BOT_USERNAME}', '', user_message, flags=re.IGNORECASE).strip()
         
-        # Check if reply to bot
         if message.reply_to_message and message.reply_to_message.from_user:
             if message.reply_to_message.from_user.username == Config.BOT_USERNAME:
                 should_respond = True
         
-        # Random response
         if not should_respond:
             if random.random() < Config.GROUP_RESPONSE_RATE:
                 should_respond = True
@@ -2220,26 +2205,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         
         await db.get_or_create_group(chat.id, chat.title)
-        health_server.stats['groups'] = await db.get_group_count()
         await db.log_user_activity(user.id, f"group_message:{chat.id}")
     
-    # PRIVATE HANDLING
+    # --- Private Handling ---
     if is_private:
         await db.get_or_create_user(user.id, user.first_name, user.username)
-        health_server.stats['users'] = await db.get_user_count()
         await db.log_user_activity(user.id, "private_message")
     
-    # Typing indicator
+    # --- Response Generation ---
     try:
         await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
     except:
         pass
     
     try:
-        # Get context
         context_msgs = await db.get_user_context(user.id) if is_private else []
         
-        # Generate response
         responses = await niyati_ai.generate_response(
             user_message=user_message,
             context=context_msgs,
@@ -2247,32 +2228,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_group=is_group
         )
         
-        # Random bonus (private only)
-        if is_private:
+        # Random Bonus (Private Only)
+        if is_private and random.random() < 0.1:
             prefs = await db.get_user_preferences(user.id)
+            bonus = await niyati_ai.get_random_bonus()
             
-            if random.random() < 0.1:
-                bonus = await niyati_ai.get_random_bonus()
+            if bonus:
+                if "shayari" in str(bonus).lower() and not prefs.get('shayari_enabled', True):
+                    bonus = None
+                if bonus and "meme" in str(bonus).lower() and not prefs.get('meme_enabled', True):
+                    bonus = None
                 if bonus:
-                    if "shayari" in str(bonus).lower() and not prefs.get('shayari_enabled', True):
-                        bonus = None
-                    if bonus and "meme" in str(bonus).lower() and not prefs.get('meme_enabled', True):
-                        bonus = None
-                    
-                    if bonus:
-                        responses.append(bonus)
+                    responses.append(bonus)
         
-        # Sometimes mention user
+        # Mention Logic
         if is_private and random.random() < 0.2:
             mention = StylishFonts.mention(user.first_name, user.id)
             if responses:
                 idx = random.randint(0, len(responses) - 1)
-                if random.random() < 0.5:
-                    responses[idx] = f"{mention} {responses[idx]}"
-                else:
-                    responses[idx] = f"{responses[idx]}, {mention}"
+                responses[idx] = f"{mention} {responses[idx]}" if random.random() < 0.5 else f"{responses[idx]}, {mention}"
         
-        # Send responses
+        # Send
         await send_multi_messages(
             context.bot,
             chat.id,
@@ -2281,13 +2257,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         
-        # Save to memory (private only)
+        # Save Memory (Private)
         if is_private:
             await db.save_message(user.id, 'user', user_message)
             await db.save_message(user.id, 'assistant', ' '.join(responses))
-        
+            
         health_server.stats['messages'] += 1
-        logger.info(f"✅ Responded with {len(responses)} messages")
         
     except Exception as e:
         logger.error(f"❌ Message handling error: {e}", exc_info=True)
