@@ -1922,7 +1922,9 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     args = context.args
-    if not args or args != Config.BROADCAST_PIN:
+    
+    # 🔴 FIX: args ki jagah args[0] check karna hai
+    if not args or args[0] != Config.BROADCAST_PIN:
         await update.message.reply_html(
             "🔐 <b>Broadcast Command</b>\n\n"
             "Usage: /broadcast [PIN] [message]\n"
@@ -1933,6 +1935,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Message nikalne ke liye PIN (index 0) ko chod kar baaki sab join karo
     message_text = ' '.join(args[1:]) if len(args) > 1 else None
     reply_msg = update.message.reply_to_message
     
