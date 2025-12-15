@@ -78,11 +78,6 @@ from groq import AsyncGroq
 # Gemini
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-# Local
-from config import Config
-from helpers import Mood, TimeAware
-
 logger = logging.getLogger(__name__)
 
 # ============================================================================
