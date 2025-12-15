@@ -1205,10 +1205,11 @@ class NiyatiAI:
         return True
 
     async def _call_gpt(self, messages, max_tokens=200, temperature=Config.OPENAI_TEMPERATURE):
-        """Helper function to call GPT with automatic key rotation"""
-        attempts = len(self.keys)
+        """Helper function to call GPT with automatic key rotation and delays"""
+        # Hum total keys se 2 baar zyada try karenge (Retry logic)
+        total_attempts = len(self.keys) + 1
         
-        for attempt in range(attempts):
+        for attempt in range(total_attempts):
             try:
                 response = await self.client.chat.completions.create(
                     model=Config.OPENAI_MODEL,
@@ -1224,12 +1225,14 @@ class NiyatiAI:
                 # Agar quota khatam ya rate limit aaya
                 error_msg = str(e).lower()
                 if "rate limit" in error_msg or "quota" in error_msg or "429" in error_msg:
-                    logger.error(f"❌ Key #{self.current_key_index + 1} Exhausted. Rotating...")
+                    logger.warning(f"⚠️ Key #{self.current_key_index + 1} Busy/Limit. Waiting 1s before rotating...")
+                    
+                    # 1 Second ka wait (Server ko saans lene do)
+                    await asyncio.sleep(1)
+                    
                     if not self._rotate_key():
-                        # Agar saari keys try kar li aur sab fail hain
                         return None
                 else:
-                    # Koi aur technical error
                     logger.error(f"❌ OpenAI Error: {e}")
                     return None
             except Exception as e:
