@@ -2092,7 +2092,7 @@ async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages"""
+    """Handle all text messages with Anti-Spam"""
     message = update.message
     if not message or not message.text:
         return
@@ -2100,17 +2100,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
-    # Check if forwarded (v21+ compatible)
+    # Check if forwarded
     is_forwarded = message.forward_origin is not None
-    
-    # Get message text
-    if is_forwarded:
-        user_message = f"[Forwarded]: {message.text}"
-    else:
-        user_message = message.text
+    user_message = f"[Forwarded]: {message.text}" if is_forwarded else message.text
     
     if not user_message or user_message.startswith('/'):
         return
+
+    # --- 🛑 NEW ANTI-SPAM FILTER START ---
+    # Agar message me ye words hain, toh ignore karo (Reply mat karo)
+    spam_keywords = ['cp', 'child porn', 'videos price', 'job', 'profit', 'investment', 'crypto']
+    has_link = 'http' in user_message.lower() or 't.me' in user_message.lower()
+    is_spam = any(word in user_message.lower() for word in spam_keywords)
+
+    # Private chat me links allow kar sakte ho, par groups me spammer aate hain
+    if chat.type in ['group', 'supergroup']:
+        if has_link or is_spam:
+            logger.info(f"🚫 Ignored Spam/Link from {user.id} in Group")
+            return
+    # --- 🛑 ANTI-SPAM FILTER END ---
     
     is_private = chat.type == 'private'
     is_group = chat.type in ['group', 'supergroup']
