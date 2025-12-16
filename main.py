@@ -74,11 +74,7 @@ from telegram.error import (
 # OpenAI
 from openai import AsyncOpenAI, RateLimitError, APIError
 # Groq
-from groq import AsyncGroq
 # Gemini
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
-logger = logging.getLogger(__name__)
 
 # ============================================================================
 # CONFIGURATION
@@ -106,11 +102,14 @@ class Config:
     OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '200'))
     OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.85'))
     # Config class mein yeh add karo:
-    GROQ_API_KEYS_LIST = [...]  # Groq keys list
-    GEMINI_API_KEYS_LIST = [...]  # Gemini keys list
+    GROQ_API_KEYS_STR = os.getenv('GROQ_API_KEYS', '')
+    GROQ_API_KEYS_LIST = [k.strip() for k in GROQ_API_KEYS_STR.split(',') if k.strip()]
     GROQ_MODEL = "llama-3.3-70b-versatile"
-    GEMINI_MODEL = "gemini-2.5-flash-preview-05-20"
-    
+    GEMINI_MODEL = "gemini-2.5-flash"
+    GEMINI_API_KEYS_STR = os.getenv('GEMINI_API_KEYS', '')
+    GEMINI_API_KEYS_LIST = [k.strip() for k in GEMINI_API_KEYS_STR.split(',') if k.strip()]
+    self.groq_keys = Config.GROQ_API_KEYS_LIST
+    self.gemini_keys = Config.GEMINI_API_KEYS_LIST
     # Supabase (Cloud PostgreSQL)
     SUPABASE_URL = os.getenv('SUPABASE_URL', '')
     SUPABASE_KEY = os.getenv('SUPABASE_KEY', '')
@@ -1268,12 +1267,13 @@ class NiyatiAI:
 
                 # --- CASE 2: Gemini ---
                 elif curr['type'] == "gemini":
-                    # Model: gemini-1.5-flash (stable and free)
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={curr['key']}"
+                    # Model: gemini-2.5-flash (stable and free)
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent?key={curr['key']}"
                     
                     # Convert messages to Gemini format
                     contents = []
-                    for m in messages:
+                    if m['role'] == 'system':
+                        continue
                         role = "model" if m['role'] == "assistant" else "user"
                         contents.append({"role": role, "parts": [{"text": m['content']}]})
                     
