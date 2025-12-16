@@ -2042,7 +2042,13 @@ async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle messages with FSub Check"""
+    """
+    Handle all text messages with:
+    1. Force Subscribe Check (Priority)
+    2. Anti-Spam
+    3. Rate Limiting
+    4. AI Response
+    """
     message = update.message
     if not message or not message.text: return
         
@@ -2050,109 +2056,136 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user_message = message.text
     
+    # Ignore commands
     if not user_message or user_message.startswith('/'): return
 
-    # 👇👇 YEH LINE ADD KARNI THI (Missing Definition) 👇👇
+    # ✅ STEP 1: DEFINE VARIABLES FIRST (Fixes NameError)
     is_group = chat.type in ['group', 'supergroup']
     is_private = chat.type == 'private'
-    # 👆👆 AB CODE KO PATA HAI KI PRIVATE HAI YA GROUP 👆👆
 
-    # --- 🔒 NEW FSUB LOGIC START ---
+    # ✅ STEP 2: FORCE SUBSCRIBE LOGIC (Sabse Pehle Check Hoga)
     if is_group:
-        # 1. Database se channels ki list nikalo
-        targets = await db.get_group_fsub_targets(chat.id)
-        
-        if targets:
-            missing_channels = []
+        # A. Admin Check (Admins ko pareshan mat karo)
+        if user.id in Config.ADMIN_IDS:
+            # logger.info(f"😎 User {user.id} is Admin. FSub Skipped.")
+            pass 
+        else:
+            # B. Database se list nikalo
+            targets = await db.get_group_fsub_targets(chat.id)
             
-            # 2. Har channel ke liye check karo
-            for target in targets:
-                t_id = target.get('target_chat_id')
-                t_link = target.get('target_link')
+            if targets:
+                missing_channels = []
                 
-                if not t_id: continue
+                # C. Har channel ke liye check karo
+                for target in targets:
+                    t_id = target.get('target_chat_id')
+                    t_link = target.get('target_link')
+                    
+                    if not t_id: continue
 
-                try:
-                    member = await context.bot.get_chat_member(chat_id=t_id, user_id=user.id)
-                    if member.status in ['left', 'kicked', 'restricted']:
-                        missing_channels.append(t_link)
-                except Exception:
-                    pass # Agar bot admin nahi hai to ignore karo
+                    try:
+                        # Telegram API se pucho: "Kya ye user member hai?"
+                        member = await context.bot.get_chat_member(chat_id=t_id, user_id=user.id)
+                        
+                        # Agar user member nahi hai (Left, Kicked, Restricted)
+                        if member.status in ['left', 'kicked', 'restricted']:
+                            missing_channels.append(target)
+                            
+                    except Exception as e:
+                        # Agar Bot us channel me Admin nahi hai to Error aayega
+                        # Hum ignore karenge taaki galti se block na ho
+                        # logger.warning(f"⚠️ FSub Check Failed for {t_id}: {e}")
+                        pass
 
-            # 3. Agar koi channel miss hai to rok do
-            if missing_channels:
-                try: await message.delete()
-                except: pass
-                
-                # Buttons banao
-                keyboard = []
-                for idx, link in enumerate(missing_channels, 1):
-                    keyboard.append([InlineKeyboardButton(f"Join Channel {idx} 🚀", url=link)])
-                
-                msg = await message.reply_text(
-                    f"🚫 <b>Ruko {user.first_name}!</b>\n\n"
-                    "Message karne ke liye niche diye gaye channels join karo.",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-                
-                # Warning delete after 10s
-                await asyncio.sleep(10)
-                try: await msg.delete()
-                except: pass
-                
-                return # Code yahi rook do
-    # --- 🔒 NEW FSUB LOGIC END ---
+                # D. Agar koi channel miss hai to ROK DO
+                if missing_channels:
+                    logger.info(f"🚫 Blocking User {user.id} in Group {chat.id}. Not joined {len(missing_channels)} channels.")
+                    
+                    # 1. User ka message delete karo
+                    try: await message.delete()
+                    except: pass
+                    
+                    # 2. Buttons banao
+                    keyboard = []
+                    for idx, ch in enumerate(missing_channels, 1):
+                        link = ch.get('target_link', '')
+                        keyboard.append([InlineKeyboardButton(f"Join Channel {idx} 🚀", url=link)])
+                    
+                    # 3. Warning Message bhejo
+                    msg = await message.reply_text(
+                        f"🚫 <b>Ruko {user.first_name}!</b>\n\n"
+                        f"Message karne ke liye aapko {len(missing_channels)} channels join karne honge.",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    
+                    # 4. Cleanup (15s baad warning delete)
+                    await asyncio.sleep(15)
+                    try: await msg.delete()
+                    except: pass
+                    
+                    return # 🛑 STOP HERE (AI Reply nahi jayega)
 
-    # --- Rate Limiting ---
-    allowed, _ = rate_limiter.check(user.id)
-    if not allowed: return
-
-    # --- Anti-Spam Check (Optional) ---
+    # ✅ STEP 3: ANTI-SPAM & SAFETY (Groups Only)
     if is_group:
-        spam_keywords = ['cp', 'child porn', 'videos price', 'job', 'profit', 'investment', 'crypto']
+        spam_keywords = ['cp', 'child porn', 'videos price', 'job', 'profit', 'investment', 'crypto', 'bitcoin']
+        # Agar link hai ya spam word hai
         if any(word in user_message.lower() for word in spam_keywords):
-            return
+            logger.info(f"🗑️ Spam detected from {user.id}")
+            return # Ignore spam
 
-    # --- Group Handling ---
+    # ✅ STEP 4: RATE LIMITING
+    allowed, reason = rate_limiter.check(user.id)
+    if not allowed:
+        if reason == "minute" and is_private:
+            await message.reply_text("arre thoda slow 😅 saans to lene do!")
+        return
+
+    # ✅ STEP 5: LOGGING & GROUP HANDLING
     if is_group:
         db.add_group_message(chat.id, user.first_name, user_message)
         
+        # Decide: Kya reply karna chahiye?
         should_respond = False
         bot_username = f"@{Config.BOT_USERNAME}"
         
+        # 1. Agar mention kiya hai
         if bot_username.lower() in user_message.lower():
             should_respond = True
+            # Username hata do message se taaki AI confuse na ho
             user_message = user_message.replace(bot_username, '').strip()
             user_message = re.sub(rf'@{Config.BOT_USERNAME}', '', user_message, flags=re.IGNORECASE).strip()
         
-        if message.reply_to_message and message.reply_to_message.from_user:
+        # 2. Agar reply kiya hai bot ke message par
+        elif message.reply_to_message and message.reply_to_message.from_user:
             if message.reply_to_message.from_user.username == Config.BOT_USERNAME:
                 should_respond = True
         
+        # 3. Randomly kabhi kabhi bol pado (Natural feel)
         if not should_respond:
             if random.random() < Config.GROUP_RESPONSE_RATE:
                 should_respond = True
             else:
-                return
+                return # Reply mat karo
         
         await db.get_or_create_group(chat.id, chat.title)
         await db.log_user_activity(user.id, f"group_message:{chat.id}")
-    
-    # --- Private Handling ---
+
     if is_private:
         await db.get_or_create_user(user.id, user.first_name, user.username)
         await db.log_user_activity(user.id, "private_message")
-    
-    # --- Response Generation ---
+
+    # ✅ STEP 6: AI RESPONSE GENERATION
     try:
-        await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
-    except:
-        pass
-    
-    try:
+        # Group mein typing dikhao
+        if is_group or is_private:
+            try: await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
+            except: pass
+
+        # Context nikalo (Sirf Private mein)
         context_msgs = await db.get_user_context(user.id) if is_private else []
         
+        # AI ko call karo
         responses = await niyati_ai.generate_response(
             user_message=user_message,
             context=context_msgs,
@@ -2160,27 +2193,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_group=is_group
         )
         
-        # Random Bonus (Private Only)
+        # Random Bonus (Meme/Shayari) - Sirf Private mein
         if is_private and random.random() < 0.1:
             prefs = await db.get_user_preferences(user.id)
             bonus = await niyati_ai.get_random_bonus()
             
             if bonus:
-                if "shayari" in str(bonus).lower() and not prefs.get('shayari_enabled', True):
+                # Check preferences
+                is_shayari = "shayari" in str(bonus).lower() or "\n" in str(bonus)
+                if is_shayari and not prefs.get('shayari_enabled', True):
                     bonus = None
-                if bonus and "meme" in str(bonus).lower() and not prefs.get('meme_enabled', True):
+                elif not is_shayari and not prefs.get('meme_enabled', True):
                     bonus = None
-                if bonus:
-                    responses.append(bonus)
+                
+                if bonus: responses.append(bonus)
         
-        # Mention Logic
-        if is_private and random.random() < 0.2:
-            mention = StylishFonts.mention(user.first_name, user.id)
-            if responses:
-                idx = random.randint(0, len(responses) - 1)
-                responses[idx] = f"{mention} {responses[idx]}" if random.random() < 0.5 else f"{responses[idx]}, {mention}"
-        
-        # Send
+        # Send Messages
         await send_multi_messages(
             context.bot,
             chat.id,
@@ -2189,7 +2217,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         
-        # Save Memory (Private)
+        # Save History (Private Only)
         if is_private:
             await db.save_message(user.id, 'user', user_message)
             await db.save_message(user.id, 'assistant', ' '.join(responses))
