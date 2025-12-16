@@ -88,28 +88,35 @@ class Config:
     BOT_USERNAME = os.getenv('BOT_USERNAME', 'Niyati_personal_bot')
     
     # OpenAI (Multi-Key Support)
-    # Pehle naya variable check karega
     OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEYS', '')
     
-    # Agar naya nahi mila, toh purana check karega
     if not OPENAI_API_KEYS_STR:
         OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEY', '')
         
-    # List banayega
     API_KEYS_LIST = [k.strip() for k in OPENAI_API_KEYS_STR.split(',') if k.strip()]
     
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
     OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '200'))
     OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.85'))
-    # Config class mein yeh add karo:
+
+    # --- FIX STARTS HERE ---
+    
+    # Groq
     GROQ_API_KEYS_STR = os.getenv('GROQ_API_KEYS', '')
     GROQ_API_KEYS_LIST = [k.strip() for k in GROQ_API_KEYS_STR.split(',') if k.strip()]
     GROQ_MODEL = "llama-3.3-70b-versatile"
+    
+    # Gemini
     GEMINI_MODEL = "gemini-2.5-flash"
     GEMINI_API_KEYS_STR = os.getenv('GEMINI_API_KEYS', '')
     GEMINI_API_KEYS_LIST = [k.strip() for k in GEMINI_API_KEYS_STR.split(',') if k.strip()]
-    self.groq_keys = Config.GROQ_API_KEYS_LIST
-    self.gemini_keys = Config.GEMINI_API_KEYS_LIST
+
+    # Create aliases if needed (without 'self.' or 'Config.')
+    groq_keys = GROQ_API_KEYS_LIST
+    gemini_keys = GEMINI_API_KEYS_LIST
+
+    # --- FIX ENDS HERE ---
+
     # Supabase (Cloud PostgreSQL)
     SUPABASE_URL = os.getenv('SUPABASE_URL', '')
     SUPABASE_KEY = os.getenv('SUPABASE_KEY', '')
@@ -157,7 +164,6 @@ class Config:
         if not cls.TELEGRAM_BOT_TOKEN:
             errors.append("TELEGRAM_BOT_TOKEN required")
         
-        # YAHAN FIX KIYA HAI: Ab ye API_KEYS_LIST check karega
         if not cls.API_KEYS_LIST:
             errors.append("OPENAI_API_KEYS required")
             
@@ -166,7 +172,7 @@ class Config:
         if errors:
             raise ValueError(f"Config errors: {', '.join(errors)}")
 
-
+# Validate immediately after class definition
 Config.validate()
 
 # ============================================================================
