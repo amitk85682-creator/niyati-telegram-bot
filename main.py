@@ -1175,7 +1175,30 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
 - If user sends sexual/violent content -> Reply "IGNORE".
 """
         return prompt
-    
+
+    async def _call_gpt(self, messages):
+        """This function was missing! It makes the actual call to Groq."""
+        if not self.client: self._initialize_client()
+        
+        attempts = len(self.keys)
+        for _ in range(attempts):
+            try:
+                response = await self.client.chat.completions.create(
+                    model=Config.GROQ_MODEL,
+                    messages=messages,
+                    max_tokens=250,
+                    temperature=0.8,
+                    presence_penalty=0.4
+                )
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                logging.warning(f"⚠️ Groq Error: {e}. Rotating key...")
+                if not self._rotate_key():
+                    break
+                await asyncio.sleep(0.5)
+        
+        return None
+
     async def generate_response(self, user_message, context=None, user_name=None, is_group=False):
         mood = Mood.get_random_mood()
         time_period = TimeAware.get_time_period()
@@ -1198,12 +1221,12 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
 
     async def generate_shayari(self, mood="neutral"):
         prompt = f"Write a 2 line heart-touching Hinglish shayari for {mood} mood."
-        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=100, temp=0.9)
+        res = await self._call_gpt([{"role": "user", "content": prompt}])
         return f"✨ {res} ✨" if res else "Waah waah! ✨"
 
     async def generate_geeta_quote(self):
         prompt = "Give a short Bhagavad Gita quote with Hinglish meaning. Start with 🙏"
-        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=150)
+        res = await self._call_gpt([{"role": "user", "content": prompt}])
         return res if res else "🙏 Karm karo phal ki chinta mat karo."
 
     async def get_random_bonus(self):
@@ -2140,8 +2163,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle new members joining group"""
+    # Safety check: Ensure message and new_chat_members exist
+    if not update.message or not update.message.new_chat_members:
+        return
+
     chat = update.effective_chat
-    
     if chat.type not in ['group', 'supergroup']:
         return
     
@@ -2213,8 +2239,8 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("adminhelp", adminhelp_command))
 
     # Message Handlers
-    # 1. New Member (Welcome)
-    app.add_handler(ChatMemberHandler(handle_new_member, ChatMemberHandler.CHAT_MEMBER))
+    # 1. New Member (Welcome) - FIXED: Uses MessageHandler with StatusUpdate filter
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
     
     # 2. Main Message Handler (Text & Group Logic)
     # Filters.text & ~Filters.command ensures we only catch text that isn't a command
