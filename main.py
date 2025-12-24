@@ -1438,7 +1438,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. Define Image and Buttons
     # Note: Ensure this URL is accessible. If it breaks, the bot might fail to send.
-    image_url = "https://lh3.googleusercontent.com/gg-dl/ABS2GSmjibip14y2dmUk7QB77eVuWGeAe7Vn6FoLTPzOpkDQIdZ_m5bmHQLUbWOk-qxPYuNXq_366N2mpsRZT9hcCKYb-t4OtcHgQN9GDEEnmKlKJVOAyNOX6PGP8yQ-hwN4qGFcrOnrhsYd5ZXZAd2NSyxhrxcvdwAcJDtZ9gZb_SnSJYEU=s1024-rj" 
+    image_url = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEg3SXTHtV16aCxOpfFX0HQ9KDxSIVx5n61A7fU1YfLGSRSnSxDqkji1io2BxFdQa5nJx0dMRepfT39SZLCak3WYtMNQt_M2avzBERqHikXkoL30uzAw0DjrHRsckAEzc2rxI5JELc6rz6Cu5-NTlo0O3wLZiuTBJsqgiYe4MgK0QbtMm-9W8cOL9b-DzUE/s1600/Gemini_Generated_Image_dtpe5sdtpe5sdtpe.png" 
     
     keyboard = [
         [
