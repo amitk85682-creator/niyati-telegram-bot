@@ -141,11 +141,13 @@ class Config:
         if not cls.TELEGRAM_BOT_TOKEN:
             errors.append("TELEGRAM_BOT_TOKEN required")
         
-        if not cls.API_KEYS_LIST and not cls.GROQ_API_KEYS_LIST and not cls.GEMINI_API_KEYS_LIST:
-            errors.append("At least one API key (OpenAI/Groq/Gemini) required")
+        # FIX: Ab hum sirf GROQ check karenge, purane keys nahi
+        if not cls.GROQ_API_KEYS_LIST:
+            errors.append("GROQ_API_KEYS required in .env")
             
         if not cls.SUPABASE_URL or not cls.SUPABASE_KEY:
             print("⚠️ Supabase not configured - using local storage only")
+            
         if errors:
             raise ValueError(f"Config errors: {', '.join(errors)}")
 
