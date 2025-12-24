@@ -89,26 +89,10 @@ class Config:
     BOT_USERNAME = os.getenv('BOT_USERNAME', 'Niyati_personal_bot')
     
     # OpenAI (Multi-Key Support)
-    OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEYS', '')
-    
-    if not OPENAI_API_KEYS_STR:
-        OPENAI_API_KEYS_STR = os.getenv('OPENAI_API_KEY', '')
-        
-    API_KEYS_LIST = [k.strip() for k in OPENAI_API_KEYS_STR.split(',') if k.strip()]
-    
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
-    OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', '200'))
-    OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', '0.85'))
-
     # Groq
     GROQ_API_KEYS_STR = os.getenv('GROQ_API_KEYS', '')
     GROQ_API_KEYS_LIST = [k.strip() for k in GROQ_API_KEYS_STR.split(',') if k.strip()]
     GROQ_MODEL = "llama-3.3-70b-versatile"
-    
-    # Gemini
-    GEMINI_MODEL = "gemini-2.5-flash"
-    GEMINI_API_KEYS_STR = os.getenv('GEMINI_API_KEYS', '')
-    GEMINI_API_KEYS_LIST = [k.strip() for k in GEMINI_API_KEYS_STR.split(',') if k.strip()]
 
     # Supabase (Cloud PostgreSQL)
     SUPABASE_URL = os.getenv('SUPABASE_URL', '')
@@ -1121,110 +1105,37 @@ class ContentFilter:
         return any(kw in text_lower for kw in ContentFilter.DISTRESS_KEYWORDS)
 
 # ============================================================================
-# AI ASSISTANT - NIYATI
+# AI ASSISTANT - GROQ SPECIAL EDITION 🚀
 # ============================================================================
 
 class NiyatiAI:
-    """Hybrid AI: OpenAI -> Groq -> Gemini (Auto-Failover)"""
+    """Super Fast Groq AI with Multi-Key Rotation"""
     
     def __init__(self):
-        self.openai_keys = getattr(Config, 'API_KEYS_LIST', [])
-        self.groq_keys = Config.GROQ_API_KEYS_LIST
-        self.gemini_keys = Config.GEMINI_API_KEYS_LIST
-        
-        # Merge all keys with priority
-        self.all_keys = []
-        for k in self.openai_keys:
-            self.all_keys.append({"type": "openai", "key": k})
-        for k in self.groq_keys:
-            self.all_keys.append({"type": "groq", "key": k})
-        for k in self.gemini_keys:
-            self.all_keys.append({"type": "gemini", "key": k})
-        
+        self.keys = Config.GROQ_API_KEYS_LIST
         self.current_index = 0
         self.client = None
         self._initialize_client()
-        logger.info(f"🤖 Hybrid AI initialized with {len(self.all_keys)} total keys.")
+        logging.info(f"🚀 AI initialized with {len(self.keys)} Groq Keys!")
 
     def _initialize_client(self):
-        """Initialize Client based on Key Type"""
-        if not self.all_keys:
-            logger.error("❌ No API Keys found!")
-            return
-            
-        current = self.all_keys[self.current_index]
-        
-        if current['type'] == "openai":
-            self.client = AsyncOpenAI(api_key=current['key'])
-        elif current['type'] == "groq":
-            self.client = AsyncOpenAI(
-                base_url="https://api.groq.com/openai/v1", 
-                api_key=current['key']
-            )
-        
-        masked = current['key'][:8] + "..." + current['key'][-4:]
-        logger.info(f"🔑 Current AI: {current['type'].upper()} | Key: {masked}")
+        """Current Key se Client banata hai"""
+        if not self.keys: return
+        key = self.keys[self.current_index]
+        # Groq OpenAI compatible client use karta hai
+        self.client = AsyncOpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=key
+        )
+        masked = key[:6] + "..." + key[-4:]
+        logging.info(f"🔑 Switched to Groq Key: {masked}")
 
-    def _rotate(self):
-        """Switch to next key when one fails"""
-        if len(self.all_keys) <= 1:
-            return False
-        self.current_index = (self.current_index + 1) % len(self.all_keys)
+    def _rotate_key(self):
+        """Jab ek key thak jaye, to agli key lagata hai"""
+        if len(self.keys) <= 1: return False
+        self.current_index = (self.current_index + 1) % len(self.keys)
         self._initialize_client()
         return True
-
-    async def _call_gpt(self, messages, max_tokens=200, temp=0.8):
-        """Unified caller for OpenAI, Groq, and Gemini"""
-        attempts = len(self.all_keys) if self.all_keys else 1
-        
-        for _ in range(attempts):
-            if not self.all_keys:
-                break
-                
-            curr = self.all_keys[self.current_index]
-            try:
-                # OpenAI or Groq
-                if curr['type'] in ["openai", "groq"]:
-                    model_name = "gpt-4o-mini" if curr['type'] == "openai" else "llama-3.3-70b-versatile"
-                    response = await self.client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        max_tokens=max_tokens,
-                        temperature=temp,
-                        presence_penalty=0.6
-                    )
-                    return response.choices[0].message.content.strip()
-
-                # Gemini
-                elif curr['type'] == "gemini":
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent?key={curr['key']}"
-                    
-                    # Convert messages to Gemini format
-                    contents = []
-                    for m in messages:
-                        if m['role'] == 'system':
-                            contents.append({"role": "user", "parts": [{"text": f"[System]: {m['content']}"}]})
-                        else:
-                            role = "model" if m['role'] == "assistant" else "user"
-                            contents.append({"role": role, "parts": [{"text": m['content']}]})
-                    
-                    async with httpx.AsyncClient(timeout=30.0) as client:
-                        resp = await client.post(url, json={
-                            "contents": contents,
-                            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temp}
-                        })
-                        if resp.status_code == 200:
-                            return resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-                        else:
-                            raise Exception(f"Gemini Error: {resp.status_code}")
-
-            except Exception as e:
-                logger.warning(f"❌ {curr['type'].upper()} Key Failed: {str(e)[:50]}. Rotating...")
-                await asyncio.sleep(1)
-                if not self._rotate():
-                    break
-                
-        return None
 
     def _build_system_prompt(self, mood: str, time_period: str, user_name: str = None) -> str:
         """Dynamic system prompt with Gradual Disclosure & No Spam Rules"""
