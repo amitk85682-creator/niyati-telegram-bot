@@ -2298,24 +2298,58 @@ async def post_shutdown(application: Application):
 async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
     """Sends Good Morning/Night or Random Check-ins"""
     job_data = context.job.data  # 'morning', 'night', or 'random'
+    
+    # 🛑 DO NOT DISTURB CHECK (Raat ke waqt Random msg nahi)
+    # Get current time in India
+    ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
+    now_ist = datetime.now(ist)
+    current_hour = now_ist.hour
+
+    # Agar 'random' job hai aur raat ke 11 baje se subah 8 baje ke beech hai -> RETURN (Don't send)
+    if job_data == 'random':
+        if current_hour >= 23 or current_hour < 8:
+            return
+
     users = await db.get_all_users()
     
     # Text Templates
     morning_texts = [
-        "Good morning! ☀️ Uth gaye ya abhi bhi bistar mein ho?",
-        "Subah ho gayi! Chai mili kya? ☕",
-        "Gm! Aaj ka kya plan hai? ✨"
+        "Oye sleepyhead! 😴 Uth jao, suraj sar pe aa gaya hai!",
+        "Good morning! 🌻 Hope aaj ka din tumhari smile jitna hi pyara ho.",
+        "Sirf 'Good Morning' nahi, sending you a virtual hug too! 🤗 Uth gaye?",
+        "Ankhein kholo, phone check karo aur meri taraf se Good Morning accept karo! 💌",
+        "Chai ki khushboo aur ye message... dono ready hain! ☕ Good morning!",
+        "Bas socha din ki shuruwat tumhe pareshan... I mean, wish kar ke karun! 😜 Gm!",
+        "Sapno ki duniya se bahar aao, real world (aur main) wait kar rahe hain! 🌎✨",
+        "Agar alarm ne mood kharab kiya ho, toh yeh text padh ke smile kar do! 😋 Gm!",
+        "Rise and shine! ✨ Aaj duniya jeetne ka plan hai ya sirf aaram karne ka? 🤔",
+        "Good morning! 🌸 Thoda aalas chhodo aur jaldi se reply karo!"
     ]
     night_texts = [
         "Good night 🌙",
         "So jao ab, kaafi raat ho gayi 😴",
-        "Gn! Kal milte hain ✨"
+        "Gn! Kal milte hain ✨",
+        "Good night baby 🌙💗",
+        "Sweet dreams, meri jaan 😴✨",
+        "So jao, kal naya din hoga 💫",
+        "Gn cutie, smile ke saath sona 😊🌙",
+        "Raat ho gayi, rest karo 💕",
+        "Dreams mein milte hain 🤍✨",
+        "Good night, take care 🫶🌙",
+        "Soft pillow, cozy sleep 😴💖",
+        "Gn love, peaceful sleep 🌸✨",
+        "So jao baby, everything’s okay 💞🌙"
     ]
     random_texts = [
         "Bored ho rahi thi, socha msg karu... kya kar rahe ho? 🙄",
         "Ek baat batao...",
         "Tumne lunch kiya? 🍱",
-        "Oye, kahan gayab ho?"
+        "Oye, kahan gayab ho?",
+        "Baby tum kidhar ho? me board ho rahi hoon",
+        "Hello mere lollypop kidhar ho?",
+        "Bas check kar rahi thi, theek ho na? 💕",
+        "Heyy cutieee 💖",
+        "Sun na… ek second baat karni thi 🙈"
     ]
 
     count = 0
@@ -2323,69 +2357,67 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
         user_id = user.get('user_id')
         if not user_id: continue
 
-        # Decide message based on job type
         msg = ""
         if job_data == 'morning':
             msg = random.choice(morning_texts)
         elif job_data == 'night':
             msg = random.choice(night_texts)
         elif job_data == 'random':
-            # 20% chance to message a user randomly, don't spam everyone at once
-            if random.random() > 0.2: 
-                continue
+            if random.random() > 0.2: continue # 20% chance
             msg = random.choice(random_texts)
 
         try:
-            # Add slight random delay so it doesn't look like a broadcast
             await asyncio.sleep(random.uniform(0.5, 2.0)) 
             await context.bot.send_message(chat_id=user_id, text=msg)
             count += 1
         except Exception:
-            pass # User might have blocked bot
+            pass
         
-        # Limit to avoid flood waits during testing
         if count > 100: break 
 
-    logger.info(f"Routine Job ({job_data}) finished. Sent to {count} users.")
+    logger.info(f"Routine Job ({job_data}) sent to {count} users.")
 
 # ============================================================================
 # UPDATE POST_INIT TO SCHEDULE THESE JOBS
 # ============================================================================
 
 async def post_init(application: Application):
-    """Initialize DB and Schedule Jobs"""
+    """Initialize DB and Schedule Jobs with CORRECT UTC TIMING"""
     await db.initialize()
     await health_server.start()
     
     job_queue = application.job_queue
-    ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
     
-    # 1. Good Morning (8:30 AM IST)
+    # Hum seedha UTC time use karenge taaki confusion na ho
+    # 8:30 AM IST = 3:00 AM UTC
+    # 10:30 PM IST = 17:00 (5:00 PM) UTC
+    
+    # 1. Good Morning (India: 08:30 AM)
     job_queue.run_daily(
         routine_message_job,
-        time=datetime.now(ist).replace(hour=8, minute=30, second=0).time(),
+        time=time(hour=3, minute=0, second=0),  # 3:00 AM UTC
         data='morning',
         name='daily_morning'
     )
 
-    # 2. Good Night (10:30 PM IST)
+    # 2. Good Night (India: 10:30 PM)
     job_queue.run_daily(
         routine_message_job,
-        time=datetime.now(ist).replace(hour=22, minute=30, second=0).time(),
+        time=time(hour=17, minute=0, second=0), # 17:00 UTC
         data='night',
         name='daily_night'
     )
 
-    # 3. Random Check-in (Runs every 4 hours, logic inside decides if it sends)
+    # 3. Random Check-in (Har 4 ghante mein check karegi)
     job_queue.run_repeating(
         routine_message_job,
         interval=timedelta(hours=4),
-        first=timedelta(seconds=60), # Start after 1 min
+        first=timedelta(seconds=60),
         data='random',
         name='random_checkin'
     )
 
-    logger.info("🚀 Niyati Bot Started with Routine Jobs!")
+    logger.info("🚀 Niyati Bot Started with FIXED Timings (IST)!")
 
 def main():
     """Main entry point"""
