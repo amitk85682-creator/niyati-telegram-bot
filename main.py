@@ -2393,27 +2393,23 @@ async def post_init(application: Application):
     
     job_queue = application.job_queue
     
-    # Hum seedha UTC time use karenge taaki confusion na ho
-    # 8:30 AM IST = 3:00 AM UTC
-    # 10:30 PM IST = 17:00 (5:00 PM) UTC
-    
-    # 1. Good Morning (India: 08:30 AM)
+    # 1. Good Morning (India: 08:30 AM IST = 03:00 AM UTC)
     job_queue.run_daily(
         routine_message_job,
-        time=time(hour=3, minute=0, second=0),  # 3:00 AM UTC
+        time=dt_time(hour=3, minute=0, second=0),  # <--- FIXED: uses dt_time
         data='morning',
         name='daily_morning'
     )
 
-    # 2. Good Night (India: 10:30 PM)
+    # 2. Good Night (India: 10:30 PM IST = 05:00 PM UTC)
     job_queue.run_daily(
         routine_message_job,
-        time=time(hour=17, minute=0, second=0), # 17:00 UTC
+        time=dt_time(hour=17, minute=0, second=0), # <--- FIXED: uses dt_time
         data='night',
         name='daily_night'
     )
 
-    # 3. Random Check-in (Har 4 ghante mein check karegi)
+    # 3. Random Check-in (Runs every 4 hours)
     job_queue.run_repeating(
         routine_message_job,
         interval=timedelta(hours=4),
