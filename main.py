@@ -29,7 +29,8 @@ import logging
 import asyncio
 import re
 import random
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import time as dt_time
 from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
@@ -2254,36 +2255,39 @@ def setup_handlers(app: Application):
 # ============================================================================
 
 async def post_init(application: Application):
-    """
-    Bot start hone ke baad ye function chalega.
-    Iska use hum Health Server start karne ke liye karenge.
-    """
+    """Initialize DB and Schedule Jobs with CORRECT UTC TIMING"""
     await db.initialize()
     await health_server.start()
     
-    # Schedule Daily Geeta Job (Daily at 8:00 AM IST)
     job_queue = application.job_queue
-    ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
-    # Time set kar rahe hain (UTC convert hoke manage hoga automatically agar timezone aware object hai)
-    daily_time = datetime.now(ist).replace(hour=8, minute=0, second=0, microsecond=0)
     
-    # Timezone object pass karna zaruri hai
+    # 1. Good Morning (India: 08:30 AM IST = 03:00 AM UTC)
     job_queue.run_daily(
-        send_daily_geeta, 
-        time=daily_time.time(), 
-        days=(0, 1, 2, 3, 4, 5, 6),
-        data=None,  # Data argument
-        name="daily_geeta",
-        chat_id=None,
-        user_id=None,
-        job_kwargs={'misfire_grace_time': 60} # Agar server late ho to 60s tak try kare
+        routine_message_job,
+        time=dt_time(hour=3, minute=0, second=0),  # Use dt_time here
+        data='morning',
+        name='daily_morning'
     )
-    # Note: Ensure your PTB Application is initialized with defaults if timezone issues persist, 
-    # but passing UTC time usually works best.
-    # Easy Fix: Convert your desired IST time to UTC manually here.
-    # Agar 8:00 AM IST chahiye -> 2:30 AM UTC set karo.
-    
-    logger.info("🚀 Niyati Bot Started Successfully!")
+
+    # 2. Good Night (India: 10:30 PM IST = 05:00 PM UTC)
+    # 17:00 UTC = 5:00 PM
+    job_queue.run_daily(
+        routine_message_job,
+        time=dt_time(hour=17, minute=0, second=0), # Use dt_time here
+        data='night',
+        name='daily_night'
+    )
+
+    # 3. Random Check-in (Runs every 4 hours)
+    job_queue.run_repeating(
+        routine_message_job,
+        interval=timedelta(hours=4),
+        first=timedelta(seconds=60),
+        data='random',
+        name='random_checkin'
+    )
+
+    logger.info("🚀 Niyati Bot Started with FIXED Timings (IST)!")
 
 async def post_shutdown(application: Application):
     """Bot band hone par cleanup"""
