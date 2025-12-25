@@ -30,7 +30,7 @@ import asyncio
 import re
 import random
 import time
-from datetime import time as dt_time
+from datetime import datetime, timedelta, timezone, time as dt_time
 from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
@@ -2264,21 +2264,20 @@ async def post_init(application: Application):
     # 1. Good Morning (India: 08:30 AM IST = 03:00 AM UTC)
     job_queue.run_daily(
         routine_message_job,
-        time=dt_time(hour=3, minute=0, second=0),  # Use dt_time here
+        time=dt_time(hour=3, minute=0, second=0),  # Changed 'time' to 'dt_time'
         data='morning',
         name='daily_morning'
     )
 
     # 2. Good Night (India: 10:30 PM IST = 05:00 PM UTC)
-    # 17:00 UTC = 5:00 PM
     job_queue.run_daily(
         routine_message_job,
-        time=dt_time(hour=17, minute=0, second=0), # Use dt_time here
+        time=dt_time(hour=17, minute=0, second=0), # Changed 'time' to 'dt_time'
         data='night',
         name='daily_night'
     )
 
-    # 3. Random Check-in (Runs every 4 hours)
+    # 3. Random Check-in
     job_queue.run_repeating(
         routine_message_job,
         interval=timedelta(hours=4),
