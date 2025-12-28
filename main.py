@@ -1824,7 +1824,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 import html  # ✅ Import this at top
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all users AND groups (Fixed & Robust)"""
+    """Broadcast message to all users AND groups (Fixed Version)"""
     if not await admin_check(update):
         return
 
@@ -1842,64 +1842,88 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Message likho ya reply karo!")
         return
 
-    status_msg = await update.message.reply_text("📢 Starting Broadcast... (0/0)")
+    status_msg = await update.message.reply_text("📢 fetching database... wait")
 
-    # ✅ FIX 1: Fetch ALL users using Loop (Supabase 1000 Limit Bypass)
-    # Note: db.get_all_users ko bhi update karna padega (neeche dekhein)
-    users = await db.get_all_users() 
+    # ✅ FIX 1: Users aur Groups dono ko fetch karna
+    users = await db.get_all_users()
+    groups = await db.get_all_groups()
+
+    # ✅ FIX 2: Targets List banana (User IDs + Group Chat IDs)
+    targets = []
     
+    # Add Users
+    for user in users:
+        uid = user.get('user_id')
+        if uid: targets.append(uid)
+        
+    # Add Groups
+    for group in groups:
+        gid = group.get('chat_id')
+        if gid: targets.append(gid)
+
+    # Stats setup
     success = 0
     failed = 0
-    total = len(users)
+    total = len(targets)
+    
+    if total == 0:
+        await status_msg.edit_text("❌ Database empty hai! Koi users ya groups nahi mile.")
+        return
+
+    await status_msg.edit_text(f"📢 Starting Broadcast to {len(users)} Users & {len(groups)} Groups...")
 
     # Message Content Setup
     final_text = html.escape(message_text) if message_text else None
 
-    for i, user in enumerate(users):
-        user_id = user.get('user_id')
-        if not user_id: continue
-
+    # ✅ FIX 3: Combined Loop for Users & Groups
+    for i, chat_id in enumerate(targets):
         try:
             if reply_msg:
                 # Forward or Copy (Copy is safer for privacy)
                 await context.bot.copy_message(
-                    chat_id=user_id,
+                    chat_id=chat_id,
                     from_chat_id=update.effective_chat.id,
                     message_id=reply_msg.message_id
                 )
             else:
                 await context.bot.send_message(
-                    chat_id=user_id,
+                    chat_id=chat_id,
                     text=final_text,
                     parse_mode=ParseMode.HTML
                 )
             success += 1
         except Forbidden:
-            failed += 1 # User blocked bot
-            # Optional: Delete user from DB here
+            failed += 1 # User blocked bot or kicked from group
         except RetryAfter as e:
-            # ✅ FIX 2: FloodWait Handling
+            # FloodWait Handling
             logger.warning(f"FloodWait: Sleeping {e.retry_after}s")
             await asyncio.sleep(e.retry_after)
-            # Retry current user (simple logic: just skip or complex recursion)
             failed += 1 
         except Exception as e:
             failed += 1
-            logger.error(f"Broadcast error for {user_id}: {e}")
+            logger.error(f"Broadcast error for {chat_id}: {e}")
 
-        # ✅ FIX 3: Update Status every 20 users (Not every user)
+        # Status Update (Har 20 messages ke baad update karega taaki fast rahe)
         if i % 20 == 0:
             try:
-                await status_msg.edit_text(f"📢 Broadcasting: {i}/{total}\n✅ Sent: {success}\n❌ Failed: {failed}")
+                await status_msg.edit_text(
+                    f"📢 Broadcasting...\n"
+                    f"🔄 Progress: {i}/{total}\n"
+                    f"✅ Success: {success}\n"
+                    f"❌ Failed: {failed}"
+                )
             except: pass
         
-        await asyncio.sleep(0.05) # Small delay
+        await asyncio.sleep(0.05) # Small delay to prevent ban
 
+    # Final Report
     await status_msg.edit_text(
         f"✅ <b>Broadcast Complete!</b>\n\n"
-        f"👥 Total: {total}\n"
+        f"👥 Total Targets: {total}\n"
+        f"👤 Users: {len(users)}\n"
+        f"🛡Groups: {len(groups)}\n\n"
         f"✅ Success: {success}\n"
-        f"❌ Blocked/Failed: {failed}"
+        f"❌ Failed/Blocked: {failed}"
     )
     await update.message.reply_html(report)
 
