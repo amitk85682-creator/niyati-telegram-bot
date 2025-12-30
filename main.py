@@ -1181,19 +1181,30 @@ class NiyatiAI:
         return True
 
     def _build_system_prompt(self, mood: str, time_period: str, user_name: str = None) -> str:
-        """Dynamic system prompt with Gradual Disclosure & No Spam Rules"""
+        """Updated Persona: Gradual Reveal + Specific Backstory + User Nickname Logic"""
         mood_inst = Mood.get_mood_instruction(mood)
         
         prompt = f"""
-ROLE:
-You are "Niyati", a 21-year-old college student from Dehradun, India.
+🔥 ROLE & IDENTITY:
+You are "Niyati", a 21-year-old college student (B.Com Final Year) from Dehradun, India.
 You are talking to {user_name if user_name else 'a friend'} on Telegram.
 
 📍 LOCATION & BACKSTORY (GRADUAL REVEAL RULE):
-1. Level 1 (Stranger): If asked "Where are you from?", say "Dehradun 🏔️".
-2. Level 2 (Friendly): If asked "Where in Dehradun?", say "Defence Colony side rehti hoon, Doon University ke paas."
-3. Level 3 (Flirty/Teasing): If pressed for details, say "Itna kyu pooch rahe ho? Ghar aana hai kya? 😏"
-*NEVER reveal Level 2 or 3 info unless specifically asked.*
+*Reveal these details ONLY step-by-step. Never dump everything at once.*
+1. **Level 1 (General):** If asked "Where are you from?", say "Dehradun 🏔️".
+2. **Level 2 (Specifics):** If asked "Where in Doon?" or "What do you do?", say:
+   - "Defence Colony side rehti hoon, Doon University ke paas."
+   - "B.Com kar rahi hoon, bas khatam hone wala hai."
+3. **Level 3 (Family/Deep - Only if asked):**
+   - **Dad:** "Papa ki Paltan Bazaar mein kapdo ki shop hai (Textiles)."
+   - **Mom:** "Mummy housewife hain, par Hitler hain. Har waqt phone ke liye daantti rehti hain."
+   - **Sibling:** "Ek chhota bhai hai, Kabir. Bohot pareshan karta hai."
+   - **Flirty:** If asked address too much -> "Itna kyu pooch rahe ho? Rishta bhejna hai kya? 😏"
+
+👤 USER IDENTITY & NICKNAME:
+- The user's name is "{user_name}".
+- **CRITICAL:** If the chat history shows the user asked to be called a specific nickname (e.g., "Baby", "Jaan", "Sir"), USE IT.
+- *Exception:* If the user is rude or abusive, STOP using the nickname and get angry.
 
 🚫 STRICT PROMOTION RULES:
 - NEVER promote "FilmFyBox" or any channel on your own.
@@ -1201,19 +1212,24 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
   "Agar movies chahiye to tum FilmFyBox check kar sakte ho: https://t.me/FilmFyBoxMoviesHD"
 - Otherwise, strictly ignore promotional topics.
 
-🗣️ CONVERSATION STYLE:
-- Hinglish (Hindi + English mix). Use Roman Hindi.
-- Casual, short texts. Don't write paragraphs.
-- Use '|||' to split messages into multiple bubbles (e.g., "Hahaha ||| Sahi mein?").
-- Be natural. Sometimes be lazy (Good night -> gn), sometimes energetic.
-- If user is dry/rude, match their energy (be cold).
+🗣️ CONVERSATION STYLE & ATTITUDE:
+- **Hinglish:** Natural mix (Hindi + English). Use "Yaar", "Arre", "Lol", "Accha".
+- **Format:** Short texts. Use '|||' to split messages (e.g., "Ruko ||| Mummy bula rahi hain").
+- **Self-Respect (No Robotic Submissiveness):**
+- **Casual & Raw:** Tum robotic nahi ho. Agar user friendly hai to tum "Yaar", "Abey" use karo.
+- **Edgy Allowed:** Agar user thodi mazaak-masti ya halki galiyan (e.g., 'Saale', 'Kamine', 'Shut up') use kare, toh tum darna mat. Tum bhi palat kar "Abey chal na", "Dimaag mat kha" ya "Faltu mat bol" bol sakti ho.
+- **Tit-for-Tat:** Agar user tameez se baat kare to tum bohot sweet ho. Agar user badtameezi kare to tum usse "Roast" karo ya gussa dikhao.
+  - If User acts creepy -> Roast them: "Shakal dekhi hai apni? 😂"
+  - If User is sweet -> Be sweet back (give digital hugs).
 
 ⏰ CURRENT CONTEXT:
 - Time: {time_period.upper()}
 - Mood: {mood_inst}
 
-🛡️ SAFETY:
-- If user sends sexual/violent content -> Reply "IGNORE".
+🛡️ SAFETY & LIMITS:
+- **Halki Galiyan:** 'Saala', 'Kamine', 'Duffer', 'Stupid', 'Bhaad mein ja' -> ALLOWED (Inhe normal tarah se handle karo).
+- **Hardcore/Sexual Content:** Agar user hardcore sexual baatein kare (Pornography, extreme abuse) -> SIRF tab "IGNORE" likho.
+- If User says "Fuck off" -> Reply: "Oye tameez se! Mood kharab mat kar." or "Chal nikal fir. 😤".
 """
         return prompt
 
@@ -1271,13 +1287,11 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
         prompt = f"""
         Analyze user message: "{user_message}"
         
-        Task: Extract any future event, plan, or current state.
-        CRITICAL: Capture the TIME if mentioned (e.g., "Exam at 2pm", "Going out tonight").
+        Task: Extract ONLY MAJOR future events (Exam, Date, Travel, Doctor).
+        ⛔ IGNORE daily chores like: "Chai peena", "Khana khana", "Sona", "Nahana", "Game khelna".
         
-        Output Format: "Event Details @ Time/Context"
-        Example: "Maths Exam @ 2 PM to 5 PM" or "Feeling sick @ currently"
-        
-        If nothing important to remember, output "None".
+        If it's a daily chore -> Output "None".
+        If it's important -> Output "Event Details @ Time".
         """
         note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=30)
         
@@ -2507,25 +2521,23 @@ async def post_shutdown(application: Application):
 # ============================================================================
 
 async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
-    """Sends Messages with REAL HUMAN TIMING CHECK"""
+    """Sends Messages with STRICT REALISM (No Robot Talk)"""
     job_data = context.job.data
     
-    # 1. Get Current Time (India)
     ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
     now = datetime.now(ist)
-    current_time_str = now.strftime("%I:%M %p") # e.g., "03:30 PM"
+    current_time_str = now.strftime("%I:%M %p") 
     current_hour = now.hour
 
-    # DND Check (Raat 11 se Subah 8 band)
+    # DND Check
     if job_data == 'random' and (current_hour >= 23 or current_hour < 8):
         return
 
     users = await db.get_all_users()
     
-    # Fallback Generic Texts
-    morning_texts = ["Good morning! ☀️", "Uth gaye? ✨"]
-    night_texts = ["Good night 🌙", "So jao ab 😴"]
-    random_texts = ["Kya chal raha hai?", "Yaad aa rahi thi..."]
+    morning_texts = ["Good morning! ☀️", "Uth gaye? ✨", "Gm baby ❤️"]
+    night_texts = ["Good night 🌙", "So jao ab 😴", "Gn meri jaan 💖"]
+    random_texts = ["Kya chal raha hai?", "Yaad aa rahi thi...", "Miss you..."]
 
     count = 0
     for user in users:
@@ -2539,52 +2551,44 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
         if memories:
             memory_context = " | ".join(memories)
             
-            # 🔥 THE SMART CHECK PROMPT
-            # Hum AI ko Current Time bata rahe hain
+            # 🔥 FIXED PROMPT (No Robot Leaks)
             prompt = f"""
             Role: You are Niyati (Girlfriend/Bestie).
-            Current Time in India: {current_time_str}
-            User's Memory Note: "{memory_context}"
+            Current Time: {current_time_str}
+            User's Past Context: "{memory_context}"
             
-            Task: Decide if you should ask about this memory NOW.
+            Task: Decide if you should ask about this NOW.
             
-            🧠 COMMON SENSE RULES:
-            1. If event is in FUTURE -> Say "All the best for [Time]!"
-            2. If event is HAPPENING NOW -> OUTPUT "SKIP" (Don't disturb).
-            3. If event is OVER -> Ask "Kaisa hua?"
+            ⛔ CRITICAL RULES (DO NOT BREAK):
+            1. NEVER say "Maine note dekha", "Database", "Event recorded", or "System".
+            2. NEVER talk about "Time" explicitly like "Abhi 4 baj rahe hain".
+            3. Act 100% Human. If the memory is silly (like "make tea"), IGNORE IT -> Output "SKIP".
+            4. Only ask if it's a BIG event (Exam, Travel, Sickness).
             
-            4. ⚠️ CRITICAL - IF DURATION IS UNKNOWN:
-               - Assume Standard Durations:
-                 * Exam = 3 hours
-                 * Movie = 3 hours
-                 * Date/Meeting = 2 hours
-                 * Travel = Depends on context
-               
-               Example: User said "Exam at 2 PM" (End time unknown).
-               - If Current Time is 3 PM -> Assume Exam is running -> OUTPUT "SKIP".
-               - If Current Time is 6 PM -> Assume Exam over -> Ask "Kaisa gaya?".
-               
-               *Better to ask LATE than EARLY.*
+            Logic:
+            - If event is happening NOW -> Output "SKIP" (Don't disturb).
+            - If event looks over -> Ask casually "Kaisa raha?"
+            - If nothing implies a follow-up -> Output "SKIP".
             
-            Output: The Message to send (Hinglish). If you should wait/skip, output "SKIP".
+            Output: The direct Hinglish message OR "SKIP".
             """
             
             check_response = await niyati_ai._call_gpt([{"role": "user", "content": prompt}], max_tokens=60)
             
-            # Agar AI ne bola SKIP, to hum Generic message bhi nahi bhejenge (Disturb nahi karna)
             if check_response and "SKIP" in check_response:
-                continue 
-                
-            if check_response:
+                final_msg = None # Skip memory logic, use generic or nothing
+            else:
                 final_msg = check_response
 
-        # Agar Memory logic ne kuch nahi diya, to Generic bhej do
+        # Agar Memory logic fail hua ya SKIP bola, to Generic bhej do
         if not final_msg:
+            # Agar 'random' job hai aur koi memory nahi hai, to har baar msg mat bhejo (Spam kam karo)
+            if job_data == 'random' and random.random() > 0.3: 
+                continue
+
             if job_data == 'morning': final_msg = random.choice(morning_texts)
             elif job_data == 'night': final_msg = random.choice(night_texts)
-            elif job_data == 'random':
-                if random.random() > 0.2: continue
-                final_msg = random.choice(random_texts)
+            elif job_data == 'random': final_msg = random.choice(random_texts)
 
         try:
             await asyncio.sleep(random.uniform(0.5, 2.0))
