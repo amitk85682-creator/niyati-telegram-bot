@@ -53,7 +53,8 @@ from telegram import (
     Chat,
     Message,
     BotCommand,
-    MessageEntity
+    MessageEntity,
+    InputMediaPhoto
 )
 from telegram.ext import (
     Application,
@@ -522,6 +523,45 @@ class Database:
             logger.info(f"✅ New user (local): {user_id} ({first_name})")
         
         return self.local_users[user_id]
+    
+    # Add these inside Database class
+    async def add_user_memory(self, user_id: int, note: str):
+        """Adds a short note to user's active memory"""
+        # Hum existing preferences column use karenge taaki naya table na banana pade
+        prefs = await self.get_user_preferences(user_id)
+        
+        # Existing memories uthao ya nayi list banao
+        memories = prefs.get('active_memories', [])
+        
+        # Add new note with timestamp
+        new_note = {
+            'note': note,
+            'added_at': datetime.now(timezone.utc).isoformat(),
+            'status': 'active' # active means abhi tak pucha nahi hai
+        }
+        memories.append(new_note)
+        
+        # Keep only last 5 active memories to save space
+        memories = memories[-5:]
+        
+        # Save back to DB
+        prefs['active_memories'] = memories
+        
+        # Update DB using existing function logic
+        if self.connected and self.client:
+            await self.client.update('users', {
+                'preferences': json.dumps(prefs),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }, {'user_id': user_id})
+        elif user_id in self.local_users:
+            self.local_users[user_id]['preferences'] = prefs
+
+    async def get_active_memories(self, user_id: int) -> List[str]:
+        """Gets pending memories to ask about"""
+        prefs = await self.get_user_preferences(user_id)
+        memories = prefs.get('active_memories', [])
+        # Sirf wahi return karo jo purane na ho gaye ho (24 hours logic later)
+        return [m['note'] for m in memories if m.get('status') == 'active']
     
     async def get_user_context(self, user_id: int) -> List[Dict]:
         """Get user conversation context"""
@@ -1200,6 +1240,48 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
         
         return None
 
+    # Update inside NiyatiAI class
+    async def extract_important_info(self, user_message: str) -> str:
+        """Checks if message has ANY important life event + Time"""
+        
+        # 1. Expanded Triggers (Mental State + Events + Time)
+        triggers = [
+            # Events
+            'exam', 'test', 'interview', 'date', 'meeting', 'party', 'shadi', 'wedding',
+            'trip', 'travel', 'flight', 'train', 'bus', 'hospital', 'doctor',
+            # Emotions/State
+            'bimar', 'sick', 'sad', 'happy', 'excited', 'tired', 'thak', 'low', 'cry', 'ro',
+            'breakup', 'love', 'crush', 'fight', 'gussa',
+            # Time Markers (Sabse Important)
+            'kal', 'aaj', 'today', 'tomorrow', 'subah', 'shaam', 'raat', 'tonight', 'morning'
+        ]
+        
+        # Agar message bohot chota hai (e.g. "Hi", "Hru") to ignore karo
+        if len(user_message.split()) < 3:
+            return None
+
+        # Agar trigger word nahi hai, to bhi 10% chance pe check kar lo (Random intuition)
+        if not any(t in user_message.lower() for t in triggers) and random.random() > 0.1:
+            return None
+            
+        # 2. AI se pucho: "Kya hai aur KAB hai?"
+        prompt = f"""
+        Analyze user message: "{user_message}"
+        
+        Task: Extract any future event, plan, or current state.
+        CRITICAL: Capture the TIME if mentioned (e.g., "Exam at 2pm", "Going out tonight").
+        
+        Output Format: "Event Details @ Time/Context"
+        Example: "Maths Exam @ 2 PM to 5 PM" or "Feeling sick @ currently"
+        
+        If nothing important to remember, output "None".
+        """
+        note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=30)
+        
+        if note and "None" not in note:
+            return note
+        return None
+    
     async def generate_response(self, user_message, context=None, user_name=None, is_group=False):
         mood = Mood.get_random_mood()
         time_period = TimeAware.get_time_period()
@@ -2126,60 +2208,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.log_user_activity(user.id, "private_message")
 
     # ════════════════════════════════════════════════════════════════════
-    # AI RESPONSE
+    # AI RESPONSE & MEMORY LOGIC
     # ════════════════════════════════════════════════════════════════════
     try:
-        try:
-            await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
-        except:
-            pass
+        await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
 
+        # 1. GENERATE REPLY
         context_msgs = await db.get_user_context(user.id) if is_private else []
-        
         responses = await niyati_ai.generate_response(
             user_message=user_message,
             context=context_msgs,
             user_name=user.first_name,
             is_group=is_group
         )
-        
-        # Random Bonus (Private only)
-        if is_private and random.random() < 0.1:
-            prefs = await db.get_user_preferences(user.id)
-            bonus = await niyati_ai.get_random_bonus()
-            
-            if bonus:
-                is_shayari = "shayari" in str(bonus).lower() or "\n" in str(bonus)
-                if is_shayari and not prefs.get('shayari_enabled', True):
-                    bonus = None
-                elif not is_shayari and not prefs.get('meme_enabled', True):
-                    bonus = None
-                
-                if bonus:
-                    responses.append(bonus)
-        
+
+        # 2. SMART MEMORY EXTRACTION (Background Task)
+        # Ye user ko pata nahi chalega, par Niyati note bana legi
+        if is_private:
+            memory_note = await niyati_ai.extract_important_info(user_message)
+            if memory_note:
+                await db.add_user_memory(user.id, memory_note)
+                logger.info(f"🧠 Memory stored for {user.first_name}: {memory_note}")
+
+        # 3. SEND MESSAGES (Existing Logic)
         if responses:
-            await send_multi_messages(
-                context.bot,
-                chat.id,
-                responses,
-                reply_to=message.message_id if is_group else None,
-                parse_mode=ParseMode.HTML
-            )
-        
-        # Save History (Private Only)
-        if is_private and responses:
-            await db.save_message(user.id, 'user', user_message)
-            await db.save_message(user.id, 'assistant', ' '.join(responses))
+            await send_multi_messages(context.bot, chat.id, responses, 
+                                    reply_to=message.message_id if is_group else None, 
+                                    parse_mode=ParseMode.HTML)
             
-        health_server.stats['messages'] += 1
-        
+            # Save History
+            if is_private:
+                await db.save_message(user.id, 'user', user_message)
+                await db.save_message(user.id, 'assistant', ' '.join(responses))
+                
     except Exception as e:
-        logger.error(f"❌ Message handling error: {e}", exc_info=True)
-        try:
-            await message.reply_text("oops kuch gadbad... retry karo? 🫶")
-        except:
-            pass
+        logger.error(f"Handler Error: {e}")
 
 
 # ============================================================================
@@ -2235,6 +2298,114 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================================
+# 🔒 SECRET DIARY FEATURE (Talkie Style)
+# ============================================================================
+
+async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
+    """Sends the LOCKED card notification at night"""
+    users = await db.get_all_users()
+    
+    # Image: LOCKED (Blurry or Lock Icon)
+    locked_image = "https://images.unsplash.com/photo-1517639493569-5666a7488662?w=600&q=80&blur=50" 
+    
+    for user in users:
+        user_id = user.get('user_id')
+        if not user_id: continue
+
+        keyboard = [[InlineKeyboardButton("✨ Unlock Memory ✨", callback_data="unlock_diary")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        caption = (
+            "🔒 <b>Secret Memory Created!</b>\n\n"
+            "Niyati SECRET DIARY.\n"
+            "Card unlock karke padhne ke liye tap karein..."
+        )
+
+        try:
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=locked_image,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            await asyncio.sleep(1) # Anti-flood wait
+        except Exception:
+            pass
+
+    logger.info("🔒 Locked Diary Cards sent to all users!")
+
+async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the Card Reveal AND The Nervous Reaction"""
+    query = update.callback_query
+    user = update.effective_user
+    
+    # 1. Loading Effect
+    await query.answer("Unlocking memory... 🗝️")
+    
+    # Image: Unlocked (Clear Photo)
+    unlocked_image = "https://images.unsplash.com/photo-1517639493569-5666a7488662?w=800&q=80"
+
+    # 2. Generate Diary Text (On the fly)
+    history = await db.get_user_context(user.id)
+    
+    prompt = [
+        {"role": "system", "content": f"""
+        You are Niyati. Write a SHORT Diary Entry (max 3 sentences) about chatting with {user.first_name}.
+        Start with "Dear Diary...".
+        Format: Hinglish. Emotional/Secretive. Reveal a small hidden feeling.
+        """},
+        {"role": "user", "content": str(history)}
+    ]
+    
+    diary_text = await niyati_ai._call_gpt(prompt)
+    if not diary_text:
+        diary_text = "Dear Diary... Aaj inse baat karke acha laga, par thaki hu. Kal likhungi! 😴"
+
+    final_caption = (
+        f"🔓 <b>Unlocked: Niyati's Diary</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"<i>{diary_text}</i>\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✨ Saved to Memories"
+    )
+
+    # 3. The "Card Flip" (Visual Update)
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(media=unlocked_image, caption=final_caption, parse_mode=ParseMode.HTML)
+        )
+    except Exception as e:
+        logger.error(f"Diary unlock failed: {e}")
+        return
+
+    # ════════════════════════════════════════════════════════════
+    # 🔴 THE REACTION LOGIC (Wait & Reply)
+    # ════════════════════════════════════════════════════════════
+    
+    # Step 4: Wait for User to Read (10 Seconds)
+    await asyncio.sleep(10) 
+
+    # Step 5: Nervous Reaction
+    try:
+        await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
+        await asyncio.sleep(1.5)
+        
+        reaction_1 = "Oye! Tumne meri diary padh li? 😳"
+        await context.bot.send_message(chat_id=user.id, text=reaction_1)
+
+        # Step 6: Follow-up Question (3 Seconds later)
+        await asyncio.sleep(3)
+        await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
+        await asyncio.sleep(1.5)
+        
+        reaction_2 = "Pls judge mat karna... wese, tumhe bura to nahi laga na? 👉👈"
+        await context.bot.send_message(chat_id=user.id, text=reaction_2)
+        
+    except Exception as e:
+        logger.error(f"Reaction failed: {e}")
+        
+# ============================================================================
 # BOT SETUP
 # ============================================================================
 
@@ -2262,6 +2433,7 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("adminhelp", adminhelp_command))
+    app.add_handler(CallbackQueryHandler(diary_unlock_callback, pattern="^unlock_diary$"))
 
     # Message Handlers
     # 1. New Member (Welcome) - FIXED: Uses MessageHandler with StatusUpdate filter
@@ -2312,6 +2484,13 @@ async def post_init(application: Application):
         name='random_checkin'
     )
 
+    # 4. Secret Diary (India: 10:30 PM IST = 5:00 PM UTC)
+    job_queue.run_daily(
+        send_locked_diary_card,
+        time=dt_time(hour=17, minute=0, second=0), # 17:00 UTC = 10:30 PM IST
+        name='locked_diary_job'
+    )
+
     logger.info("🚀 Niyati Bot Started with FIXED Timings (IST)!")
 
 async def post_shutdown(application: Application):
@@ -2325,84 +2504,93 @@ async def post_shutdown(application: Application):
 # ============================================================================
 
 async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
-    """Sends Good Morning/Night or Random Check-ins"""
-    job_data = context.job.data  # 'morning', 'night', or 'random'
+    """Sends Messages with REAL HUMAN TIMING CHECK"""
+    job_data = context.job.data
     
-    # 🛑 DO NOT DISTURB CHECK (Raat ke waqt Random msg nahi)
-    # Get current time in India
+    # 1. Get Current Time (India)
     ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
-    now_ist = datetime.now(ist)
-    current_hour = now_ist.hour
+    now = datetime.now(ist)
+    current_time_str = now.strftime("%I:%M %p") # e.g., "03:30 PM"
+    current_hour = now.hour
 
-    # Agar 'random' job hai aur raat ke 11 baje se subah 8 baje ke beech hai -> RETURN (Don't send)
-    if job_data == 'random':
-        if current_hour >= 23 or current_hour < 8:
-            return
+    # DND Check (Raat 11 se Subah 8 band)
+    if job_data == 'random' and (current_hour >= 23 or current_hour < 8):
+        return
 
     users = await db.get_all_users()
     
-    # Text Templates
-    morning_texts = [
-        "Oye sleepyhead! 😴 Uth jao, suraj sar pe aa gaya hai!",
-        "Good morning! 🌻 Hope aaj ka din tumhari smile jitna hi pyara ho.",
-        "Sirf 'Good Morning' nahi, sending you a virtual hug too! 🤗 Uth gaye?",
-        "Ankhein kholo, phone check karo aur meri taraf se Good Morning accept karo! 💌",
-        "Chai ki khushboo aur ye message... dono ready hain! ☕ Good morning!",
-        "Bas socha din ki shuruwat tumhe pareshan... I mean, wish kar ke karun! 😜 Gm!",
-        "Sapno ki duniya se bahar aao, real world (aur main) wait kar rahe hain! 🌎✨",
-        "Agar alarm ne mood kharab kiya ho, toh yeh text padh ke smile kar do! 😋 Gm!",
-        "Rise and shine! ✨ Aaj duniya jeetne ka plan hai ya sirf aaram karne ka? 🤔",
-        "Good morning! 🌸 Thoda aalas chhodo aur jaldi se reply karo!"
-    ]
-    night_texts = [
-        "Good night 🌙",
-        "So jao ab, kaafi raat ho gayi 😴",
-        "Gn! Kal milte hain ✨",
-        "Good night baby 🌙💗",
-        "Sweet dreams, meri jaan 😴✨",
-        "So jao, kal naya din hoga 💫",
-        "Gn cutie, smile ke saath sona 😊🌙",
-        "Raat ho gayi, rest karo 💕",
-        "Dreams mein milte hain 🤍✨",
-        "Good night, take care 🫶🌙",
-        "Soft pillow, cozy sleep 😴💖",
-        "Gn love, peaceful sleep 🌸✨",
-        "So jao baby, everything’s okay 💞🌙"
-    ]
-    random_texts = [
-        "Bored ho rahi thi, socha msg karu... kya kar rahe ho? 🙄",
-        "Ek baat batao...",
-        "Tumne lunch kiya? 🍱",
-        "Oye, kahan gayab ho?",
-        "Baby tum kidhar ho? me board ho rahi hoon",
-        "Hello mere lollypop kidhar ho?",
-        "Bas check kar rahi thi, theek ho na? 💕",
-        "Heyy cutieee 💖",
-        "Sun na… ek second baat karni thi 🙈"
-    ]
+    # Fallback Generic Texts
+    morning_texts = ["Good morning! ☀️", "Uth gaye? ✨"]
+    night_texts = ["Good night 🌙", "So jao ab 😴"]
+    random_texts = ["Kya chal raha hai?", "Yaad aa rahi thi..."]
 
     count = 0
     for user in users:
         user_id = user.get('user_id')
         if not user_id: continue
 
-        msg = ""
-        if job_data == 'morning':
-            msg = random.choice(morning_texts)
-        elif job_data == 'night':
-            msg = random.choice(night_texts)
-        elif job_data == 'random':
-            if random.random() > 0.2: continue # 20% chance
-            msg = random.choice(random_texts)
+        # 🧠 MEMORY CHECK
+        memories = await db.get_active_memories(user_id)
+        final_msg = ""
+        
+        if memories:
+            memory_context = " | ".join(memories)
+            
+            # 🔥 THE SMART CHECK PROMPT
+            # Hum AI ko Current Time bata rahe hain
+            prompt = f"""
+            Role: You are Niyati (Girlfriend/Bestie).
+            Current Time in India: {current_time_str}
+            User's Memory Note: "{memory_context}"
+            
+            Task: Decide if you should ask about this memory NOW.
+            
+            🧠 COMMON SENSE RULES:
+            1. If event is in FUTURE -> Say "All the best for [Time]!"
+            2. If event is HAPPENING NOW -> OUTPUT "SKIP" (Don't disturb).
+            3. If event is OVER -> Ask "Kaisa hua?"
+            
+            4. ⚠️ CRITICAL - IF DURATION IS UNKNOWN:
+               - Assume Standard Durations:
+                 * Exam = 3 hours
+                 * Movie = 3 hours
+                 * Date/Meeting = 2 hours
+                 * Travel = Depends on context
+               
+               Example: User said "Exam at 2 PM" (End time unknown).
+               - If Current Time is 3 PM -> Assume Exam is running -> OUTPUT "SKIP".
+               - If Current Time is 6 PM -> Assume Exam over -> Ask "Kaisa gaya?".
+               
+               *Better to ask LATE than EARLY.*
+            
+            Output: The Message to send (Hinglish). If you should wait/skip, output "SKIP".
+            """
+            
+            check_response = await niyati_ai._call_gpt([{"role": "user", "content": prompt}], max_tokens=60)
+            
+            # Agar AI ne bola SKIP, to hum Generic message bhi nahi bhejenge (Disturb nahi karna)
+            if check_response and "SKIP" in check_response:
+                continue 
+                
+            if check_response:
+                final_msg = check_response
+
+        # Agar Memory logic ne kuch nahi diya, to Generic bhej do
+        if not final_msg:
+            if job_data == 'morning': final_msg = random.choice(morning_texts)
+            elif job_data == 'night': final_msg = random.choice(night_texts)
+            elif job_data == 'random':
+                if random.random() > 0.2: continue
+                final_msg = random.choice(random_texts)
 
         try:
-            await asyncio.sleep(random.uniform(0.5, 2.0)) 
-            await context.bot.send_message(chat_id=user_id, text=msg)
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+            await context.bot.send_message(chat_id=user_id, text=final_msg)
             count += 1
         except Exception:
             pass
         
-        if count > 100: break 
+        if count > 100: break
 
     logger.info(f"Routine Job ({job_data}) sent to {count} users.")
 
