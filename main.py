@@ -1217,8 +1217,10 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
 """
         return prompt
 
-    async def _call_gpt(self, messages):
-        """This function was missing! It makes the actual call to Groq."""
+    async def _call_gpt(self, messages, max_tokens=250, temperature=0.8):
+        """
+        FIXED: Ab ye max_tokens aur temperature accept karega.
+        """
         if not self.client: self._initialize_client()
         
         attempts = len(self.keys)
@@ -1227,8 +1229,9 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
                 response = await self.client.chat.completions.create(
                     model=Config.GROQ_MODEL,
                     messages=messages,
-                    max_tokens=250,
-                    temperature=0.8,
+                    # Yahan hum passed values use karenge, hardcoded nahi
+                    max_tokens=max_tokens, 
+                    temperature=temperature,
                     presence_penalty=0.4
                 )
                 return response.choices[0].message.content.strip()
@@ -2479,7 +2482,7 @@ async def post_init(application: Application):
     job_queue.run_repeating(
         routine_message_job,
         interval=timedelta(hours=4),
-        first=timedelta(seconds=60),
+        first=timedelta(hours=4),
         data='random',
         name='random_checkin'
     )
