@@ -14,7 +14,7 @@ import re
 import random
 import time
 import html
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from typing import Optional, Dict, List, Any, Tuple
 from collections import defaultdict, deque
 import threading
@@ -2529,32 +2529,46 @@ def setup_handlers(app: Application):
     app.add_error_handler(error_handler)
 
 
+# ============================================================================
+# 1. DEFINE INDIA TIMEZONE (IST)
+# ============================================================================
+# India is UTC + 5:30
+IST = timezone(timedelta(hours=5, minutes=30))
+
+# ============================================================================
+# POST_INIT FUNCTION - UPDATED FOR IST
+# ============================================================================
+
 async def post_init(application: Application):
-    """Initialize DB and Schedule Jobs with CORRECT UTC TIMING"""
+    """Initialize DB and Schedule Jobs with DIRECT IST TIMING"""
     await db.initialize()
     await health_server.start()
     
     job_queue = application.job_queue
     
-    # Schedule all jobs
+    # Schedule all jobs using the IST variable
     
-    # 1. Good Morning (India: 08:30 AM IST = 03:00 AM UTC)
+    # 1. Good Morning (India: 08:30 AM)
     job_queue.run_daily(
         routine_message_job,
-        time=datetime.time(hour=3, minute=0, second=0),  # 3:00 AM UTC
+        # Write actual India time and add tzinfo=IST
+        time=time(hour=8, minute=30, second=0, tzinfo=IST), 
         data='morning',
         name='daily_morning'
     )
 
-    # 2. Good Night (India: 10:30 PM IST = 05:00 PM UTC)
+    # 2. Good Night (India: 10:30 PM = 22:30)
     job_queue.run_daily(
         routine_message_job,
-        time=datetime.time(hour=17, minute=0, second=0), # 5:00 PM UTC
+        # Write actual India time and add tzinfo=IST
+        time=time(hour=22, minute=30, second=0, tzinfo=IST),
         data='night',
         name='daily_night'
     )
 
     # 3. Random Check-in (Runs every 4 hours)
+    # Note: Interval jobs rely on timedelta, so timezone doesn't impact the 'interval', 
+    # but 'first' delays the start.
     job_queue.run_repeating(
         routine_message_job,
         interval=timedelta(hours=4),
@@ -2563,17 +2577,19 @@ async def post_init(application: Application):
         name='random_checkin'
     )
 
-    # 4. Secret Diary (India: 10:30 PM IST = 5:00 PM UTC)
+    # 4. Secret Diary (India: 10:30 PM = 22:30)
     job_queue.run_daily(
         send_locked_diary_card,
-        time=datetime.time(hour=17, minute=0, second=0), # 5:00 PM UTC = 10:30 PM IST
+        # Write actual India time and add tzinfo=IST
+        time=time(hour=22, minute=30, second=0, tzinfo=IST),
         name='locked_diary_job'
     )
 
-    # 5. Daily Geeta Quotes (Morning: 7 AM IST = 1:30 AM UTC)
+    # 5. Daily Geeta Quotes (India: 07:00 AM)
     job_queue.run_daily(
         send_daily_geeta,
-        time=datetime.time(hour=1, minute=30, second=0),
+        # Write actual India time and add tzinfo=IST
+        time=time(hour=7, minute=0, second=0, tzinfo=IST),
         name='daily_geeta'
     )
 
@@ -2585,14 +2601,7 @@ async def post_init(application: Application):
         name='cleanup'
     )
 
-    logger.info("🚀 Niyati Bot Started with FIXED Timings (IST)!")
-
-
-async def post_shutdown(application: Application):
-    """Bot band hone par cleanup"""
-    await health_server.stop()
-    await db.close()
-    logger.info("😴 Niyati Bot Stopped.")
+    logger.info("🚀 Niyati Bot Started with IST (India) Timezone!")
 
 
 # ============================================================================
