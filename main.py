@@ -2529,46 +2529,44 @@ def setup_handlers(app: Application):
     app.add_error_handler(error_handler)
 
 
-# ============================================================================
-# 1. DEFINE INDIA TIMEZONE (IST)
-# ============================================================================
-# India is UTC + 5:30
-IST = timezone(timedelta(hours=5, minutes=30))
+# ... [ALL PREVIOUS CODE UP TO SETUP_HANDLERS FUNCTION] ...
 
 # ============================================================================
-# POST_INIT FUNCTION - UPDATED FOR IST
+# POST_SHUTDOWN & POST_INIT - MOVED BEFORE MAIN()
 # ============================================================================
+
+async def post_shutdown(application: Application):
+    """Bot band hone par cleanup"""
+    await health_server.stop()
+    await db.close()
+    logger.info("😴 Niyati Bot Stopped.")
 
 async def post_init(application: Application):
-    """Initialize DB and Schedule Jobs with DIRECT IST TIMING"""
+    """Initialize DB and Schedule Jobs with CORRECT UTC TIMING"""
     await db.initialize()
     await health_server.start()
     
     job_queue = application.job_queue
     
-    # Schedule all jobs using the IST variable
+    # Schedule all jobs
     
-    # 1. Good Morning (India: 08:30 AM)
+    # 1. Good Morning (India: 08:30 AM IST = 03:00 AM UTC)
     job_queue.run_daily(
         routine_message_job,
-        # Write actual India time and add tzinfo=IST
-        time=time(hour=8, minute=30, second=0, tzinfo=IST), 
+        time=time(hour=3, minute=0, second=0),  # ✅ FIXED: Use time() directly
         data='morning',
         name='daily_morning'
     )
 
-    # 2. Good Night (India: 10:30 PM = 22:30)
+    # 2. Good Night (India: 10:30 PM IST = 05:00 PM UTC)
     job_queue.run_daily(
         routine_message_job,
-        # Write actual India time and add tzinfo=IST
-        time=time(hour=22, minute=30, second=0, tzinfo=IST),
+        time=time(hour=17, minute=0, second=0), # ✅ FIXED: Use time() directly
         data='night',
         name='daily_night'
     )
 
     # 3. Random Check-in (Runs every 4 hours)
-    # Note: Interval jobs rely on timedelta, so timezone doesn't impact the 'interval', 
-    # but 'first' delays the start.
     job_queue.run_repeating(
         routine_message_job,
         interval=timedelta(hours=4),
@@ -2577,19 +2575,17 @@ async def post_init(application: Application):
         name='random_checkin'
     )
 
-    # 4. Secret Diary (India: 10:30 PM = 22:30)
+    # 4. Secret Diary (India: 10:30 PM IST = 5:00 PM UTC)
     job_queue.run_daily(
         send_locked_diary_card,
-        # Write actual India time and add tzinfo=IST
-        time=time(hour=22, minute=30, second=0, tzinfo=IST),
+        time=time(hour=17, minute=0, second=0), # ✅ FIXED: Use time() directly
         name='locked_diary_job'
     )
 
-    # 5. Daily Geeta Quotes (India: 07:00 AM)
+    # 5. Daily Geeta Quotes (Morning: 7 AM IST = 1:30 AM UTC)
     job_queue.run_daily(
         send_daily_geeta,
-        # Write actual India time and add tzinfo=IST
-        time=time(hour=7, minute=0, second=0, tzinfo=IST),
+        time=time(hour=1, minute=30, second=0), # ✅ FIXED: Use time() directly
         name='daily_geeta'
     )
 
@@ -2601,8 +2597,7 @@ async def post_init(application: Application):
         name='cleanup'
     )
 
-    logger.info("🚀 Niyati Bot Started with IST (India) Timezone!")
-
+    logger.info("🚀 Niyati Bot Started with FIXED Timings (IST)!")
 
 # ============================================================================
 # MAIN EXECUTION
@@ -2614,7 +2609,7 @@ def main():
         logger.error("❌ Error: TELEGRAM_BOT_TOKEN nahi mila! .env file check karo.")
         return
 
-    # Application Builder
+    # ✅ FIXED: Both post_init and post_shutdown are now defined before use
     app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
 
     # Setup Handlers
@@ -2623,7 +2618,6 @@ def main():
     # Start Polling
     logger.info("⏳ Initializing Bot...")
     app.run_polling(drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     try:
