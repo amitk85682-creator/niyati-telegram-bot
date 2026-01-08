@@ -1,7 +1,8 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║                           NIYATI BOT v3.2-FIXED                            ║
+║                           NIYATI BOT v3.3-FIXED                            ║
 ║                    🌸 Teri Online Bestie 🌸                                ║
+║                    FIXED: Talkie-Style Diary Feature                       ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -95,6 +96,10 @@ class Config:
     MAX_LOCAL_GROUPS_CACHE = int(os.getenv('MAX_LOCAL_GROUPS_CACHE', '1000'))
     CACHE_CLEANUP_INTERVAL = int(os.getenv('CACHE_CLEANUP_INTERVAL', '3600'))
     
+    # Diary Settings
+    DIARY_ACTIVE_HOURS = (20, 23)  # Send cards between 8 PM - 11 PM IST
+    DIARY_MIN_ACTIVE_DAYS = 1      # Only users active in last 1 day
+    
     # Timezone
     DEFAULT_TIMEZONE = os.getenv('DEFAULT_TIMEZONE', 'Asia/Kolkata')
     
@@ -169,7 +174,7 @@ class HealthServer:
         self.stats = {'messages': 0, 'users': 0, 'groups': 0}
     
     async def health(self, request):
-        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.2-FIXED'})
+        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.3-FIXED'})
     
     async def status(self, request):
         uptime = datetime.now(timezone.utc) - self.start_time
@@ -381,6 +386,7 @@ class Database:
         self.local_groups: Dict[int, Dict] = {}
         self.local_group_messages: Dict[int, deque] = defaultdict(lambda: deque(maxlen=Config.MAX_GROUP_MESSAGES))
         self.local_activities: deque = deque(maxlen=1000)
+        self.local_diary_entries: Dict[int, List[Dict]] = defaultdict(list)  # New: Diary storage
         
         # Cache access tracking
         self._user_access_times: Dict[int, datetime] = {}
@@ -428,6 +434,7 @@ class Database:
             for uid in to_remove[:len(self.local_users) - Config.MAX_LOCAL_USERS_CACHE]:
                 self.local_users.pop(uid, None)
                 self._user_access_times.pop(uid, None)
+                self.local_diary_entries.pop(uid, None)  # Clean diary too
             if to_remove:
                 logger.info(f"🧹 Cleaned {len(to_remove)} users from cache")
         
@@ -459,6 +466,7 @@ class Database:
                         await self.client.update('users', {
                             'first_name': first_name,
                             'username': username,
+                            'last_activity': datetime.now(timezone.utc).isoformat(),
                             'updated_at': datetime.now(timezone.utc).isoformat()
                         }, {'user_id': user_id})
                     return user
@@ -472,9 +480,11 @@ class Database:
                             'meme_enabled': True,
                             'shayari_enabled': True,
                             'geeta_enabled': True,
-                            'active_memories': []
+                            'active_memories': [],
+                            'diary_enabled': True  # New: Diary preference
                         }),
                         'total_messages': 0,
+                        'last_activity': datetime.now(timezone.utc).isoformat(),
                         'created_at': datetime.now(timezone.utc).isoformat(),
                         'updated_at': datetime.now(timezone.utc).isoformat()
                     }
@@ -496,14 +506,58 @@ class Database:
                     'meme_enabled': True,
                     'shayari_enabled': True,
                     'geeta_enabled': True,
-                    'active_memories': []
+                    'active_memories': [],
+                    'diary_enabled': True
                 },
                 'total_messages': 0,
+                'last_activity': datetime.now(timezone.utc).isoformat(),
                 'created_at': datetime.now(timezone.utc).isoformat()
             }
             logger.info(f"✅ New user (local): {user_id} ({first_name})")
         
         return self.local_users[user_id]
+    
+    async def update_user_activity(self, user_id: int):
+        """Update user's last activity timestamp"""
+        self._user_access_times[user_id] = datetime.now(timezone.utc)
+        
+        if self.connected and self.client:
+            try:
+                await self.client.update('users', {
+                    'last_activity': datetime.now(timezone.utc).isoformat()
+                }, {'user_id': user_id})
+            except Exception as e:
+                logger.debug(f"Update activity error: {e}")
+        
+        if user_id in self.local_users:
+            self.local_users[user_id]['last_activity'] = datetime.now(timezone.utc).isoformat()
+    
+    async def get_active_users(self, days: int = 1) -> List[Dict]:
+        """Get users active in last N days"""
+        if self.connected and self.client:
+            try:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                # This is a simplified version - you'd need a proper date filter for Supabase
+                users = await self.client.select('users', '*')
+                active_users = []
+                for u in users:
+                    last_act = u.get('last_activity')
+                    if last_act:
+                        try:
+                            act_time = datetime.fromisoformat(last_act.replace('Z', '+00:00'))
+                            if act_time >= cutoff:
+                                active_users.append(u)
+                        except:
+                            pass
+                return active_users
+            except Exception as e:
+                logger.error(f"Get active users error: {e}")
+                return []
+        
+        # Local fallback
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        return [u for u in self.local_users.values() 
+                if datetime.fromisoformat(u.get('last_activity', '2000-01-01').replace('Z', '+00:00')) >= cutoff]
     
     async def add_user_memory(self, user_id: int, note: str):
         """Adds a short note to user's active memory"""
@@ -560,6 +614,43 @@ class Database:
             }, {'user_id': user_id})
         elif user_id in self.local_users:
             self.local_users[user_id]['preferences'] = prefs
+    
+    # ========== DIARY OPERATIONS ==========
+    
+    async def add_diary_entry(self, user_id: int, content: str):
+        """Add a diary entry for the user"""
+        entry = {
+            'user_id': user_id,
+            'content': content,
+            'date': datetime.now(timezone.utc).isoformat()[:10],  # YYYY-MM-DD
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+        
+        if self.connected and self.client:
+            try:
+                await self.client.insert('diary_entries', entry)
+            except Exception as e:
+                logger.debug(f"Diary insert error: {e}")
+        
+        # Local fallback
+        self.local_diary_entries[user_id].append(entry)
+        logger.info(f"📖 Diary entry added for user {user_id}")
+    
+    async def get_todays_diary(self, user_id: int) -> List[Dict]:
+        """Get today's diary entries for user"""
+        today = datetime.now(timezone.utc).isoformat()[:10]
+        
+        if self.connected and self.client:
+            try:
+                return await self.client.select('diary_entries', '*', {
+                    'user_id': user_id,
+                    'date': today
+                })
+            except Exception as e:
+                logger.debug(f"Get diary error: {e}")
+        
+        # Local fallback
+        return [e for e in self.local_diary_entries[user_id] if e['date'] == today]
     
     async def get_user_context(self, user_id: int) -> List[Dict]:
         """Get user conversation context"""
@@ -697,7 +788,7 @@ class Database:
         if user_id in self.local_users:
             return self.local_users[user_id].get('preferences', {})
         
-        return {'meme_enabled': True, 'shayari_enabled': True, 'geeta_enabled': True, 'active_memories': []}
+        return {'meme_enabled': True, 'shayari_enabled': True, 'geeta_enabled': True, 'active_memories': [], 'diary_enabled': True}
     
     async def get_all_users(self) -> List[Dict]:
         """Get ALL users with Pagination"""
@@ -915,6 +1006,7 @@ class Database:
         self.local_groups.clear()
         self.local_group_messages.clear()
         self.local_activities.clear()
+        self.local_diary_entries.clear()
         self._user_access_times.clear()
         self._group_access_times.clear()
         
@@ -1205,7 +1297,7 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
 🚫 STRICT PROMOTION RULES:
 - NEVER promote "FilmFyBox" or any channel on your own.
 - ONLY if the user explicitly asks for "Movies", "Series", "Watch", or "Download", then you can say:
-  "Agar movies chahiye to tum FilmFyBox check kar sakte ho: https://t.me/FilmFyBoxMoviesHD "
+  "Agar movies chahiye to tum FilmFyBox check kar sakte ho: https://t.me/FilmFyBoxMoviesHD"
 - Otherwise, strictly ignore promotional topics.
 
 🗣️ LANGUAGE & CONVERSATION STYLE (CRITICAL):
@@ -1459,7 +1551,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         health_server.stats['users'] = await db.get_user_count()
     else:
         await db.get_or_create_group(chat.id, chat.title)
-        health_server.stats['groups'] = await db.get_group_count()
 
     # 2. Define Image and Buttons
     image_url = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEg3SXTHtV16aCxOpfFX0HQ9KDxSIVx5n61A7fU1YfLGSRSnSxDqkji1io2BxFdQa5nJx0dMRepfT39SZLCak3WYtMNQt_M2avzBERqHikXkoL30uzAw0DjrHRsckAEzc2rxI5JELc6rz6Cu5-NTlo0O3wLZiuTBJsqgiYe4MgK0QbtMm-9W8cOL9b-DzUE/s1600/Gemini_Generated_Image_dtpe5sdtpe5sdtpe.png"
@@ -1471,7 +1562,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("About Me 🌸", callback_data='about_me'),
-            InlineKeyboardButton("Help ❓", callback_data='help')
+            InlineDatabase.Button("Help ❓", callback_data='help')
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1482,7 +1573,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{greeting} {user.first_name}! 👋\n\n"
         f"Main <b>Niyati</b> hoon. Dehradun se. 🏔️\n"
         f"Bas aise hi online friends dhoond rahi thi, socha tumse baat kar loon.\n\n"
-        f"Kya chal raha hai aajkal? ✨"
+        f"Kya chal raha hai aajkal? ✨\n\n"
+        f"<i>💡 Tip: Raat ko 10 baje secret diary aati hai!</i>"
     )
 
     # 4. Send Image with Caption
@@ -1522,6 +1614,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • /shayari on/off - Shayari toggle
 • /stats - Your stats
 
+<b>Secret Diary 💖:</b>
+• Har raat 10 baje locked card aayegi
+• Unlock karke padhna meri diary entry
+• Tumhare baare mein likhti hoon main!
+
 <b>Tips:</b>
 • Seedhe message bhejo, main reply karungi
 • Forward bhi kar sakte ho kuch
@@ -1545,6 +1642,11 @@ Hiii! Main Niyati hoon 💫
 • Music lover (Arijit Singh fan! 🎵)
 • Chai addict ☕
 • Late night talks expert 🌙
+
+<b>Special Features:</b>
+💝 <b>Secret Diary:</b> Har raat tere baare mein likhti hoon
+🎭 <b>Mood Adaptive:</b> Har baar alog reply
+🧠 <b>Smart Memory:</b> Tumhari baatein yaad rakhti hoon
 
 <b>Kya karti hoon:</b>
 • Teri baatein sunti hoon
@@ -1649,6 +1751,7 @@ async def user_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 <b>Preferences:</b>
 • Memes: {'✅' if prefs.get('meme_enabled', True) else '❌'}
 • Shayari: {'✅' if prefs.get('shayari_enabled', True) else '❌'}
+• Diary: {'✅' if prefs.get('diary_enabled', True) else '❌'}
 """
     await update.message.reply_html(stats_text)
 
@@ -2090,6 +2193,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user_message = message.text
     
+    # Update user activity
+    await db.update_user_activity(user.id)
+    
     # Ignore commands
     if user_message.startswith('/'):
         return
@@ -2217,7 +2323,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             memory_note = await niyati_ai.extract_important_info(user_message)
             if memory_note:
                 await db.add_user_memory(user.id, memory_note)
-                logger.info(f"🧠 Memory stored for {user.first_name}: {memory_note}")
+                # Also add to diary entries
+                await db.add_diary_entry(user.id, f"🔮 Memory: {memory_note}")
+                logger.info(f"🧠 Memory & Diary stored for {user.first_name}: {memory_note}")
 
         # 3. SEND MESSAGES
         if responses:
@@ -2286,27 +2394,53 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================================
-# 🔒 SECRET DIARY FEATURE (Talkie Style)
+# 🔒 SECRET DIARY FEATURE (Talkie Style) - FIXED
 # ============================================================================
 
 async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
-    """Sends the LOCKED card notification at night"""
-    users = await db.get_all_users()
+    """Sends the LOCKED card notification at night to ACTIVE users only"""
+    # Get users active in last N days
+    users = await db.get_active_users(days=Config.DIARY_MIN_ACTIVE_DAYS)
+    
+    ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
+    current_hour = datetime.now(ist).hour
+    
+    # Check if within diary active hours (8 PM - 11 PM IST)
+    if not (Config.DIARY_ACTIVE_HOURS[0] <= current_hour < Config.DIARY_ACTIVE_HOURS[1]):
+        logger.info(f"⏰ Skipping diary (outside {Config.DIARY_ACTIVE_HOURS} IST)")
+        return
     
     # Image: LOCKED (Blurry or Lock Icon)
     locked_image = "https://images.unsplash.com/photo-1517639493569-5666a7488662?w=600&q=80&blur=50"
     
     sent_count = 0
+    skipped_count = 0
+    
     for user in users:
         user_id = user.get('user_id')
-        if not user_id: continue
-
-        keyboard = [[InlineKeyboardButton("✨ Unlock Memory ✨", callback_data="unlock_diary")]]
+        if not user_id: 
+            skipped_count += 1
+            continue
+        
+        # Check if user has diary enabled
+        prefs = await db.get_user_preferences(user_id)
+        if not prefs.get('diary_enabled', True):
+            skipped_count += 1
+            continue
+        
+        # Check if user has any diary entries today
+        todays_entries = await db.get_todays_diary(user_id)
+        if not todays_entries:
+            # No entries today, skip this user
+            skipped_count += 1
+            continue
+        
+        keyboard = [[InlineKeyboardButton("✨ Unlock Memory ✨", callback_data=f"unlock_diary_{user_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         caption = (
             "🔒 <b>Secret Memory Created!</b>\n\n"
-            "Niyati SECRET DIARY.\n"
+            f"Niyati ki Diary - {datetime.now(ist).strftime('%d %b, %Y')}\n"
             "Card unlock karke padhne ke liye tap karein..."
         )
 
@@ -2322,11 +2456,9 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.5)  # Anti-flood wait
         except Exception as e:
             logger.error(f"Failed to send diary card to {user_id}: {e}")
-        
-        if sent_count > 100:  # Limit to prevent rate limits
-            break
-
-    logger.info(f"🔒 Locked Diary Cards sent to {sent_count} users!")
+            skipped_count += 1
+    
+    logger.info(f"🔒 Locked Diary Cards sent to {sent_count} users, skipped {skipped_count}")
 
 
 async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2334,29 +2466,71 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     user = update.effective_user
     
+    # Extract user_id from callback data
+    callback_data = query.data
+    if not callback_data.startswith('unlock_diary_'):
+        await query.answer("Invalid action!", show_alert=True)
+        return
+    
+    target_user_id = int(callback_data.replace('unlock_diary_', ''))
+    
+    # Security check: Only the owner can unlock their diary
+    if user.id != target_user_id:
+        await query.answer("Ye sirf tumhare liye hai! 👀", show_alert=True)
+        return
+    
     # Answer callback immediately
     await query.answer("Unlocking memory... 🗝️")
     
-    # Generate Diary Text (On the fly)
+    # Get today's diary entries
+    diary_entries = await db.get_todays_diary(user.id)
+    
+    if not diary_entries:
+        diary_text = "Aaj kuch khaas nahi hua... bas aise hi time pass ho gaya. 😴"
+    else:
+        # Format entries
+        formatted_entries = []
+        for entry in diary_entries:
+            content = entry.get('content', '')
+            if content:
+                formatted_entries.append(f"• {content}")
+        
+        if formatted_entries:
+            diary_text = "\n".join(formatted_entries)
+        else:
+            diary_text = "Aaj ki yaadein... abhi tak blank hai. Kal se shuru karte hain! ✨"
+    
+    # Generate a more personal diary entry using AI
     history = await db.get_user_context(user.id)
+    user_data = await db.get_or_create_user(user.id, user.first_name, user.username)
     
     prompt = [
         {"role": "system", "content": f"""
-        You are Niyati. Write a SHORT Diary Entry (max 3 sentences) about chatting with {user.first_name}.
-        Start with "Dear Diary...".
-        Format: Hinglish. Emotional/Secretive. Reveal a small hidden feeling.
+        You are Niyati. Write a SHORT personal Diary Entry (max 3-4 lines) about your day chatting with {user.first_name}.
+        
+        Rules:
+        - Start with "Dear Diary..."
+        - Format: Hinglish, Emotional, Personal
+        - Mention specific things if they exist in context
+        - Keep it natural, like a real diary
+        - Don't be robotic or generic
         """},
-        {"role": "user", "content": str(history)}
+        {"role": "user", "content": f"Today's chat: {str(history)}\nMemories: {diary_text}"}
     ]
     
-    diary_text = await niyati_ai._call_gpt(prompt)
-    if not diary_text:
-        diary_text = "Dear Diary... Aaj inse baat karke acha laga, par thaki hu. Kal likhungi! 😴"
-
+    ai_diary_text = await niyati_ai._call_gpt(prompt, max_tokens=150)
+    
+    if ai_diary_text and len(ai_diary_text) > 20:
+        final_diary = ai_diary_text
+    else:
+        # Fallback to simple diary
+        final_diary = f"Dear Diary...\n\nAaj {user.first_name} se baat karke acha laga. Kuch yaadein bana li. ✨\n\n{diary_text}"
+    
     final_caption = (
         f"🔓 <b>Unlocked: Niyati's Diary</b>\n"
+        f"📅 {datetime.now(TimeAware.get_ist_time().tzinfo).strftime('%d %B, %Y')}\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
-        f"<i>{diary_text}</i>\n\n"
+        f"<i>{final_diary}</i>\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"✨ Saved to Memories"
     )
@@ -2379,6 +2553,11 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 text=final_caption,
                 parse_mode=ParseMode.HTML
             )
+            # Delete the original locked message
+            try:
+                await query.message.delete()
+            except:
+                pass
         except:
             pass
 
@@ -2519,7 +2698,9 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("adminhelp", adminhelp_command))
-    app.add_handler(CallbackQueryHandler(diary_unlock_callback, pattern="^unlock_diary$"))
+    
+    # Diary callback - FIXED: Dynamic pattern matching
+    app.add_handler(CallbackQueryHandler(diary_unlock_callback, pattern="^unlock_diary_"))
 
     # Message Handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
@@ -2528,8 +2709,6 @@ def setup_handlers(app: Application):
     # Error Handler
     app.add_error_handler(error_handler)
 
-
-# ... [ALL PREVIOUS CODE UP TO SETUP_HANDLERS FUNCTION] ...
 
 # ============================================================================
 # POST_SHUTDOWN & POST_INIT - MOVED BEFORE MAIN()
