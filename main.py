@@ -1,8 +1,8 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║                           NIYATI BOT v3.3-FIXED                            ║
+║                           NIYATI BOT v3.4-FIXED                            ║
 ║                    🌸 Teri Online Bestie 🌸                                ║
-║                    FIXED: Talkie-Style Diary Feature                       ║
+║         FIXED: Diary + Group Repetition + Boring Responses                 ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -118,7 +118,7 @@ class Config:
     USER_COOLDOWN_SECONDS = int(os.getenv('USER_COOLDOWN_SECONDS', '3'))
     RANDOM_SHAYARI_CHANCE = float(os.getenv('RANDOM_SHAYARI_CHANCE', '0.15'))
     RANDOM_MEME_CHANCE = float(os.getenv('RANDOM_MEME_CHANCE', '0.10'))
-    GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.3'))
+    GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.15'))  # REDUCED from 0.3
     PRIVACY_MODE = os.getenv('PRIVACY_MODE', 'false').lower() == 'true'
     
     @classmethod
@@ -174,7 +174,7 @@ class HealthServer:
         self.stats = {'messages': 0, 'users': 0, 'groups': 0}
     
     async def health(self, request):
-        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.3-FIXED'})
+        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.4-FIXED'})
     
     async def status(self, request):
         uptime = datetime.now(timezone.utc) - self.start_time
@@ -250,6 +250,11 @@ class SupabaseClient:
                 response = await client.get(f"{self.rest_url}/users?select=user_id&limit=1")
                 
                 if response.status_code == 200:
+                    # Also check if diary_entries table exists
+                    diary_check = await client.get(f"{self.rest_url}/diary_entries?select=id&limit=1")
+                    if diary_check.status_code != 200:
+                        logger.warning("⚠️ diary_entries table not found! Diary feature will use local storage.")
+                    
                     self._verified = True
                     logger.info("✅ Supabase tables verified")
                     return True
@@ -386,7 +391,8 @@ class Database:
         self.local_groups: Dict[int, Dict] = {}
         self.local_group_messages: Dict[int, deque] = defaultdict(lambda: deque(maxlen=Config.MAX_GROUP_MESSAGES))
         self.local_activities: deque = deque(maxlen=1000)
-        self.local_diary_entries: Dict[int, List[Dict]] = defaultdict(list)  # New: Diary storage
+        self.local_diary_entries: Dict[int, List[Dict]] = defaultdict(list)
+        self.local_group_responses: Dict[int, Dict] = defaultdict(lambda: {'last_response': '', 'timestamp': datetime.min})
         
         # Cache access tracking
         self._user_access_times: Dict[int, datetime] = {}
@@ -434,7 +440,7 @@ class Database:
             for uid in to_remove[:len(self.local_users) - Config.MAX_LOCAL_USERS_CACHE]:
                 self.local_users.pop(uid, None)
                 self._user_access_times.pop(uid, None)
-                self.local_diary_entries.pop(uid, None)  # Clean diary too
+                self.local_diary_entries.pop(uid, None)
             if to_remove:
                 logger.info(f"🧹 Cleaned {len(to_remove)} users from cache")
         
@@ -445,6 +451,7 @@ class Database:
                 self.local_groups.pop(gid, None)
                 self._group_access_times.pop(gid, None)
                 self.local_group_messages.pop(gid, None)
+                self.local_group_responses.pop(gid, None)
             if to_remove:
                 logger.info(f"🧹 Cleaned {len(to_remove)} groups from cache")
     
@@ -480,8 +487,8 @@ class Database:
                             'meme_enabled': True,
                             'shayari_enabled': True,
                             'geeta_enabled': True,
-                            'active_memories': [],
-                            'diary_enabled': True  # New: Diary preference
+                            'diary_enabled': True,
+                            'active_memories': []
                         }),
                         'total_messages': 0,
                         'last_activity': datetime.now(timezone.utc).isoformat(),
@@ -506,8 +513,8 @@ class Database:
                     'meme_enabled': True,
                     'shayari_enabled': True,
                     'geeta_enabled': True,
-                    'active_memories': [],
-                    'diary_enabled': True
+                    'diary_enabled': True,
+                    'active_memories': []
                 },
                 'total_messages': 0,
                 'last_activity': datetime.now(timezone.utc).isoformat(),
@@ -537,7 +544,6 @@ class Database:
         if self.connected and self.client:
             try:
                 cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-                # This is a simplified version - you'd need a proper date filter for Supabase
                 users = await self.client.select('users', '*')
                 active_users = []
                 for u in users:
@@ -563,7 +569,6 @@ class Database:
         """Adds a short note to user's active memory"""
         prefs = await self.get_user_preferences(user_id)
         
-        # Existing memories uthao ya nayi list banao
         memories = prefs.get('active_memories', [])
         
         # Add new note with timestamp
@@ -574,10 +579,9 @@ class Database:
         }
         memories.append(new_note)
         
-        # Keep only last 5 active memories to save space
+        # Keep only last 5 active memories
         memories = memories[-5:]
         
-        # Save back to DB
         prefs['active_memories'] = memories
         
         if self.connected and self.client:
@@ -593,7 +597,6 @@ class Database:
         prefs = await self.get_user_preferences(user_id)
         memories = prefs.get('active_memories', [])
         
-        # Filter only active memories
         active = [m['note'] for m in memories if m.get('status') == 'active']
         return active
     
@@ -622,7 +625,7 @@ class Database:
         entry = {
             'user_id': user_id,
             'content': content,
-            'date': datetime.now(timezone.utc).isoformat()[:10],  # YYYY-MM-DD
+            'date': datetime.now(timezone.utc).isoformat()[:10],
             'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
@@ -632,7 +635,6 @@ class Database:
             except Exception as e:
                 logger.debug(f"Diary insert error: {e}")
         
-        # Local fallback
         self.local_diary_entries[user_id].append(entry)
         logger.info(f"📖 Diary entry added for user {user_id}")
     
@@ -649,7 +651,6 @@ class Database:
             except Exception as e:
                 logger.debug(f"Get diary error: {e}")
         
-        # Local fallback
         return [e for e in self.local_diary_entries[user_id] if e['date'] == today]
     
     async def get_user_context(self, user_id: int) -> List[Dict]:
@@ -711,7 +712,6 @@ class Database:
             except Exception as e:
                 logger.debug(f"Save message error: {e}")
         
-        # Local fallback
         if user_id in self.local_users:
             if 'messages' not in self.local_users[user_id]:
                 self.local_users[user_id]['messages'] = []
@@ -788,7 +788,7 @@ class Database:
         if user_id in self.local_users:
             return self.local_users[user_id].get('preferences', {})
         
-        return {'meme_enabled': True, 'shayari_enabled': True, 'geeta_enabled': True, 'active_memories': [], 'diary_enabled': True}
+        return {'meme_enabled': True, 'shayari_enabled': True, 'geeta_enabled': True, 'diary_enabled': True, 'active_memories': []}
     
     async def get_all_users(self) -> List[Dict]:
         """Get ALL users with Pagination"""
@@ -962,7 +962,7 @@ class Database:
                 logger.debug(f"Group count error: {e}")
         return len(self.local_groups)
     
-    # ========== GROUP MESSAGE CACHE ==========
+    # ========== GROUP MESSAGE CACHE & RESPONSE TRACKING ==========
     
     def add_group_message(self, chat_id: int, username: str, content: str):
         """Add message to group cache"""
@@ -975,6 +975,25 @@ class Database:
     def get_group_context(self, chat_id: int) -> List[Dict]:
         """Get group message context"""
         return list(self.local_group_messages.get(chat_id, []))
+    
+    def should_send_group_response(self, chat_id: int, response_text: str) -> bool:
+        """Check if we should send this response (avoid repetition)"""
+        now = datetime.now(timezone.utc)
+        last_data = self.local_group_responses[chat_id]
+        
+        # Check if same response was sent within last hour
+        if (last_data['last_response'] == response_text and 
+            (now - last_data['timestamp']) < timedelta(hours=1)):
+            return False
+        
+        return True
+    
+    def record_group_response(self, chat_id: int, response_text: str):
+        """Record that we sent this response"""
+        self.local_group_responses[chat_id] = {
+            'last_response': response_text,
+            'timestamp': datetime.now(timezone.utc)
+        }
     
     # ========== ACTIVITY LOGGING ==========
     
@@ -1007,6 +1026,7 @@ class Database:
         self.local_group_messages.clear()
         self.local_activities.clear()
         self.local_diary_entries.clear()
+        self.local_group_responses.clear()
         self._user_access_times.clear()
         self._group_access_times.clear()
         
@@ -1026,6 +1046,7 @@ class RateLimiter:
     def __init__(self):
         self.requests = defaultdict(lambda: {'minute': deque(), 'day': deque()})
         self.cooldowns: Dict[int, datetime] = {}
+        self.group_cooldowns: Dict[int, datetime] = {}  # Per-user group cooldown
         self.lock = threading.Lock()
         self._last_cleanup = datetime.now(timezone.utc)
     
@@ -1061,6 +1082,17 @@ class RateLimiter:
             self.cooldowns[user_id] = now
             return True, ""
     
+    def check_group_cooldown(self, user_id: int) -> bool:
+        """Check group-specific cooldown (longer)"""
+        now = datetime.now(timezone.utc)
+        with self.lock:
+            if user_id in self.group_cooldowns:
+                last_time = self.group_cooldowns[user_id]
+                if (now - last_time).total_seconds() < 300:  # 5 min cooldown in groups
+                    return False
+            self.group_cooldowns[user_id] = now
+            return True
+    
     def get_daily_total(self) -> int:
         """Get total daily requests"""
         return sum(len(r['day']) for r in self.requests.values())
@@ -1077,11 +1109,15 @@ class RateLimiter:
             for uid in expired:
                 del self.cooldowns[uid]
             
+            expired_group = [uid for uid, t in self.group_cooldowns.items() if (now - t).total_seconds() > 7200]
+            for uid in expired_group:
+                del self.group_cooldowns[uid]
+            
             expired_req = [uid for uid, r in self.requests.items() if not r['day']]
             for uid in expired_req:
                 del self.requests[uid]
             
-            self._last_cleanup = now
+            self._local_cleanup = now
 
 
 rate_limiter = RateLimiter()
@@ -1116,11 +1152,11 @@ class TimeAware:
     def get_greeting() -> str:
         period = TimeAware.get_time_period()
         greetings = {
-            'morning': ["good morning ☀️", "uth gaye?", "subah subah! ✨"],
-            'afternoon': ["heyyy", "lunch ho gaya?", "afternoon vibes 🌤️"],
-            'evening': ["hiii 💫", "chai time! ☕", "shaam ho gayi yaar"],
-            'night': ["heyy 🌙", "night owl?", "aaj kya plan hai"],
-            'late_night': ["aap bhi jaag rahe? 👀", "insomnia gang 🦉", "neend nahi aa rahi?"]
+            'morning': ["good morning ☀️", "uth gaye?", "subah subah! ✨", "Morning babe! ❤️"],
+            'afternoon': ["heyyy", "lunch ho gaya?", "afternoon vibes 🌤️", "Bore ho rahi hoon 😴"],
+            'evening': ["hiii 💫", "chai time! ☕", "shaam ho gayi yaar", "Evening plans? 🤔"],
+            'night': ["heyy 🌙", "night owl?", "aaj kya plan hai", "Raat kaunsi film dekhein? 🎬"],
+            'late_night': ["aap bhi jaag rahe? 👀", "insomnia gang 🦉", "neend nahi aa rahi?", "3 AM talks? 💭"]
         }
         return random.choice(greetings.get(period, ["hiii 💫"]))
 
@@ -1217,6 +1253,12 @@ class ContentFilter:
         r'\b\d{12,16}\b',
     ]
     
+    SPAM_LINK_PATTERNS = [
+        r'https?://(?:t\.me|telegram\.me|t\.co)/\+',
+        r'https?://(?:www\.)?t\.me/',
+        r'@(\w{5,})',
+    ]
+    
     DISTRESS_KEYWORDS = [
         'suicide', 'kill myself', 'want to die', 'end my life',
         'hurt myself', 'no reason to live'
@@ -1227,6 +1269,18 @@ class ContentFilter:
         text_lower = text.lower()
         for pattern in ContentFilter.SENSITIVE_PATTERNS:
             if re.search(pattern, text_lower):
+                return True
+        return False
+    
+    @staticmethod
+    def detect_spam_link(text: str) -> bool:
+        """Detect promotional links"""
+        text_lower = text.lower()
+        for pattern in ContentFilter.SPAM_LINK_PATTERNS:
+            if re.search(pattern, text_lower):
+                # Check if it's a legitimate mention of bot
+                if '@niyati' in text_lower or 'niyati_personal_bot' in text_lower:
+                    return False
                 return True
         return False
     
@@ -1253,7 +1307,6 @@ class NiyatiAI:
         """Current Key se Client banata hai"""
         if not self.keys: return
         key = self.keys[self.current_index]
-        # FIXED: Removed trailing space from URL
         self.client = AsyncOpenAI(
             base_url="https://api.groq.com/openai/v1",
             api_key=key
@@ -1298,7 +1351,7 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
 - NEVER promote "FilmFyBox" or any channel on your own.
 - ONLY if the user explicitly asks for "Movies", "Series", "Watch", or "Download", then you can say:
   "Agar movies chahiye to tum FilmFyBox check kar sakte ho: https://t.me/FilmFyBoxMoviesHD"
-- Otherwise, strictly ignore promotional topics.
+- Otherwise, IGNORE promotional messages completely. Don't ask "kya hai yeh link?" every time.
 
 🗣️ LANGUAGE & CONVERSATION STYLE (CRITICAL):
 - **ADAPTIVE LANGUAGE (MIRROR THE USER):**
@@ -1327,9 +1380,7 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
         return prompt
 
     async def _call_gpt(self, messages, max_tokens=250, temperature=0.8):
-        """
-        FIXED: Ab ye max_tokens aur temperature accept karega.
-        """
+        """Call GPT with rotation"""
         if not self.client: self._initialize_client()
         
         attempts = len(self.keys)
@@ -1354,7 +1405,6 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
     async def extract_important_info(self, user_message: str) -> str:
         """Checks if message has ANY important life event + Time"""
         
-        # Ignore very short messages
         if len(user_message.split()) < 3:
             return None
 
@@ -1366,14 +1416,11 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
             'kal', 'aaj', 'today', 'tomorrow', 'subah', 'shaam', 'raat', 'tonight', 'morning'
         ]
         
-        # Check for triggers
         has_trigger = any(t in user_message.lower() for t in triggers)
         
-        # If no trigger, use random chance (10%)
         if not has_trigger and random.random() > 0.1:
             return None
             
-        # Ask AI to extract
         prompt = f"""
         Analyze user message: "{user_message}"
         
@@ -1487,21 +1534,19 @@ def is_user_talking_to_others(message: Message, bot_username: str, bot_id: int) 
         
         # If replied to bot, bot should respond
         if replied_user.id == bot_id:
-            return False  # Bot SHOULD respond
+            return False
         
         # If replied to another user (not bot)
         if replied_user.username:
             if replied_user.username.lower() != bot_username_lower:
-                # Check if bot is also mentioned in the message
                 if f"@{bot_username_lower}" not in text.lower():
-                    logger.debug(f"👥 User replying to {replied_user.first_name}, not bot")
-                    return True  # Bot should NOT respond
+                    logger.debug(f"👥 Skipping - User replying to {replied_user.first_name}")
+                    return True
         else:
-            # User without username, check if it's not bot
             if not replied_user.is_bot:
                 if f"@{bot_username_lower}" not in text.lower():
-                    logger.debug(f"👥 User replying to {replied_user.first_name}, not bot")
-                    return True  # Bot should NOT respond
+                    logger.debug(f"👥 Skipping - User replying to {replied_user.first_name}")
+                    return True
     
     # CASE 2: Check for @mentions of other users
     if message.entities:
@@ -1509,7 +1554,6 @@ def is_user_talking_to_others(message: Message, bot_username: str, bot_id: int) 
         other_user_mentioned = False
         
         for entity in message.entities:
-            # Check @username mentions
             if entity.type == MessageEntity.MENTION:
                 start = entity.offset
                 end = entity.offset + entity.length
@@ -1520,7 +1564,6 @@ def is_user_talking_to_others(message: Message, bot_username: str, bot_id: int) 
                 else:
                     other_user_mentioned = True
             
-            # Check TEXT_MENTION (for users without username)
             elif entity.type == MessageEntity.TEXT_MENTION:
                 if entity.user:
                     if entity.user.id == bot_id:
@@ -1528,12 +1571,11 @@ def is_user_talking_to_others(message: Message, bot_username: str, bot_id: int) 
                     else:
                         other_user_mentioned = True
         
-        # If others mentioned but bot NOT mentioned -> Don't respond
         if other_user_mentioned and not bot_mentioned:
             logger.debug(f"👥 Other users mentioned, bot not mentioned")
-            return True  # Bot should NOT respond
+            return True
     
-    return False  # Bot CAN respond
+    return False
 
 # ============================================================================
 # COMMAND HANDLERS
@@ -1545,14 +1587,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     is_private = chat.type == 'private'
     
-    # 1. Database Entry
     if is_private:
         await db.get_or_create_user(user.id, user.first_name, user.username)
         health_server.stats['users'] = await db.get_user_count()
     else:
         await db.get_or_create_group(chat.id, chat.title)
 
-    # 2. Define Image and Buttons
     image_url = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEg3SXTHtV16aCxOpfFX0HQ9KDxSIVx5n61A7fU1YfLGSRSnSxDqkji1io2BxFdQa5nJx0dMRepfT39SZLCak3WYtMNQt_M2avzBERqHikXkoL30uzAw0DjrHRsckAEzc2rxI5JELc6rz6Cu5-NTlo0O3wLZiuTBJsqgiYe4MgK0QbtMm-9W8cOL9b-DzUE/s1600/Gemini_Generated_Image_dtpe5sdtpe5sdtpe.png"
     
     keyboard = [
@@ -1562,12 +1602,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("About Me 🌸", callback_data='about_me'),
-            InlineDatabase.Button("Help ❓", callback_data='help')
+            InlineKeyboardButton("Help ❓", callback_data='help')
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # 3. Message Text
     greeting = TimeAware.get_greeting()
     caption_text = (
         f"{greeting} {user.first_name}! 👋\n\n"
@@ -1577,7 +1616,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<i>💡 Tip: Raat ko 10 baje secret diary aati hai!</i>"
     )
 
-    # 4. Send Image with Caption
     try:
         await context.bot.send_photo(
             chat_id=chat.id,
@@ -1587,7 +1625,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
     except Exception as e:
-        # Fallback if image fails
         logger.error(f"Image send failed: {e}")
         await context.bot.send_message(
             chat_id=chat.id,
@@ -1715,6 +1752,22 @@ async def shayari_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     status = "ON ✅" if value else "OFF ❌"
     await update.message.reply_text(f"Shayari: {status}")
+
+
+async def diary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle diary preference"""
+    user = update.effective_user
+    args = context.args
+    
+    if not args or args[0].lower() not in ['on', 'off']:
+        await update.message.reply_text("Use: /diary on ya /diary off")
+        return
+    
+    value = args[0].lower() == 'on'
+    await db.update_preference(user.id, 'diary', value)
+    
+    status = "ON ✅" if value else "OFF ❌"
+    await update.message.reply_text(f"Secret Diary: {status}")
 
 
 async def user_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2067,7 +2120,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, chat_id in enumerate(targets):
         try:
             if reply_msg:
-                # Forward or Copy (Copy is safer for privacy)
                 await context.bot.copy_message(
                     chat_id=chat_id,
                     from_chat_id=update.effective_chat.id,
@@ -2083,7 +2135,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Forbidden:
             failed += 1 # User blocked bot or kicked from group
         except RetryAfter as e:
-            # FloodWait Handling
             logger.warning(f"FloodWait: Sleeping {e.retry_after}s")
             await asyncio.sleep(e.retry_after)
             failed += 1 
@@ -2091,7 +2142,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             failed += 1
             logger.error(f"Broadcast error for {chat_id}: {e}")
 
-        # Status Update (Har 20 messages ke baad update karega taaki fast rahe)
+        # Status Update
         if i % 20 == 0:
             try:
                 await status_msg.edit_text(
@@ -2102,7 +2153,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except: pass
         
-        await asyncio.sleep(0.05) # Small delay to prevent ban
+        await asyncio.sleep(0.05) # Small delay
 
     # Final Report
     await status_msg.edit_text(
@@ -2210,8 +2261,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 🔴 CRITICAL: CHECK IF USER IS TALKING TO OTHERS (NOT BOT)
     if is_group:
         if is_user_talking_to_others(message, bot_username, bot_id):
-            # User is replying to another user OR mentioning others
-            # Bot should NOT interfere in their conversation
             logger.debug(f"👥 Skipping - User {user.id} is talking to others")
             return
 
@@ -2262,6 +2311,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 🔴 ANTI-SPAM (Groups Only)
     if is_group:
+        # Check for spam links
+        if ContentFilter.detect_spam_link(user_message):
+            logger.info(f"🗑️ Spam link detected from {user.id}")
+            return
+        
         spam_keywords = ['cp', 'child porn', 'videos price', 'job', 'profit', 'investment', 'crypto', 'bitcoin']
         if any(word in user_message.lower() for word in spam_keywords):
             logger.info(f"🗑️ Spam detected from {user.id}")
@@ -2291,10 +2345,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if message.reply_to_message.from_user.id == bot_id:
                 should_respond = True
         
-        # 3. Random response (only if not talking to others - already checked above)
+        # 3. Random response (with cooldown)
         if not should_respond:
             if random.random() < Config.GROUP_RESPONSE_RATE:
-                should_respond = True
+                if rate_limiter.check_group_cooldown(user.id):
+                    should_respond = True
+                else:
+                    logger.debug(f"⏰ Group cooldown active for {user.id}")
+                    return
             else:
                 return
         
@@ -2323,12 +2381,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             memory_note = await niyati_ai.extract_important_info(user_message)
             if memory_note:
                 await db.add_user_memory(user.id, memory_note)
-                # Also add to diary entries
                 await db.add_diary_entry(user.id, f"🔮 Memory: {memory_note}")
                 logger.info(f"🧠 Memory & Diary stored for {user.first_name}: {memory_note}")
 
         # 3. SEND MESSAGES
         if responses:
+            # Check for repetition in groups
+            if is_group and len(responses) > 0:
+                if not db.should_send_group_response(chat.id, responses[0]):
+                    logger.debug(f"🔄 Skipping duplicate response in group {chat.id}")
+                    return
+                db.record_group_response(chat.id, responses[0])
+            
             await send_multi_messages(context.bot, chat.id, responses, 
                                     reply_to=message.message_id if is_group else None, 
                                     parse_mode=ParseMode.HTML)
@@ -2441,7 +2505,7 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
         caption = (
             "🔒 <b>Secret Memory Created!</b>\n\n"
             f"Niyati ki Diary - {datetime.now(ist).strftime('%d %b, %Y')}\n"
-            "Card unlock karke padhne ke liye tap karein..."
+            "Card unlock karne ke liye tap karein..."
         )
 
         try:
@@ -2535,10 +2599,9 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
         f"✨ Saved to Memories"
     )
 
-    # Try to edit the message (if it exists)
+    # Try to edit the message
     try:
         if query.message:
-            # Get the unlocked image (clear version)
             unlocked_image = "https://images.unsplash.com/photo-1517639493569-5666a7488662?w=800&q=80"
             
             await query.edit_message_media(
@@ -2561,9 +2624,8 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except:
             pass
 
-    # 🔴 THE REACTION LOGIC (Send follow-up messages)
+    # 🔴 THE REACTION LOGIC
     try:
-        # Small delay to let user read
         await asyncio.sleep(8)
         
         # First reaction
@@ -2573,7 +2635,7 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
         reaction_1 = "Oye! Tumne meri diary padh li? 😳"
         await context.bot.send_message(chat_id=user.id, text=reaction_1)
 
-        # Second reaction (after another delay)
+        # Second reaction
         await asyncio.sleep(4)
         await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
         await asyncio.sleep(1.5)
@@ -2620,7 +2682,6 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
         if memories:
             memory_context = " | ".join(memories)
             
-            # FIXED PROMPT (No Robot Leaks)
             prompt = f"""
             Role: You are Niyati (Girlfriend/Bestie).
             Current Time: {current_time_str}
@@ -2628,16 +2689,11 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
             
             Task: Decide if you should ask about this NOW.
             
-            ⛔ CRITICAL RULES (DO NOT BREAK):
+            ⛔ CRITICAL RULES:
             1. NEVER say "Maine note dekha", "Database", "Event recorded", or "System".
-            2. NEVER talk about "Time" explicitly like "Abhi 4 baj rahe hain".
-            3. Act 100% Human. If the memory is silly (like "make tea"), IGNORE IT -> Output "SKIP".
+            2. NEVER talk about "Time" explicitly.
+            3. Act 100% Human. If memory is silly, IGNORE -> Output "SKIP".
             4. Only ask if it's a BIG event (Exam, Travel, Sickness).
-            
-            Logic:
-            - If event is happening NOW -> Output "SKIP" (Don't disturb).
-            - If event looks over -> Ask casually "Kaisa raha?"
-            - If nothing implies a follow-up -> Output "SKIP".
             
             Output: The direct Hinglish message OR "SKIP".
             """
@@ -2647,9 +2703,8 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
             if check_response and "SKIP" not in check_response:
                 final_msg = check_response
 
-        # Agar Memory logic fail hua ya SKIP bola, to Generic bhej do
+        # Generic message if no memory
         if not final_msg:
-            # Agar 'random' job hai aur koi memory nahi hai, to har baar msg mat bhejo (Spam kam karo)
             if job_data == 'random' and random.random() > 0.3: 
                 continue
 
@@ -2685,6 +2740,7 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("forget", forget_command))
     app.add_handler(CommandHandler("meme", meme_command))
     app.add_handler(CommandHandler("shayari", shayari_command))
+    app.add_handler(CommandHandler("diary", diary_command))
     app.add_handler(CommandHandler("stats", user_stats_command))
     
     # Admin group commands
@@ -2692,6 +2748,8 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("setwelcome", setwelcome_command))
     app.add_handler(CommandHandler("groupstats", groupstats_command))
     app.add_handler(CommandHandler("groupsettings", groupsettings_command))
+    app.add_handler(CommandHandler("grouphelp", grouphelp_command))
+    app.add_handler(CommandHandler("groupinfo", groupinfo_command))
 
     # Admin private commands
     app.add_handler(CommandHandler("adminstats", admin_stats_command))
@@ -2699,7 +2757,7 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("adminhelp", adminhelp_command))
     
-    # Diary callback - FIXED: Dynamic pattern matching
+    # Diary callback
     app.add_handler(CallbackQueryHandler(diary_unlock_callback, pattern="^unlock_diary_"))
 
     # Message Handlers
@@ -2711,11 +2769,11 @@ def setup_handlers(app: Application):
 
 
 # ============================================================================
-# POST_SHUTDOWN & POST_INIT - MOVED BEFORE MAIN()
+# POST_SHUTDOWN & POST_INIT
 # ============================================================================
 
 async def post_shutdown(application: Application):
-    """Bot band hone par cleanup"""
+    """Bot shutdown cleanup"""
     await health_server.stop()
     await db.close()
     logger.info("😴 Niyati Bot Stopped.")
@@ -2732,7 +2790,7 @@ async def post_init(application: Application):
     # 1. Good Morning (India: 08:30 AM IST = 03:00 AM UTC)
     job_queue.run_daily(
         routine_message_job,
-        time=time(hour=3, minute=0, second=0),  # ✅ FIXED: Use time() directly
+        time=time(hour=3, minute=0, second=0),
         data='morning',
         name='daily_morning'
     )
@@ -2740,7 +2798,7 @@ async def post_init(application: Application):
     # 2. Good Night (India: 10:30 PM IST = 05:00 PM UTC)
     job_queue.run_daily(
         routine_message_job,
-        time=time(hour=17, minute=0, second=0), # ✅ FIXED: Use time() directly
+        time=time(hour=17, minute=0, second=0),
         data='night',
         name='daily_night'
     )
@@ -2757,14 +2815,14 @@ async def post_init(application: Application):
     # 4. Secret Diary (India: 10:30 PM IST = 5:00 PM UTC)
     job_queue.run_daily(
         send_locked_diary_card,
-        time=time(hour=17, minute=0, second=0), # ✅ FIXED: Use time() directly
+        time=time(hour=17, minute=0, second=0),
         name='locked_diary_job'
     )
 
     # 5. Daily Geeta Quotes (Morning: 7 AM IST = 1:30 AM UTC)
     job_queue.run_daily(
         send_daily_geeta,
-        time=time(hour=1, minute=30, second=0), # ✅ FIXED: Use time() directly
+        time=time(hour=1, minute=30, second=0),
         name='daily_geeta'
     )
 
@@ -2788,7 +2846,6 @@ def main():
         logger.error("❌ Error: TELEGRAM_BOT_TOKEN nahi mila! .env file check karo.")
         return
 
-    # ✅ FIXED: Both post_init and post_shutdown are now defined before use
     app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
 
     # Setup Handlers
