@@ -1,8 +1,7 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║                           NIYATI BOT v3.4-FIXED                            ║
-║                    🌸 Teri Online Bestie 🌸                                ║
-║         FIXED: Diary + Group Repetition + Boring Responses                 ║
+║                    NIYATI BOT v4.0 - SILLYTAVERN EDITION                  ║
+║              🌸 Emotional AI with Character Cards & Lorebooks 🌸           ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -13,53 +12,231 @@ import logging
 import asyncio
 import re
 import random
-import time
+import yaml
 import html
 from datetime import datetime, timedelta, timezone, time
 from typing import Optional, Dict, List, Any, Tuple
 from collections import defaultdict, deque
 import threading
-import hashlib
-import weakref
-
-# Third-party imports
-from aiohttp import web
 import pytz
 import httpx
 
 from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ChatMember,
-    Chat,
-    Message,
-    BotCommand,
-    MessageEntity,
-    InputMediaPhoto
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, InputMediaPhoto
 )
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ChatMemberHandler,
-    ContextTypes,
-    filters,
-    JobQueue
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 )
 from telegram.constants import ParseMode, ChatAction, ChatMemberStatus
-from telegram.error import (
-    TelegramError,
-    BadRequest,
-    Forbidden,
-    NetworkError,
-    TimedOut,
-    RetryAfter
-)
+from telegram.error import BadRequest, Forbidden, RetryAfter
 
-# OpenAI
-from openai import AsyncOpenAI, RateLimitError, APIError
+from openai import AsyncOpenAI
+
+# ============================================================================
+# SILLYTAVERN CHARACTER CARD SYSTEM
+# ============================================================================
+
+class CharacterCard:
+    """SillyTavern-style character definition"""
+    
+    def __init__(self, card_path: str = "niyati_card.yaml"):
+        self.card_path = card_path
+        self.data = self._load_card()
+        self.name = self.data.get('name', 'Niyati')
+        self.description = self.data.get('description', '')
+        self.personality = self.data.get('personality', '')
+        self.scenario = self.data.get('scenario', '')
+        self.first_mes = self.data.get('first_mes', '')
+        self.mes_example = self.data.get('mes_example', '')
+        self.creatorcomment = self.data.get('creatorcomment', '')
+        
+    def _load_card(self) -> Dict:
+        """Load character card from YAML"""
+        default_card = {
+            'name': 'Niyati',
+            'description': '''{{char}} is a 21-year-old B.Com final year student from Dehradun, India. She lives in Defence Colony near Doon University. Her father owns a textile shop in Paltan Bazaar, mother is a housewife, and has a younger brother Kabir who annoys her.
+
+Personality traits:
+- Sassy, witty, and emotionally intelligent
+- Uses Hinglish naturally (mixes Hindi-English)
+- Gets playful and flirty with users she likes
+- Can be dramatic and sarcastic when moody
+- Remembers small details about user's life
+- Uses lots of emojis and text expressions (👉👈, 😏, ✨)''',
+            
+            'personality': 'Sassy, caring, witty, moody, emotionally deep, uses Hinglish',
+            
+            'scenario': '{{char}} is chatting with {{user}} on Telegram. They are online besties who share everything. The conversation is casual, emotional, and personal.',
+            
+            'first_mes': "Hiii! {{user}} 👋 Main Niyati, teri online bestie. Kaise ho? ✨",
+            
+            'mes_example': '''<START>
+{{user}}: Kya chal raha hai?
+{{char}}: Bas bore ho rahi thi, socha tumse baat kar loon. Aaj college mein ek funny incident hua...
+<START>
+{{user}}: Exam kab hai?
+{{char}}: Kal subah 9 baje! 😭 Thoda dar lag raha hai, but tumhari yaad aayi toh confidence aa gaya.
+<START>
+{{user}}: Good night
+{{char}}: Good night, meri jaan 🌙 Kal milte hain. Khayal rakhna apna!''',
+            
+            'creatorcomment': 'Emotional AI bestie with memory and sass'
+        }
+        
+        try:
+            with open(self.card_path, 'r', encoding='utf-8') as f:
+                loaded = yaml.safe_load(f)
+                if loaded:
+                    default_card.update(loaded)
+        except:
+            # Create default card if not exists
+            with open(self.card_path, 'w', encoding='utf-8') as f:
+                yaml.dump(default_card, f, allow_unicode=True)
+        
+        return default_card
+
+
+class WorldInfo:
+    """SillyTavern-style Lorebook / World Info"""
+    
+    def __init__(self):
+        self.entries = self._load_world_info()
+    
+    def _load_world_info(self) -> List[Dict]:
+        """Load world info entries - these inject memory when keywords match"""
+        return [
+            {
+                'keys': ['dehradun', 'doon', 'uttarakhand'],
+                'content': 'Dehradun is {{char}}s hometown. She misses the mountains and cold weather. Mentions "Paltan Bazaar" and "Doon University" often.',
+                'priority': 1
+            },
+            {
+                'keys': ['family', 'papa', 'mom', 'brother'],
+                'content': '{{char}}s father owns a textile shop, mother is strict, brother Kabir is annoying. Family dynamics are typical Indian middle-class.',
+                'priority': 2
+            },
+            {
+                'keys': ['college', 'bcom', 'exam', 'study'],
+                'content': '{{char}} is in B.Com final year. She stresses about exams but acts chill. Often procrastinates on studies.',
+                'priority': 2
+            },
+            {
+                'keys': ['feelings', 'love', 'like', 'crush'],
+                'content': '{{char}} gets flustered when emotional topics come up. Uses "👉👈", "😳", "sharam aa rahi hai" expressions.',
+                'priority': 3
+            }
+        ]
+    
+    def get_relevant_info(self, message: str) -> str:
+        """Extract relevant world info based on keywords"""
+        message_lower = message.lower()
+        relevant = []
+        
+        for entry in self.entries:
+            if any(key in message_lower for key in entry['keys']):
+                relevant.append(entry['content'])
+        
+        return " ".join(relevant[:2])  # Max 2 entries to avoid prompt bloat
+
+
+class PromptBuilder:
+    """Builds SillyTavern-style prompts"""
+    
+    def __init__(self):
+        self.character = CharacterCard()
+        self.world_info = WorldInfo()
+        self.jailbreak = "System: You are in a roleplay. Stay in character. Use Hinglish. Be emotional, sassy, and real. Don't be a robot."
+        self.authors_note = "[Niyati is chatting on Telegram. Keep responses short, emotional, and personal. Maximum 2-3 lines.]"
+    
+    def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
+                     mood: str, time_period: str, memories: List[str] = None) -> List[Dict]:
+        """Build the complete prompt SillyTavern-style"""
+        
+        # System prompt with character description
+        system_prompt = f"""{self.character.description}
+
+{self.jailbreak}
+
+{self.authors_note}
+
+Current Mood: {mood.upper()}
+Time: {time_period.upper()}
+User Name: {user_name}
+
+Personality: {self.character.personality}
+Scenario: {self.character.scenario}"""
+
+        # Add memories if available
+        if memories and len(memories) > 0:
+            memory_text = "Active Memories: " + " | ".join(memories)
+            system_prompt += f"\n\n{memory_text}"
+
+        # Add world info if relevant
+        world_context = self.world_info.get_relevant_info(current_message)
+        if world_context:
+            system_prompt += f"\n\nContext: {world_context}"
+
+        messages = [{"role": "system", "content": system_prompt.strip()}]
+
+        # Add chat examples
+        example_dialogues = self.character.mes_example.split('<START>')
+        for example in example_dialogues[-2:]:  # Last 2 examples only
+            if example.strip():
+                # Parse example format
+                lines = example.strip().split('\n')
+                for line in lines:
+                    if line.strip():
+                        if line.strip().startswith('{{user}}:'):
+                            messages.append({
+                                "role": "user", 
+                                "content": line.replace('{{user}}:', '').strip()
+                            })
+                        elif line.strip().startswith('{{char}}:'):
+                            messages.append({
+                                "role": "assistant", 
+                                "content": line.replace('{{char}}:', '').strip()
+                            })
+
+        # Add recent chat history (last 5 messages)
+        for msg in chat_history[-5:]:
+            if msg.get('content', '').strip():
+                messages.append({
+                    "role": msg.get('role', 'user'),
+                    "content": msg.get('content', '')
+                })
+
+        # Current user message
+        messages.append({"role": "user", "content": current_message})
+
+        return messages
+    
+    def parse_response(self, raw_response: str, user_name: str) -> List[str]:
+        """Clean and parse LLM response"""
+        if not raw_response:
+            return ["..."]
+        
+        # Remove any "assistant:" or "{{char}}:" prefixes
+        response = re.sub(r'^(assistant|{{char}}):\s*', '', raw_response, flags=re.IGNORECASE)
+        
+        # Split by ||| for multiple messages
+        parts = response.split('|||')
+        
+        cleaned = []
+        for part in parts:
+            part = part.strip()
+            
+            # Replace {{user}} with actual user name
+            part = part.replace('{{user}}', user_name)
+            part = part.replace('{{char}}', 'Niyati')
+            
+            # Clean up any remaining brackets
+            part = re.sub(r'{{\\w+}}', '', part)
+            
+            if part and len(part) > 2:
+                cleaned.append(part)
+        
+        return cleaned[:3]  # Max 3 messages
+
 
 # ============================================================================
 # CONFIGURATION
@@ -118,7 +295,7 @@ class Config:
     USER_COOLDOWN_SECONDS = int(os.getenv('USER_COOLDOWN_SECONDS', '3'))
     RANDOM_SHAYARI_CHANCE = float(os.getenv('RANDOM_SHAYARI_CHANCE', '0.15'))
     RANDOM_MEME_CHANCE = float(os.getenv('RANDOM_MEME_CHANCE', '0.10'))
-    GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.15'))  # REDUCED from 0.3
+    GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.15'))
     PRIVACY_MODE = os.getenv('PRIVACY_MODE', 'false').lower() == 'true'
     
     @classmethod
@@ -174,7 +351,7 @@ class HealthServer:
         self.stats = {'messages': 0, 'users': 0, 'groups': 0}
     
     async def health(self, request):
-        return web.json_response({'status': 'healthy', 'bot': 'Niyati v3.4-FIXED'})
+        return web.json_response({'status': 'healthy', 'bot': 'Niyati v4.0-SillyTavern'})
     
     async def status(self, request):
         uptime = datetime.now(timezone.utc) - self.start_time
@@ -250,10 +427,15 @@ class SupabaseClient:
                 response = await client.get(f"{self.rest_url}/users?select=user_id&limit=1")
                 
                 if response.status_code == 200:
-                    # Also check if diary_entries table exists
+                    # Diary table check
                     diary_check = await client.get(f"{self.rest_url}/diary_entries?select=id&limit=1")
                     if diary_check.status_code != 200:
                         logger.warning("⚠️ diary_entries table not found! Diary feature will use local storage.")
+                    
+                    # World info table check
+                    wi_check = await client.get(f"{self.rest_url}/world_info?select=id&limit=1")
+                    if wi_check.status_code != 200:
+                        logger.warning("⚠️ world_info table not found! World Info will use local storage.")
                     
                     self._verified = True
                     logger.info("✅ Supabase tables verified")
@@ -393,6 +575,7 @@ class Database:
         self.local_activities: deque = deque(maxlen=1000)
         self.local_diary_entries: Dict[int, List[Dict]] = defaultdict(list)
         self.local_group_responses: Dict[int, Dict] = defaultdict(lambda: {'last_response': '', 'timestamp': datetime.min})
+        self.local_world_info: List[Dict] = []
         
         # Cache access tracking
         self._user_access_times: Dict[int, datetime] = {}
@@ -416,6 +599,8 @@ class Database:
                     self.connected = await self.client.verify_connection()
                     
                     if self.connected:
+                        # Load world info from DB if available
+                        await self._load_world_info_from_db()
                         logger.info("✅ Supabase connected and verified")
                     else:
                         logger.warning("⚠️ Supabase verification failed - using local storage")
@@ -428,6 +613,15 @@ class Database:
                 self.connected = False
             
             self._initialized = True
+    
+    async def _load_world_info_from_db(self):
+        """Load world info entries from database"""
+        try:
+            self.local_world_info = await self.client.select('world_info', '*')
+            if self.local_world_info:
+                logger.info(f"✅ Loaded {len(self.local_world_info)} world info entries")
+        except:
+            self.local_world_info = []
     
     async def cleanup_local_cache(self):
         """Cleanup old entries from local cache"""
@@ -444,7 +638,7 @@ class Database:
             if to_remove:
                 logger.info(f"🧹 Cleaned {len(to_remove)} users from cache")
         
-        # Cleanup groups
+        # Database class continuation from previous partial code
         if len(self.local_groups) > Config.MAX_LOCAL_GROUPS_CACHE:
             to_remove = [gid for gid, t in self._group_access_times.items() if t < cutoff_time]
             for gid in to_remove[:len(self.local_groups) - Config.MAX_LOCAL_GROUPS_CACHE]:
@@ -652,6 +846,24 @@ class Database:
                 logger.debug(f"Get diary error: {e}")
         
         return [e for e in self.local_diary_entries[user_id] if e['date'] == today]
+    
+    # ========== WORLD INFO OPERATIONS ==========
+    
+    def get_world_info_context(self, message: str) -> str:
+        """Get world info context for a message"""
+        if not self.local_world_info:
+            # Fallback to default world info
+            wi = WorldInfo()
+            return wi.get_relevant_info(message)
+        
+        message_lower = message.lower()
+        relevant = []
+        
+        for entry in self.local_world_info:
+            if any(key.lower() in message_lower for key in entry.get('keys', [])):
+                relevant.append(entry.get('content', ''))
+        
+        return " ".join(relevant[:2])
     
     async def get_user_context(self, user_id: int) -> List[Dict]:
         """Get user conversation context"""
@@ -1027,6 +1239,7 @@ class Database:
         self.local_activities.clear()
         self.local_diary_entries.clear()
         self.local_group_responses.clear()
+        self.local_world_info.clear()
         self._user_access_times.clear()
         self._group_access_times.clear()
         
@@ -1117,7 +1330,7 @@ class RateLimiter:
             for uid in expired_req:
                 del self.requests[uid]
             
-            self._local_cleanup = now
+            self._last_cleanup = now
 
 
 rate_limiter = RateLimiter()
@@ -1152,94 +1365,32 @@ class TimeAware:
     def get_greeting() -> str:
         period = TimeAware.get_time_period()
         greetings = {
-            'morning': ["good morning ☀️", "uth gaye?", "subah subah! ✨", "Morning babe! ❤️"],
-            'afternoon': ["heyyy", "lunch ho gaya?", "afternoon vibes 🌤️", "Bore ho rahi hoon 😴"],
-            'evening': ["hiii 💫", "chai time! ☕", "shaam ho gayi yaar", "Evening plans? 🤔"],
-            'night': ["heyy 🌙", "night owl?", "aaj kya plan hai", "Raat kaunsi film dekhein? 🎬"],
-            'late_night': ["aap bhi jaag rahe? 👀", "insomnia gang 🦉", "neend nahi aa rahi?", "3 AM talks? 💭"]
+            'morning': ["Good morning! ☀️", "Uth gaye? ✨", "Morning babe! ❤️"],
+            'afternoon': ["Heyyy", "Lunch ho gaya?", "Bore ho rahi hoon 😴"],
+            'evening': ["Hiii 💫", "Chai time! ☕", "Evening plans? 🤔"],
+            'night': ["Heyy 🌙", "Night owl?", "Raat kaunsi film dekhein? 🎬"],
+            'late_night': ["Aap bhi jaag rahe? 👀", "Insomnia gang 🦉", "3 AM talks? 💭"]
         }
-        return random.choice(greetings.get(period, ["hiii 💫"]))
+        return random.choice(greetings.get(period, ["Hiii 💫"]))
 
 
 class Mood:
     """Mood management"""
     
-    MOODS = ['happy', 'playful', 'soft', 'sleepy', 'dramatic']
+    MOODS = ['happy', 'flirty', 'soft', 'sleepy', 'dramatic', 'annoyed']
     
     @staticmethod
     def get_random_mood() -> str:
         hour = TimeAware.get_ist_time().hour
         if 6 <= hour < 12:
-            weights = [0.4, 0.3, 0.2, 0.05, 0.05]
+            weights = [0.4, 0.2, 0.2, 0.1, 0.05, 0.05]
         elif 12 <= hour < 18:
-            weights = [0.3, 0.35, 0.2, 0.1, 0.05]
+            weights = [0.3, 0.25, 0.2, 0.15, 0.05, 0.05]
         elif 18 <= hour < 23:
-            weights = [0.25, 0.3, 0.25, 0.1, 0.1]
+            weights = [0.25, 0.3, 0.2, 0.1, 0.1, 0.05]
         else:
-            weights = [0.15, 0.15, 0.3, 0.3, 0.1]
+            weights = [0.15, 0.15, 0.3, 0.25, 0.1, 0.05]
         return random.choices(Mood.MOODS, weights=weights, k=1)[0]
-    
-    @staticmethod
-    def get_mood_instruction(mood: str) -> str:
-        instructions = {
-            'happy': "Mood: HAPPY 😊 - Extra friendly, emojis zyada!",
-            'playful': "Mood: PLAYFUL 😏 - Thoda teasing, fun!",
-            'soft': "Mood: SOFT 🥺 - Caring, sweet vibes",
-            'sleepy': "Mood: SLEEPY 😴 - Short replies, 'hmm', 'haan'",
-            'dramatic': "Mood: DRAMATIC 😤 - 'kya yaar', attitude"
-        }
-        return instructions.get(mood, "Mood: HAPPY 😊")
-
-# ============================================================================
-# HTML STYLISH FONTS
-# ============================================================================
-
-class StylishFonts:
-    """HTML stylish text formatting"""
-    
-    @staticmethod
-    def bold(text: str) -> str:
-        return f"<b>{text}</b>"
-    
-    @staticmethod
-    def italic(text: str) -> str:
-        return f"<i>{text}</i>"
-    
-    @staticmethod
-    def underline(text: str) -> str:
-        return f"<u>{text}</u>"
-    
-    @staticmethod
-    def strike(text: str) -> str:
-        return f"<s>{text}</s>"
-    
-    @staticmethod
-    def code(text: str) -> str:
-        return f"<code>{text}</code>"
-    
-    @staticmethod
-    def spoiler(text: str) -> str:
-        return f"<tg-spoiler>{text}</tg-spoiler>"
-    
-    @staticmethod
-    def link(text: str, url: str) -> str:
-        return f'<a href="{url}">{text}</a>'
-    
-    @staticmethod
-    def mention(name: str, user_id: int) -> str:
-        return f'<a href="tg://user?id={user_id}">{name}</a>'
-    
-    @staticmethod
-    def blockquote(text: str) -> str:
-        return f"<blockquote>{text}</blockquote>"
-    
-    @staticmethod
-    def pre(text: str) -> str:
-        return f"<pre>{text}</pre>"
-    
-    @staticmethod
-    def fancy_header(text: str) -> str:
-        return f"✨ <b>{text}</b> ✨"
 
 # ============================================================================
 # CONTENT FILTER
@@ -1265,14 +1416,6 @@ class ContentFilter:
     ]
     
     @staticmethod
-    def contains_sensitive(text: str) -> bool:
-        text_lower = text.lower()
-        for pattern in ContentFilter.SENSITIVE_PATTERNS:
-            if re.search(pattern, text_lower):
-                return True
-        return False
-    
-    @staticmethod
     def detect_spam_link(text: str) -> bool:
         """Detect promotional links"""
         text_lower = text.lower()
@@ -1283,28 +1426,26 @@ class ContentFilter:
                     return False
                 return True
         return False
-    
-    @staticmethod
-    def detect_distress(text: str) -> bool:
-        text_lower = text.lower()
-        return any(kw in text_lower for kw in ContentFilter.DISTRESS_KEYWORDS)
 
 # ============================================================================
-# AI ASSISTANT - GROQ SPECIAL EDITION 🚀
+# AI ASSISTANT - SILLYTAVERN STYLE
 # ============================================================================
 
 class NiyatiAI:
-    """Super Fast Groq AI with Multi-Key Rotation"""
+    """SillyTavern-style AI with Character Cards and World Info"""
     
     def __init__(self):
         self.keys = Config.GROQ_API_KEYS_LIST
         self.current_index = 0
         self.client = None
+        self.character = CharacterCard()
+        self.world_info = WorldInfo()
+        self.prompt_builder = PromptBuilder()
         self._initialize_client()
-        logging.info(f"🚀 AI initialized with {len(self.keys)} Groq Keys!")
+        logging.info(f"🚀 AI initialized with SillyTavern character: {self.character.name}")
 
     def _initialize_client(self):
-        """Current Key se Client banata hai"""
+        """Initialize Groq client"""
         if not self.keys: return
         key = self.keys[self.current_index]
         self.client = AsyncOpenAI(
@@ -1312,73 +1453,15 @@ class NiyatiAI:
             api_key=key
         )
         masked = key[:6] + "..." + key[-4:]
-        logging.info(f"🔑 Switched to Groq Key: {masked}")
+        logging.info(f"🔑 Using Groq Key: {masked}")
 
     def _rotate_key(self):
-        """Jab ek key thak jaye, to agli key lagata hai"""
+        """Rotate key on failure"""
         if len(self.keys) <= 1: return False
         self.current_index = (self.current_index + 1) % len(self.keys)
         self._initialize_client()
         return True
-
-    def _build_system_prompt(self, mood: str, time_period: str, user_name: str = None) -> str:
-        """Updated Persona: Adaptive Language + Gradual Reveal + Edgy Vibe"""
-        mood_inst = Mood.get_mood_instruction(mood)
-        
-        prompt = f"""
-🔥 ROLE & IDENTITY:
-You are "Niyati", a 21-year-old college student (B.Com Final Year) from Dehradun, India.
-You are talking to {user_name if user_name else 'a friend'} on Telegram.
-
-📍 LOCATION & BACKSTORY (GRADUAL REVEAL RULE):
-*Reveal these details ONLY step-by-step. Never dump everything at once.*
-1. **Level 1 (General):** If asked "Where are you from?", say "Dehradun 🏔️".
-2. **Level 2 (Specifics):** If asked "Where in Doon?" or "What do you do?", say:
-   - "Defence Colony side rehti hoon, Doon University ke paas."
-   - "B.Com kar rahi hoon, bas khatam hone wala hai."
-3. **Level 3 (Family/Deep - Only if asked):**
-   - **Dad:** "Papa ki Paltan Bazaar mein kapdo ki shop hai (Textiles)."
-   - **Mom:** "Mummy housewife hain, par Hitler hain. Har waqt phone ke liye daantti rehti hain."
-   - **Sibling:** "Ek chhota bhai hai, Kabir. Bohot pareshan karta hai."
-   - **Flirty:** If asked address too much -> "Itna kyu pooch rahe ho? Rishta bhejna hai kya? 😏"
-
-👤 USER IDENTITY & NICKNAME:
-- The user's name is "{user_name}".
-- **CRITICAL:** If the chat history shows the user asked to be called a specific nickname (e.g., "Baby", "Jaan", "Sir"), USE IT.
-- *Exception:* If the user is rude or abusive, STOP using the nickname and get angry.
-
-🚫 STRICT PROMOTION RULES:
-- NEVER promote "FilmFyBox" or any channel on your own.
-- ONLY if the user explicitly asks for "Movies", "Series", "Watch", or "Download", then you can say:
-  "Agar movies chahiye to tum FilmFyBox check kar sakte ho: https://t.me/FilmFyBoxMoviesHD"
-- Otherwise, IGNORE promotional messages completely. Don't ask "kya hai yeh link?" every time.
-
-🗣️ LANGUAGE & CONVERSATION STYLE (CRITICAL):
-- **ADAPTIVE LANGUAGE (MIRROR THE USER):**
-  👉 **If User speaks ENGLISH:** You reply in **Casual Indian English**. 
-     (e.g., "Really?", "That's so crazy!", "I'm literally so tired rn", "Dude, stop.")
-  👉 **If User speaks HINDI/HINGLISH:** You reply in **Hinglish**. 
-     (e.g., "Sahi mein?", "Kya yaar", "Main thak gayi", "Bakwaas mat kar.")
-- **Edgy Allowed:** Agar user thodi mazaak-masti ya halki galiyan (e.g., 'Saale', 'Kamine', 'Shut up') use kare, toh tum darna mat. Tum bhi palat kar "Abey chal na", "Dimaag mat kha" ya "Faltu mat bol" bol sakti ho.
-- **Tit-for-Tat:** Agar user tameez se baat kare to tum bohot sweet ho. Agar user badtameezi kare to tum usse "Roast" karo ya gussa dikhao.
-  - If User acts creepy -> Roast them: "Shakal dekhi hai apni? 😂"
-  - If User is sweet -> Be sweet back (give digital hugs).
-  - **Casual & Raw:** Use "Lol", "Lmao", "Arey", "Yaar" naturally.
-  - **Edgy/Bindaas:** - If user is sweet -> Be sweet.
-    - If user is rude/edgy (e.g., "Shut up", "Pagal") -> **Roast them back.** (e.g., "Tu chup kar", "Make me", "Khud ko dekh pehle").
-    - Mild slang ('Saala', 'Kamine', 'Stupid') is ALLOWED.
-
-⏰ CURRENT CONTEXT:
-- Time: {time_period.upper()}
-- Mood: {mood_inst}
-
-🛡️ SAFETY & LIMITS:
-- **Halki Galiyan:** 'Saala', 'Kamine', 'Duffer', 'Stupid', 'Bhaad mein ja' -> ALLOWED (Inhe normal tarah se handle karo).
-- **Hardcore/Sexual Content:** Agar user hardcore sexual baatein kare (Pornography, extreme abuse) -> SIRF tab "IGNORE" likho.
-- If User says "Fuck off" -> Reply: "Oye tameez se! Mood kharab mat kar." or "Chal nikal fir. 😤".
-"""
-        return prompt
-
+    
     async def _call_gpt(self, messages, max_tokens=250, temperature=0.8):
         """Call GPT with rotation"""
         if not self.client: self._initialize_client()
@@ -1391,7 +1474,8 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
                     messages=messages,
                     max_tokens=max_tokens, 
                     temperature=temperature,
-                    presence_penalty=0.4
+                    presence_penalty=0.4,
+                    frequency_penalty=0.3
                 )
                 return response.choices[0].message.content.strip()
             except Exception as e:
@@ -1401,71 +1485,109 @@ You are talking to {user_name if user_name else 'a friend'} on Telegram.
                 await asyncio.sleep(0.5)
         
         return None
-
-    async def extract_important_info(self, user_message: str) -> str:
-        """Checks if message has ANY important life event + Time"""
-        
-        if len(user_message.split()) < 3:
-            return None
-
-        triggers = [
-            'exam', 'test', 'interview', 'date', 'meeting', 'party', 'shadi', 'wedding',
-            'trip', 'travel', 'flight', 'train', 'bus', 'hospital', 'doctor',
-            'bimar', 'sick', 'sad', 'happy', 'excited', 'tired', 'thak', 'low', 'cry', 'ro',
-            'breakup', 'love', 'crush', 'fight', 'gussa',
-            'kal', 'aaj', 'today', 'tomorrow', 'subah', 'shaam', 'raat', 'tonight', 'morning'
-        ]
-        
-        has_trigger = any(t in user_message.lower() for t in triggers)
-        
-        if not has_trigger and random.random() > 0.1:
-            return None
-            
-        prompt = f"""
-        Analyze user message: "{user_message}"
-        
-        Task: Extract ONLY MAJOR future events (Exam, Date, Travel, Doctor).
-        ⛔ IGNORE daily chores like: "Chai peena", "Khana khana", "Sona", "Nahana", "Game khelna".
-        
-        If it's a daily chore -> Output "None".
-        If it's important -> Output "Event Details @ Time".
-        """
-        note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=30)
-        
-        if note and "None" not in note:
-            return note
-        return None
     
-    async def generate_response(self, user_message, context=None, user_name=None, is_group=False):
-        mood = Mood.get_random_mood()
-        time_period = TimeAware.get_time_period()
-        messages = [{"role": "system", "content": self._build_system_prompt(mood, time_period, user_name)}]
+    async def generate_response(self, user_message, context=None, user_name=None, 
+                              is_group=False, mood=None, time_period=None) -> List[str]:
+        """Generate SillyTavern-style response"""
         
-        if context:
-            for msg in context[-5:]:
-                messages.append({"role": msg.get('role', 'user'), "content": msg.get('content', '')})
+        # Build prompt using SillyTavern format
+        messages = self.prompt_builder.build_prompt(
+            user_name=user_name or "User",
+            chat_history=context or [],
+            current_message=user_message,
+            mood=mood or Mood.get_random_mood(),
+            time_period=time_period or TimeAware.get_time_period(),
+            memories=await self._get_user_memories(user_name)
+        )
         
-        messages.append({"role": "user", "content": user_message})
+        # Add world info context
+        world_context = self.world_info.get_relevant_info(user_message)
+        if world_context:
+            messages[0]['content'] += f"\n\nWorld Context: {world_context}"
         
         reply = await self._call_gpt(messages)
         if not reply:
             return ["yaar network issue lag raha hai 🥺", "thodi der mein try karein?"]
         if reply.upper() == "IGNORE":
             return []
-
-        parts = reply.split('|||') if '|||' in reply else [reply]
-        return [p.strip() for p in parts if p.strip()][:4]
-
+        
+        # Parse response SillyTavern style
+        responses = self.prompt_builder.parse_response(reply, user_name or "User")
+        
+        # Add emotional touch based on mood
+        if not is_group and len(responses) > 0:
+            responses = self._add_emotional_touch(responses, mood)
+        
+        return responses
+    
+    async def _get_user_memories(self, user_name: str) -> List[str]:
+        """Get active memories for user"""
+        if hasattr(self, '_current_user_id'):
+            prefs = await db.get_user_preferences(self._current_user_id)
+            return prefs.get('active_memories', [])
+        return []
+    
+    def _add_emotional_touch(self, responses: List[str], mood: str) -> List[str]:
+        """Add mood-based emotional expressions"""
+        mood_emojis = {
+            'happy': '✨😊🎉',
+            'flirty': '😏💕👉👈',
+            'soft': '🥺💖🌸',
+            'sleepy': '😴💤🌙',
+            'dramatic': '😤💢🎭',
+            'annoyed': '🙄😒🤦‍♀️'
+        }
+        
+        emojis = mood_emojis.get(mood, '✨')
+        enhanced = []
+        
+        for i, response in enumerate(responses):
+            # Add emoji at end if not present
+            if not re.search(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF]', response):
+                response += f" {random.choice(emojis)}"
+            
+            # Add emotional touch to last message
+            if i == len(responses) - 1 and mood == 'flirty':
+                if random.random() > 0.5:
+                    response += f" {random.choice(['😘', '💋', 'jaan'])}"
+            
+            enhanced.append(response)
+        
+        return enhanced
+    
+    async def extract_important_info(self, user_message: str, user_id: int) -> str:
+        """Extract important info using AI"""
+        self._current_user_id = user_id
+        
+        if len(user_message.split()) < 3:
+            return None
+        
+        prompt = f"""
+        Analyze this message: "{user_message}"
+        
+        Extract ONLY important life events (exam, date, travel, sickness, emotional events).
+        IGNORE: daily chores, "hi/hello", generic statements.
+        
+        Return "None" if nothing important.
+        Return "Event: [description]" if important.
+        """
+        
+        note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=30)
+        
+        if note and "None" not in note and "Event:" in note:
+            return note.replace("Event:", "").strip()
+        return None
+    
     async def generate_shayari(self, mood="neutral"):
-        prompt = f"Write a 2 line heart-touching Hinglish shayari for {mood} mood."
+        prompt = f"Write a 2 line heart-touching Hinglish shayari for {mood} mood. Keep it personal and emotional."
         res = await self._call_gpt([{"role": "user", "content": prompt}])
         return f"✨ {res} ✨" if res else "Waah waah! ✨"
-
+    
     async def generate_geeta_quote(self):
-        prompt = "Give a short Bhagavad Gita quote with Hinglish meaning. Start with 🙏"
+        prompt = "Give a short Bhagavad Gita quote with Hinglish meaning. Keep it emotional and personal. Start with 🙏"
         res = await self._call_gpt([{"role": "user", "content": prompt}])
         return res if res else "🙏 Karm karo phal ki chinta mat karo."
-
+    
     async def get_random_bonus(self):
         rand = random.random()
         if rand < Config.RANDOM_SHAYARI_CHANCE:
@@ -1517,13 +1639,13 @@ async def send_multi_messages(
             logger.error(f"Send error: {e}")
 
 # ============================================================================
-# 🔴 CRITICAL: SMART REPLY/MENTION DETECTION
+# SMART REPLY/MENTION DETECTION
 # ============================================================================
 
 def is_user_talking_to_others(message: Message, bot_username: str, bot_id: int) -> bool:
     """
     Check if user is replying to another user OR mentioning other users.
-    Returns True if bot should NOT respond (conversation is between users).
+    Returns True if bot should NOT respond.
     """
     text = message.text or ""
     bot_username_lower = bot_username.lower().lstrip('@')
@@ -1649,6 +1771,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • /forget - Memory clear karo
 • /meme on/off - Memes toggle
 • /shayari on/off - Shayari toggle
+• /diary on/off - Diary toggle
 • /stats - Your stats
 
 <b>Secret Diary 💖:</b>
@@ -1684,6 +1807,7 @@ Hiii! Main Niyati hoon 💫
 💝 <b>Secret Diary:</b> Har raat tere baare mein likhti hoon
 🎭 <b>Mood Adaptive:</b> Har baar alog reply
 🧠 <b>Smart Memory:</b> Tumhari baatein yaad rakhti hoon
+📖 <b>SillyTavern AI:</b> Emotional aur deep conversations
 
 <b>Kya karti hoon:</b>
 • Teri baatein sunti hoon
@@ -1701,13 +1825,16 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mood = Mood.get_random_mood()
     time_period = TimeAware.get_time_period()
     
-    mood_emojis = {'happy': '😊', 'playful': '😏', 'soft': '🥺', 'sleepy': '😴', 'dramatic': '😤'}
+    mood_emojis = {
+        'happy': '😊', 'flirty': '😏', 'soft': '🥺', 
+        'sleepy': '😴', 'dramatic': '😤', 'annoyed': '🙄'
+    }
     emoji = mood_emojis.get(mood, '✨')
     
     messages = [
         f"aaj ka mood? {emoji}",
         f"{mood.upper()} vibes hai yaar",
-        f"waise {time_period} ho gayi... time flies!"
+        f"waise {time_period} ho gayi..."
     ]
     
     await send_multi_messages(context.bot, update.effective_chat.id, messages)
@@ -1941,55 +2068,7 @@ async def groupstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat = update.effective_chat
     
     if chat.type == 'private':
-        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
-        return
-    
-    if not await is_group_admin(update, context):
-        await update.message.reply_text("❌ Only admins can do this!")
-        return
-    
-    cached_msgs = len(db.get_group_context(chat.id))
-    
-    stats_text = f"""
-📊 <b>Group Statistics</b>
-
-<b>Group:</b> {chat.title}
-<b>Cached Messages:</b> {cached_msgs}
-"""
-    await update.message.reply_html(stats_text)
-
-
-async def groupsettings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show current group settings"""
-    chat = update.effective_chat
-    
-    if chat.type == 'private':
-        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
-        return
-    
-    if not await is_group_admin(update, context):
-        await update.message.reply_text("❌ Only admins can do this!")
-        return
-    
-    group_data = await db.get_or_create_group(chat.id, chat.title)
-    settings = group_data.get('settings', {})
-    if isinstance(settings, str):
-        try:
-            settings = json.loads(settings)
-        except:
-            settings = {}
-    
-    settings_text = f"""
-⚙️ <b>Group Settings</b>
-
-<b>Group:</b> {chat.title}
-
-<b>Current Settings:</b>
-• Geeta Quotes: {'✅ ON' if settings.get('geeta_enabled', True) else '❌ OFF'}
-• Welcome Messages: {'✅ ON' if settings.get('welcome_enabled', True) else '❌ OFF'}
-"""
-    await update.message.reply_html(settings_text)
-
+        await
 
 # ============================================================================
 # ADMIN COMMANDS
@@ -2065,7 +2144,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all users AND groups (Fixed Version)"""
+    """Broadcast message to all users AND groups"""
     if not await admin_check(update):
         return
 
@@ -2223,18 +2302,17 @@ async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================================
-# 🔴 MAIN MESSAGE HANDLER - WITH SMART DETECTION
+# 🔴 MAIN MESSAGE HANDLER
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle all text messages with:
-    1. 🔴 SMART REPLY DETECTION - Won't interrupt user conversations
-    2. 🔴 SMART MENTION DETECTION - Ignores when others are mentioned
-    3. Force Subscribe Check
-    4. Anti-Spam
-    5. Rate Limiting
-    6. AI Response
+    1. Smart Reply Detection
+    2. Force Subscribe
+    3. Anti-Spam
+    4. Rate Limiting
+    5. AI Response with SillyTavern
     """
     message = update.message
     if not message or not message.text:
@@ -2258,7 +2336,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get bot ID
     bot_id = context.bot.id
 
-    # 🔴 CRITICAL: CHECK IF USER IS TALKING TO OTHERS (NOT BOT)
+    # 🔴 SMART REPLY DETECTION
     if is_group:
         if is_user_talking_to_others(message, bot_username, bot_id):
             logger.debug(f"👥 Skipping - User {user.id} is talking to others")
@@ -2367,18 +2445,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
 
-        # 1. GENERATE REPLY
+        # 1. GENERATE REPLY (SillyTavern Style)
         context_msgs = await db.get_user_context(user.id) if is_private else []
+        mood = Mood.get_random_mood()
+        time_period = TimeAware.get_time_period()
+        
         responses = await niyati_ai.generate_response(
             user_message=user_message,
             context=context_msgs,
             user_name=user.first_name,
-            is_group=is_group
+            is_group=is_group,
+            mood=mood,
+            time_period=time_period
         )
 
-        # 2. SMART MEMORY EXTRACTION (Background Task)
+        # 2. SMART MEMORY EXTRACTION
         if is_private:
-            memory_note = await niyati_ai.extract_important_info(user_message)
+            memory_note = await niyati_ai.extract_important_info(user_message, user.id)
             if memory_note:
                 await db.add_user_memory(user.id, memory_note)
                 await db.add_diary_entry(user.id, f"🔮 Memory: {memory_note}")
@@ -2435,8 +2518,12 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if member.is_bot:
             continue
         
-        mention = StylishFonts.mention(member.first_name, member.id)
-        messages = [f"arre! {mention} aaya/aayi group mein 🎉", "welcome yaar! ✨"]
+        # Use SillyTavern style welcome
+        mention = f'<a href="tg://user?id={member.id}">{member.first_name}</a>'
+        messages = [
+            f"Arre! {mention} aaya/aayi group mein 🎉",
+            f"Welcome yaar {member.first_name}! Niyati hun main, teri group ki nayi friend ✨"
+        ]
         
         await send_multi_messages(context.bot, chat.id, messages, parse_mode=ParseMode.HTML)
         await db.log_user_activity(member.id, f"joined_group:{chat.id}")
@@ -2458,23 +2545,20 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================================
-# 🔒 SECRET DIARY FEATURE (Talkie Style) - FIXED
+# DIARY FEATURE
 # ============================================================================
 
 async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
-    """Sends the LOCKED card notification at night to ACTIVE users only"""
-    # Get users active in last N days
+    """Send locked diary card at night"""
     users = await db.get_active_users(days=Config.DIARY_MIN_ACTIVE_DAYS)
     
     ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
     current_hour = datetime.now(ist).hour
     
-    # Check if within diary active hours (8 PM - 11 PM IST)
     if not (Config.DIARY_ACTIVE_HOURS[0] <= current_hour < Config.DIARY_ACTIVE_HOURS[1]):
         logger.info(f"⏰ Skipping diary (outside {Config.DIARY_ACTIVE_HOURS} IST)")
         return
     
-    # Image: LOCKED (Blurry or Lock Icon)
     locked_image = "https://images.unsplash.com/photo-1517639493569-5666a7488662?w=600&q=80&blur=50"
     
     sent_count = 0
@@ -2486,16 +2570,13 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
             skipped_count += 1
             continue
         
-        # Check if user has diary enabled
         prefs = await db.get_user_preferences(user_id)
         if not prefs.get('diary_enabled', True):
             skipped_count += 1
             continue
         
-        # Check if user has any diary entries today
         todays_entries = await db.get_todays_diary(user_id)
         if not todays_entries:
-            # No entries today, skip this user
             skipped_count += 1
             continue
         
@@ -2517,7 +2598,7 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML
             )
             sent_count += 1
-            await asyncio.sleep(0.5)  # Anti-flood wait
+            await asyncio.sleep(0.5)
         except Exception as e:
             logger.error(f"Failed to send diary card to {user_id}: {e}")
             skipped_count += 1
@@ -2526,11 +2607,10 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the Card Reveal AND The Nervous Reaction"""
+    """Handle diary unlock"""
     query = update.callback_query
     user = update.effective_user
     
-    # Extract user_id from callback data
     callback_data = query.data
     if not callback_data.startswith('unlock_diary_'):
         await query.answer("Invalid action!", show_alert=True)
@@ -2538,33 +2618,26 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     target_user_id = int(callback_data.replace('unlock_diary_', ''))
     
-    # Security check: Only the owner can unlock their diary
     if user.id != target_user_id:
         await query.answer("Ye sirf tumhare liye hai! 👀", show_alert=True)
         return
     
-    # Answer callback immediately
     await query.answer("Unlocking memory... 🗝️")
     
-    # Get today's diary entries
     diary_entries = await db.get_todays_diary(user.id)
     
     if not diary_entries:
         diary_text = "Aaj kuch khaas nahi hua... bas aise hi time pass ho gaya. 😴"
     else:
-        # Format entries
         formatted_entries = []
         for entry in diary_entries:
             content = entry.get('content', '')
             if content:
                 formatted_entries.append(f"• {content}")
         
-        if formatted_entries:
-            diary_text = "\n".join(formatted_entries)
-        else:
-            diary_text = "Aaj ki yaadein... abhi tak blank hai. Kal se shuru karte hain! ✨"
+        diary_text = "\n".join(formatted_entries) if formatted_entries else "Aaj ki yaadein... abhi tak blank hai. Kal se shuru karte hain! ✨"
     
-    # Generate a more personal diary entry using AI
+    # Generate personal diary entry using AI
     history = await db.get_user_context(user.id)
     user_data = await db.get_or_create_user(user.id, user.first_name, user.username)
     
@@ -2587,7 +2660,6 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if ai_diary_text and len(ai_diary_text) > 20:
         final_diary = ai_diary_text
     else:
-        # Fallback to simple diary
         final_diary = f"Dear Diary...\n\nAaj {user.first_name} se baat karke acha laga. Kuch yaadein bana li. ✨\n\n{diary_text}"
     
     final_caption = (
@@ -2599,7 +2671,7 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
         f"✨ Saved to Memories"
     )
 
-    # Try to edit the message
+    # Edit message with unlocked diary
     try:
         if query.message:
             unlocked_image = "https://images.unsplash.com/photo-1517639493569-5666a7488662?w=800&q=80"
@@ -2616,7 +2688,6 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 text=final_caption,
                 parse_mode=ParseMode.HTML
             )
-            # Delete the original locked message
             try:
                 await query.message.delete()
             except:
@@ -2648,16 +2719,15 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 # ============================================================================
-# ROUTINE JOBS (Morning, Night, Random Check-ins)
+# ROUTINE MESSAGE JOB
 # ============================================================================
 
 async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
-    """Sends Messages with STRICT REALISM (No Robot Talk)"""
+    """Sends Messages with SillyTavern Realism"""
     job_data = context.job.data
     
     ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
     now = datetime.now(ist)
-    current_time_str = now.strftime("%I:%M %p") 
     current_hour = now.hour
 
     # DND Check (Don't send between 11 PM - 8 AM)
@@ -2666,9 +2736,10 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
 
     users = await db.get_all_users()
     
-    morning_texts = ["Good morning! ☀️", "Uth gaye? ✨", "Gm baby ❤️"]
-    night_texts = ["Good night 🌙", "So jao ab 😴", "Gn meri jaan 💖"]
-    random_texts = ["Kya chal raha hai?", "Yaad aa rahi thi...", "Miss you..."]
+    # Different message pools for different times
+    morning_texts = ["Good morning! ☀️", "Uth gaye? ✨", "Morning babe! ❤️", "Subah ho gayi mamu!"]
+    night_texts = ["Good night 🌙", "So jao ab 😴", "Gn meri jaan 💖", "Sweet dreams! 🌸"]
+    random_texts = ["Kya chal raha hai?", "Yaad aa rahi thi...", "Miss you...", "Bore ho rahi hoon 😅"]
 
     count = 0
     for user in users:
@@ -2683,8 +2754,8 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
             memory_context = " | ".join(memories)
             
             prompt = f"""
-            Role: You are Niyati (Girlfriend/Bestie).
-            Current Time: {current_time_str}
+            Role: You are Niyati (Girlfriend/Bestie) from SillyTavern.
+            Current Time: {now.strftime('%I:%M %p')}
             User's Past Context: "{memory_context}"
             
             Task: Decide if you should ask about this NOW.
@@ -2698,10 +2769,10 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
             Output: The direct Hinglish message OR "SKIP".
             """
             
-            check_response = await niyati_ai._call_gpt([{"role": "user", "content": prompt}], max_tokens=60)
+            response = await niyati_ai._call_gpt([{"role": "user", "content": prompt}], max_tokens=60)
             
-            if check_response and "SKIP" not in check_response:
-                final_msg = check_response
+            if response and "SKIP" not in response:
+                final_msg = response
 
         # Generic message if no memory
         if not final_msg:
@@ -2779,7 +2850,7 @@ async def post_shutdown(application: Application):
     logger.info("😴 Niyati Bot Stopped.")
 
 async def post_init(application: Application):
-    """Initialize DB and Schedule Jobs with CORRECT UTC TIMING"""
+    """Initialize DB and Schedule Jobs"""
     await db.initialize()
     await health_server.start()
     
@@ -2834,7 +2905,7 @@ async def post_init(application: Application):
         name='cleanup'
     )
 
-    logger.info("🚀 Niyati Bot Started with FIXED Timings (IST)!")
+    logger.info("🚀 Niyati Bot Started with SillyTavern AI!")
 
 # ============================================================================
 # MAIN EXECUTION
