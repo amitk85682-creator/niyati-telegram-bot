@@ -20,6 +20,7 @@ from collections import defaultdict, deque
 import threading
 import pytz
 import httpx
+from aiohttp import web
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, InputMediaPhoto
@@ -2068,7 +2069,62 @@ async def groupstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat = update.effective_chat
     
     if chat.type == 'private':
-        await
+        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
+        return
+    
+    group_data = await db.get_or_create_group(chat.id, chat.title)
+    
+    # Get settings safely
+    settings = group_data.get('settings', {})
+    if isinstance(settings, str):
+        try:
+            settings = json.loads(settings)
+        except:
+            settings = {}
+
+    # Get cached message count
+    cached_count = len(db.get_group_context(chat.id))
+    
+    stats_text = f"""
+📊 <b>Group Statistics</b>
+
+<b>Name:</b> {chat.title}
+<b>ID:</b> <code>{chat.id}</code>
+
+<b>Activity:</b>
+• Cached Messages: {cached_count}
+
+<b>Settings:</b>
+• Geeta Quotes: {'✅' if settings.get('geeta_enabled', True) else '❌'}
+• Welcome Msg: {'✅' if settings.get('welcome_enabled', True) else '❌'}
+"""
+    await update.message.reply_html(stats_text)
+
+
+async def groupsettings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show group settings"""
+    chat = update.effective_chat
+    
+    if chat.type == 'private':
+        await update.message.reply_text("Yeh command sirf groups ke liye hai!")
+        return
+
+    if not await is_group_admin(update, context):
+        await update.message.reply_text("❌ Only admins can do this!")
+        return
+
+    settings = await db.get_group_settings(chat.id)
+    
+    text = f"""
+⚙️ <b>Current Settings</b>
+
+<b>Daily Geeta Quotes:</b> {'✅' if settings.get('geeta_enabled', True) else '❌'}
+Command: <code>/setgeeta on/off</code>
+
+<b>Welcome Messages:</b> {'✅' if settings.get('welcome_enabled', True) else '❌'}
+Command: <code>/setwelcome on/off</code>
+"""
+    await update.message.reply_html(text)
 
 # ============================================================================
 # ADMIN COMMANDS
