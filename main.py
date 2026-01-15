@@ -23,7 +23,7 @@ import httpx
 from aiohttp import web
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, InputMediaPhoto
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, InputMediaPhoto, Message
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
