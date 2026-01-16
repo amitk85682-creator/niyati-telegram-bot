@@ -2020,6 +2020,27 @@ Made with 💕 by Niyati
 """
     await update.message.reply_html(help_text)
 
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /about"""
+    about_text = """
+🌸 <b>About Niyati</b> 🌸
+
+<b>Name:</b> Niyati
+<b>Age:</b> 21
+<b>From:</b> Dehradun, India 🏔️
+<b>Status:</b> B.Com Final Year Student 📚
+
+Main ek AI hoon, par dil se pure Hindustani! 🇮🇳
+Mujhe baatein karna, memes share karna aur emotional support dena pasand hai.
+
+<b>Personality:</b>
+• Thodi Sassy 💁‍♀️
+• Thodi Emotional 🥺
+• Full Filmy 🎬
+
+<i>"Main perfect nahi hoon, par main REAL hoon!"</i> ✨
+"""
+    await update.message.reply_html(about_text)
 
 async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /mood"""
