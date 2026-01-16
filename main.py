@@ -305,6 +305,12 @@ class Config:
     RANDOM_MEME_CHANCE = float(os.getenv('RANDOM_MEME_CHANCE', '0.10'))
     GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.15'))
     PRIVACY_MODE = os.getenv('PRIVACY_MODE', 'false').lower() == 'true'
+
+    # ✅ VOICE SETTINGS (Moved here from CharacterCard)
+    VOICE_ENABLED = os.getenv('VOICE_ENABLED', 'true').lower() == 'true'
+    VOICE_REPLY_CHANCE = float(os.getenv('VOICE_REPLY_CHANCE', '0.25'))
+    VOICE_MIN_TEXT_LENGTH = int(os.getenv('VOICE_MIN_TEXT_LENGTH', '15'))
+    VOICE_MAX_TEXT_LENGTH = int(os.getenv('VOICE_MAX_TEXT_LENGTH', '300'))
     
     @classmethod
     def validate(cls):
@@ -2781,9 +2787,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"🎤 Voice send error: {ve}")
             
             # Save History
-            if is_private:
-                await db.save_message(user.id, 'user', user_message)
-                await db.save_message(user.id, 'assistant', ' '.join(responses))
+            if is_private and responses:
+                # ✅ FIX: Ensure responses are strings before joining
+                clean_responses = [str(r) for r in responses if isinstance(r, str)]
+                if clean_responses:
+                    await db.save_message(user.id, 'user', user_message)
+                    await db.save_message(user.id, 'assistant', ' '.join(clean_responses))
                 
     except Exception as e:
         logger.error(f"Handler Error: {e}")
