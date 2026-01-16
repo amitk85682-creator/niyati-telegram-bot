@@ -2572,11 +2572,7 @@ async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================================
-# 🔴 MAIN MESSAGE HANDLER
-# ============================================================================
-
-# ============================================================================
-# 🔴 MAIN MESSAGE HANDLER (WITH VOICE)
+# 🔴 MAIN MESSAGE HANDLER (FIXED)
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2587,7 +2583,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     3. Anti-Spam
     4. Rate Limiting
     5. AI Response with SillyTavern
-    6. 🎤 Voice Replies (NEW!)
+    6. 🎤 Voice Replies
     """
     message = update.message
     if not message or not message.text:
@@ -2638,7 +2634,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if missing_channels:
                 logger.info(f"🚫 Blocking User {user.id} - Not joined {len(missing_channels)} channels")
-                
                 try:
                     await message.delete()
                 except:
@@ -2659,7 +2654,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.delete()
                 except:
                     pass
-                
                 return
 
     # 🔴 ANTI-SPAM (Groups Only)
@@ -2729,6 +2723,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_period=time_period
         )
 
+        # ✅ SAFETY FIX: Ensure responses are pure strings (Fixes "dict found" error)
+        safe_responses = []
+        if responses:
+            for r in responses:
+                if isinstance(r, dict):
+                    # If it's a dict, extract content or convert to string
+                    safe_responses.append(str(r.get('content', r)))
+                elif isinstance(r, str):
+                    safe_responses.append(r)
+                else:
+                    safe_responses.append(str(r))
+        responses = safe_responses
+
         # Memory extraction
         if is_private:
             memory_note = await niyati_ai.extract_important_info(user_message, user.id)
@@ -2787,15 +2794,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"🎤 Voice send error: {ve}")
             
             # Save History
-            if is_private and responses:
-                # ✅ FIX: Ensure responses are strings before joining
-                clean_responses = [str(r) for r in responses if isinstance(r, str)]
-                if clean_responses:
-                    await db.save_message(user.id, 'user', user_message)
-                    await db.save_message(user.id, 'assistant', ' '.join(clean_responses))
+            if is_private:
+                await db.save_message(user.id, 'user', user_message)
+                # Ensure join gets strings
+                combined_response = ' '.join(responses)
+                await db.save_message(user.id, 'assistant', combined_response)
                 
     except Exception as e:
-        logger.error(f"Handler Error: {e}")
+        logger.error(f"Handler Error: {e}", exc_info=True)
 
 
 # ============================================================================
