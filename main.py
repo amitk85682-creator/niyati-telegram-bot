@@ -656,19 +656,19 @@ class Database:
                 logger.info(f"🧹 Cleaned {len(to_remove)} groups from cache")
     
     # ========== USER OPERATIONS ==========
-    
+
     async def get_or_create_user(self, user_id: int, first_name: str = None,
-                              username: str = None) -> Dict:
-    """Get or create user"""
-    self._user_access_times[user_id] = datetime.now(timezone.utc)
-    
-    if self.connected and self.client:
-        try:
-            users_list = await self.client.select('users', '*', {'user_id': user_id})
-            
-            if users_list and len(users_list) > 0:
+                                 username: str = None) -> Dict:
+        """Get or create user"""
+        self._user_access_times[user_id] = datetime.now(timezone.utc)
+
+        if self.connected and self.client:
+            try:
+                users_list = await self.client.select('users', '*', {'user_id': user_id})
+
+                if users_list and len(users_list) > 0:
                     user = users_list[0]
-                    
+
                     if first_name and user.get('first_name') != first_name:
                         await self.client.update('users', {
                             'first_name': first_name,
@@ -699,10 +699,10 @@ class Database:
                     result = await self.client.insert('users', new_user)
                     logger.info(f"✅ New user created: {user_id} ({first_name})")
                     return result or new_user
-                    
+
             except Exception as e:
                 logger.error(f"❌ Database user error: {e}")
-        
+
         # Fallback to local cache
         if user_id not in self.local_users:
             self.local_users[user_id] = {
@@ -715,6 +715,7 @@ class Database:
                     'shayari_enabled': True,
                     'geeta_enabled': True,
                     'diary_enabled': True,
+                    'voice_enabled': False,
                     'active_memories': []
                 },
                 'total_messages': 0,
@@ -722,7 +723,7 @@ class Database:
                 'created_at': datetime.now(timezone.utc).isoformat()
             }
             logger.info(f"✅ New user (local): {user_id} ({first_name})")
-        
+
         return self.local_users[user_id]
     
     async def update_user_activity(self, user_id: int):
