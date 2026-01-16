@@ -20,6 +20,8 @@ from collections import defaultdict, deque
 import threading
 import pytz
 import httpx
+from io import BytesIO
+import edge_tts
 from aiohttp import web
 
 from telegram import (
