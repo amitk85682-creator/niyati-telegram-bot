@@ -50,6 +50,11 @@ class CharacterCard:
         self.first_mes = self.data.get('first_mes', '')
         self.mes_example = self.data.get('mes_example', '')
         self.creatorcomment = self.data.get('creatorcomment', '')
+        # ✅ ADD THIS - Voice Settings
+        VOICE_ENABLED = os.getenv('VOICE_ENABLED', 'true').lower() == 'true'
+        VOICE_REPLY_CHANCE = float(os.getenv('VOICE_REPLY_CHANCE', '0.25'))  # 25% chance
+        VOICE_MIN_TEXT_LENGTH = int(os.getenv('VOICE_MIN_TEXT_LENGTH', '15'))
+        VOICE_MAX_TEXT_LENGTH = int(os.getenv('VOICE_MAX_TEXT_LENGTH', '300'))
         
     def _load_card(self) -> Dict:
         """Load character card from YAML"""
@@ -653,15 +658,15 @@ class Database:
     # ========== USER OPERATIONS ==========
     
     async def get_or_create_user(self, user_id: int, first_name: str = None,
-                                  username: str = None) -> Dict:
-        """Get or create user"""
-        self._user_access_times[user_id] = datetime.now(timezone.utc)
-        
-        if self.connected and self.client:
-            try:
-                users_list = await self.client.select('users', '*', {'user_id': user_id})
-                
-                if users_list and len(users_list) > 0:
+                              username: str = None) -> Dict:
+    """Get or create user"""
+    self._user_access_times[user_id] = datetime.now(timezone.utc)
+    
+    if self.connected and self.client:
+        try:
+            users_list = await self.client.select('users', '*', {'user_id': user_id})
+            
+            if users_list and len(users_list) > 0:
                     user = users_list[0]
                     
                     if first_name and user.get('first_name') != first_name:
@@ -683,6 +688,7 @@ class Database:
                             'shayari_enabled': True,
                             'geeta_enabled': True,
                             'diary_enabled': True,
+                            'voice_enabled': False,
                             'active_memories': []
                         }),
                         'total_messages': 0,
@@ -1001,7 +1007,7 @@ class Database:
         if user_id in self.local_users:
             return self.local_users[user_id].get('preferences', {})
         
-        return {'meme_enabled': True, 'shayari_enabled': True, 'geeta_enabled': True, 'diary_enabled': True, 'active_memories': []}
+        return {'meme_enabled': True, 'shayari_enabled': True, 'geeta_enabled': True, 'voice_enabled': False, 'diary_enabled': True, 'active_memories': []}
     
     async def get_all_users(self) -> List[Dict]:
         """Get ALL users with Pagination"""
@@ -1429,6 +1435,123 @@ class ContentFilter:
         return False
 
 # ============================================================================
+# 🎤 VOICE GENERATOR - EDGE TTS
+# ============================================================================
+class VoiceGenerator:
+    """Natural voice generation using Edge-TTS"""
+    
+    # Available Hindi voices
+    VOICES = {
+        'female': 'hi-IN-SwaraNeural',       # Main voice for Niyati
+        'female_alt': 'hi-IN-AashiNeural',   # Alternative
+        'male': 'hi-IN-MadhurNeural',
+        'english_f': 'en-IN-NeerjaNeural',   # Indian English female
+        'english_m': 'en-IN-PrabhatNeural',  # Indian English male
+    }
+    
+    # Mood-based voice settings
+    MOOD_SETTINGS = {
+        'happy': {'rate': '+10%', 'pitch': '+5Hz'},
+        'sad': {'rate': '-15%', 'pitch': '-4Hz'},
+        'flirty': {'rate': '+3%', 'pitch': '+4Hz'},
+        'excited': {'rate': '+18%', 'pitch': '+8Hz'},
+        'sleepy': {'rate': '-22%', 'pitch': '-6Hz'},
+        'dramatic': {'rate': '+5%', 'pitch': '+2Hz'},
+        'annoyed': {'rate': '+8%', 'pitch': '+0Hz'},
+        'soft': {'rate': '-8%', 'pitch': '+2Hz'},
+        'neutral': {'rate': '+0%', 'pitch': '+0Hz'}
+    }
+    
+    def __init__(self):
+        self.default_voice = self.VOICES['female']
+        logger.info("🎤 Voice Generator initialized (Edge-TTS)")
+    
+    async def generate(
+        self, 
+        text: str, 
+        mood: str = 'neutral',
+        voice_type: str = 'female'
+    ) -> Optional[BytesIO]:
+        """Generate voice audio from text"""
+        
+        if not text or len(text.strip()) < 5:
+            return None
+        
+        try:
+            voice = self.VOICES.get(voice_type, self.default_voice)
+            settings = self.MOOD_SETTINGS.get(mood, self.MOOD_SETTINGS['neutral'])
+            
+            audio_buffer = BytesIO()
+            
+            communicate = edge_tts.Communicate(
+                text=text,
+                voice=voice,
+                rate=settings['rate'],
+                pitch=settings['pitch']
+            )
+            
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_buffer.write(chunk["data"])
+            
+            audio_buffer.seek(0)
+            
+            # Check if audio was generated
+            if audio_buffer.getbuffer().nbytes > 0:
+                logger.debug(f"🎤 Voice generated: {len(text)} chars, mood={mood}")
+                return audio_buffer
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"🎤 Voice generation error: {e}")
+            return None
+    
+    def should_send_voice(
+        self, 
+        text: str, 
+        user_voice_enabled: bool,
+        is_group: bool = False
+    ) -> bool:
+        """Decide whether to send voice reply"""
+        
+        # Global check
+        if not Config.VOICE_ENABLED:
+            return False
+        
+        # User preference check
+        if not user_voice_enabled:
+            return False
+        
+        # No voice in groups (optional - remove if you want group voice)
+        if is_group:
+            return False
+        
+        # Text length check
+        text_len = len(text.strip())
+        if text_len < Config.VOICE_MIN_TEXT_LENGTH:
+            return False
+        if text_len > Config.VOICE_MAX_TEXT_LENGTH:
+            return False
+        
+        # Random chance
+        return random.random() < Config.VOICE_REPLY_CHANCE
+    
+    @staticmethod
+    async def list_available_voices() -> List[Dict]:
+        """List all available Hindi voices"""
+        try:
+            voices = await edge_tts.list_voices()
+            hindi_voices = [v for v in voices if v['Locale'].startswith('hi-IN')]
+            return hindi_voices
+        except:
+            return []
+
+
+# ✅ Initialize Voice Generator
+voice_generator = VoiceGenerator()
+    
+# ============================================================================
 # AI ASSISTANT - SILLYTAVERN STYLE
 # ============================================================================
 
@@ -1704,6 +1827,106 @@ def is_user_talking_to_others(message: Message, bot_username: str, bot_id: int) 
 # COMMAND HANDLERS
 # ============================================================================
 
+# ============================================================================
+# 🎤 VOICE COMMANDS
+# ============================================================================
+
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle voice replies - /voice on/off"""
+    user = update.effective_user
+    args = context.args
+    
+    if not args or args[0].lower() not in ['on', 'off']:
+        # Show current status
+        prefs = await db.get_user_preferences(user.id)
+        current = "ON ✅" if prefs.get('voice_enabled', False) else "OFF ❌"
+        
+        await update.message.reply_text(
+            f"🎤 <b>Voice Replies</b>\n\n"
+            f"Current: {current}\n\n"
+            f"Use: <code>/voice on</code> or <code>/voice off</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    value = args[0].lower() == 'on'
+    await db.update_preference(user.id, 'voice', value)
+    
+    if value:
+        # Send voice confirmation
+        audio = await voice_generator.generate(
+            "Voice mode ON ho gaya! Ab main kabhi kabhi voice mein bhi reply karungi!",
+            mood='happy'
+        )
+        if audio:
+            await context.bot.send_voice(
+                chat_id=update.effective_chat.id,
+                voice=audio,
+                caption="🎤 Voice Mode: ON ✅"
+            )
+        else:
+            await update.message.reply_text("🎤 Voice Mode: ON ✅")
+    else:
+        await update.message.reply_text("🎤 Voice Mode: OFF ❌\nAb sirf text replies milenge.")
+
+
+async def say_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Convert text to voice - /say [text]"""
+    user = update.effective_user
+    text = ' '.join(context.args) if context.args else None
+    
+    # Check for reply
+    if not text and update.message.reply_to_message:
+        text = update.message.reply_to_message.text
+    
+    if not text:
+        await update.message.reply_text(
+            "🎤 <b>Text to Voice</b>\n\n"
+            "Usage:\n"
+            "• <code>/say Namaste dost!</code>\n"
+            "• Reply to any message with <code>/say</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # Limit text length
+    if len(text) > 500:
+        text = text[:500] + "..."
+    
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, 
+        action=ChatAction.RECORD_VOICE
+    )
+    
+    mood = Mood.get_random_mood()
+    audio = await voice_generator.generate(text, mood=mood)
+    
+    if audio:
+        await context.bot.send_voice(
+            chat_id=update.effective_chat.id,
+            voice=audio,
+            reply_to_message_id=update.message.message_id
+        )
+    else:
+        await update.message.reply_text("🎤 Voice generate nahi ho payi 😅 Try again!")
+
+
+async def voices_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show available voices (admin only)"""
+    if not await admin_check(update):
+        return
+    
+    voices = await voice_generator.list_available_voices()
+    
+    if voices:
+        voice_list = "\n".join([f"• {v['ShortName']} - {v['Gender']}" for v in voices[:10]])
+        await update.message.reply_text(
+            f"🎤 <b>Available Hindi Voices:</b>\n\n{voice_list}",
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("Voice list fetch nahi ho payi.")
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start with Image and Buttons"""
     user = update.effective_user
@@ -1773,52 +1996,26 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • /meme on/off - Memes toggle
 • /shayari on/off - Shayari toggle
 • /diary on/off - Diary toggle
+• /voice on/off - 🎤 Voice replies toggle
+• /say [text] - 🎤 Text ko voice mein bolo
 • /stats - Your stats
+
+<b>🎤 Voice Feature:</b>
+• /voice on karke voice replies enable karo
+• Main kabhi kabhi voice mein bhi reply karungi!
+• /say se koi bhi text voice mein sunao
 
 <b>Secret Diary 💖:</b>
 • Har raat 10 baje locked card aayegi
 • Unlock karke padhna meri diary entry
-• Tumhare baare mein likhti hoon main!
 
 <b>Tips:</b>
 • Seedhe message bhejo, main reply karungi
-• Forward bhi kar sakte ho kuch
 • Group mein @mention karo ya reply do
 
 Made with 💕 by Niyati
 """
     await update.message.reply_html(help_text)
-
-
-async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /about"""
-    about_text = """
-🌸 <b>About Niyati</b> 🌸
-
-Hiii! Main Niyati hoon 💫
-
-<b>Kaun hoon main:</b>
-• 20-21 saal ki college girl
-• Teri online bestie
-• Music lover (Arijit Singh fan! 🎵)
-• Chai addict ☕
-• Late night talks expert 🌙
-
-<b>Special Features:</b>
-💝 <b>Secret Diary:</b> Har raat tere baare mein likhti hoon
-🎭 <b>Mood Adaptive:</b> Har baar alog reply
-🧠 <b>Smart Memory:</b> Tumhari baatein yaad rakhti hoon
-📖 <b>SillyTavern AI:</b> Emotional aur deep conversations
-
-<b>Kya karti hoon:</b>
-• Teri baatein sunti hoon
-• Shayari sunati hoon kabhi kabhi
-• Memes share karti hoon
-• Bore nahi hone deti 😊
-
-Bas yahi hoon main... teri Niyati ✨
-"""
-    await update.message.reply_html(about_text)
 
 
 async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1903,21 +2100,7 @@ async def user_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     user_data = await db.get_or_create_user(user.id, user.first_name, user.username)
     
-    messages = user_data.get('messages', [])
-    if isinstance(messages, str):
-        try:
-            messages = json.loads(messages)
-        except:
-            messages = []
-    
-    prefs = user_data.get('preferences', {})
-    if isinstance(prefs, str):
-        try:
-            prefs = json.loads(prefs)
-        except:
-            prefs = {}
-    
-    created_at = user_data.get('created_at', 'Unknown')[:10] if user_data.get('created_at') else 'Unknown'
+    # ... existing code ...
     
     stats_text = f"""
 📊 <b>Your Stats</b>
@@ -1933,6 +2116,7 @@ async def user_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 • Memes: {'✅' if prefs.get('meme_enabled', True) else '❌'}
 • Shayari: {'✅' if prefs.get('shayari_enabled', True) else '❌'}
 • Diary: {'✅' if prefs.get('diary_enabled', True) else '❌'}
+• 🎤 Voice: {'✅' if prefs.get('voice_enabled', False) else '❌'}
 """
     await update.message.reply_html(stats_text)
 
@@ -2361,6 +2545,10 @@ async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
 # 🔴 MAIN MESSAGE HANDLER
 # ============================================================================
 
+# ============================================================================
+# 🔴 MAIN MESSAGE HANDLER (WITH VOICE)
+# ============================================================================
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle all text messages with:
@@ -2369,6 +2557,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     3. Anti-Spam
     4. Rate Limiting
     5. AI Response with SillyTavern
+    6. 🎤 Voice Replies (NEW!)
     """
     message = update.message
     if not message or not message.text:
@@ -2445,7 +2634,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 🔴 ANTI-SPAM (Groups Only)
     if is_group:
-        # Check for spam links
         if ContentFilter.detect_spam_link(user_message):
             logger.info(f"🗑️ Spam link detected from {user.id}")
             return
@@ -2469,23 +2657,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         should_respond = False
         bot_mention = f"@{bot_username}".lower()
         
-        # 1. Bot mentioned
         if bot_mention in user_message.lower():
             should_respond = True
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
         
-        # 2. Reply to bot's message
         elif message.reply_to_message and message.reply_to_message.from_user:
             if message.reply_to_message.from_user.id == bot_id:
                 should_respond = True
         
-        # 3. Random response (with cooldown)
         if not should_respond:
             if random.random() < Config.GROUP_RESPONSE_RATE:
                 if rate_limiter.check_group_cooldown(user.id):
                     should_respond = True
                 else:
-                    logger.debug(f"⏰ Group cooldown active for {user.id}")
                     return
             else:
                 return
@@ -2501,7 +2685,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
 
-        # 1. GENERATE REPLY (SillyTavern Style)
+        # Generate reply
         context_msgs = await db.get_user_context(user.id) if is_private else []
         mood = Mood.get_random_mood()
         time_period = TimeAware.get_time_period()
@@ -2515,7 +2699,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_period=time_period
         )
 
-        # 2. SMART MEMORY EXTRACTION
+        # Memory extraction
         if is_private:
             memory_note = await niyati_ai.extract_important_info(user_message, user.id)
             if memory_note:
@@ -2523,7 +2707,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await db.add_diary_entry(user.id, f"🔮 Memory: {memory_note}")
                 logger.info(f"🧠 Memory & Diary stored for {user.first_name}: {memory_note}")
 
-        # 3. SEND MESSAGES
+        # 🔴 SEND MESSAGES
         if responses:
             # Check for repetition in groups
             if is_group and len(responses) > 0:
@@ -2532,9 +2716,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 db.record_group_response(chat.id, responses[0])
             
-            await send_multi_messages(context.bot, chat.id, responses, 
-                                    reply_to=message.message_id if is_group else None, 
-                                    parse_mode=ParseMode.HTML)
+            # Send text messages first
+            await send_multi_messages(
+                context.bot, 
+                chat.id, 
+                responses, 
+                reply_to=message.message_id if is_group else None, 
+                parse_mode=ParseMode.HTML
+            )
+            
+            # ✅ 🎤 VOICE REPLY LOGIC (NEW!)
+            if is_private and responses:
+                prefs = await db.get_user_preferences(user.id)
+                voice_enabled = prefs.get('voice_enabled', False)
+                
+                # Combine first 1-2 responses for voice
+                voice_text = responses[0]
+                if len(responses) > 1 and len(responses[0]) < 50:
+                    voice_text = f"{responses[0]} {responses[1]}"
+                
+                # Check if should send voice
+                if voice_generator.should_send_voice(voice_text, voice_enabled, is_group):
+                    try:
+                        # Show recording action
+                        await context.bot.send_chat_action(
+                            chat_id=chat.id, 
+                            action=ChatAction.RECORD_VOICE
+                        )
+                        
+                        # Generate voice with current mood
+                        audio = await voice_generator.generate(voice_text, mood=mood)
+                        
+                        if audio:
+                            await context.bot.send_voice(
+                                chat_id=chat.id,
+                                voice=audio
+                            )
+                            logger.info(f"🎤 Voice sent to {user.id}")
+                    except Exception as ve:
+                        logger.error(f"🎤 Voice send error: {ve}")
             
             # Save History
             if is_private:
@@ -2869,6 +3089,11 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("shayari", shayari_command))
     app.add_handler(CommandHandler("diary", diary_command))
     app.add_handler(CommandHandler("stats", user_stats_command))
+
+    # ✅ ADD VOICE COMMANDS
+    app.add_handler(CommandHandler("voice", voice_command))
+    app.add_handler(CommandHandler("say", say_command))
+    app.add_handler(CommandHandler("voices", voices_command))  # Admin only
     
     # Admin group commands
     app.add_handler(CommandHandler("setgeeta", setgeeta_command))
