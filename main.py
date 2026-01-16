@@ -1657,7 +1657,20 @@ class NiyatiAI:
         """Get active memories for user"""
         if hasattr(self, '_current_user_id'):
             prefs = await db.get_user_preferences(self._current_user_id)
-            return prefs.get('active_memories', [])
+            raw_memories = prefs.get('active_memories', [])
+            
+            # ✅ FIX: Extract the 'note' string from the dictionary
+            clean_memories = []
+            for m in raw_memories:
+                if isinstance(m, dict):
+                    # Only add if status is active and note exists
+                    if m.get('status') == 'active' and m.get('note'):
+                        clean_memories.append(m['note'])
+                elif isinstance(m, str):
+                    # Handle legacy data that might just be strings
+                    clean_memories.append(m)
+            
+            return clean_memories
         return []
     
     def _add_emotional_touch(self, responses: List[str], mood: str) -> List[str]:
