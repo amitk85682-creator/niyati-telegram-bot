@@ -27,4 +27,4 @@ httpx
 groq
 google-generativeai
 PyYAML
-edge-tts==6.1.9
+edge-tts
