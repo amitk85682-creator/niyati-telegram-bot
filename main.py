@@ -1757,32 +1757,54 @@ async def send_multi_messages(
     reply_to: int = None,
     parse_mode: str = None
 ):
-    """Send multiple messages with natural delays"""
+    # ... (send_multi_messages ka purana code waisa hi rahega) ...
     for i, msg in enumerate(messages):
-        if not msg or not msg.strip():
-            continue
-            
-        if i > 0:
-            try:
-                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-            except:
-                pass
-            
-            if Config.MULTI_MESSAGE_ENABLED:
-                delay = (Config.TYPING_DELAY_MS / 1000) + random.uniform(0.2, 0.8)
-            else:
-                delay = 0.1
-            await asyncio.sleep(delay)
+       # ... code ...
+       except Exception as e:
+           logger.error(f"Send error: {e}")
+
+# 👇👇👇 YAHAN PAR NAYA FUNCTION ADD KARO 👇👇👇
+
+async def send_niyati_voice(bot, chat_id, text):
+    """
+    Niyati ki awaaz (Tuned for Emotion).
+    Uses Edge-TTS with Pitch & Rate adjustments.
+    """
+    try:
+        # VOICE SETTINGS (Tuning)
+        # Voice: Neerja (Best for Hinglish)
+        # Rate: +10% (Thoda fast, natural flow ke liye)
+        # Pitch: +5Hz (Thoda sweet tone ke liye)
         
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=msg,
-                reply_to_message_id=reply_to if i == 0 else None,
-                parse_mode=parse_mode
+        voice = 'en-IN-NeerjaNeural'
+        rate = '+10%'   # Speed badhayi
+        pitch = '+5Hz'  # Pitch badhayi (Sweeter voice)
+        
+        output_file = f"voice_{chat_id}_{int(datetime.now().timestamp())}.mp3"
+        
+        # Communicate object with tuning parameters
+        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+        await communicate.save(output_file)
+        
+        # "Recording..." action bhejo
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
+        await asyncio.sleep(len(text) / 15) # Text length ke hisab se fake delay
+        
+        # Audio bhejo
+        with open(output_file, 'rb') as audio:
+            await bot.send_voice(
+                chat_id=chat_id, 
+                voice=audio,
+                # caption="🎤 Voice Note" # Caption hata diya taaki real lage
             )
-        except Exception as e:
-            logger.error(f"Send error: {e}")
+            
+        if os.path.exists(output_file):
+            os.remove(output_file)
+            
+    except Exception as e:
+        logger.error(f"Voice Error: {e}")
+        # Error aaye to text bhej do
+        await bot.send_message(chat_id=chat_id, text=text)
 
 # ============================================================================
 # SMART REPLY/MENTION DETECTION
