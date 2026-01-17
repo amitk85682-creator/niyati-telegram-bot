@@ -1757,13 +1757,32 @@ async def send_multi_messages(
     reply_to: int = None,
     parse_mode: str = None
 ):
-    # ... (send_multi_messages ka purana code waisa hi rahega) ...
+    """Send multiple messages with natural delays"""
     for i, msg in enumerate(messages):
-       # ... code ...
-       except Exception as e:
-           logger.error(f"Send error: {e}")
-
-# 👇👇👇 YAHAN PAR NAYA FUNCTION ADD KARO 👇👇👇
+        if not msg or not msg.strip():
+            continue
+            
+        if i > 0:
+            try:
+                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            except:
+                pass
+            
+            if Config.MULTI_MESSAGE_ENABLED:
+                delay = (Config.TYPING_DELAY_MS / 1000) + random.uniform(0.2, 0.8)
+            else:
+                delay = 0.1
+            await asyncio.sleep(delay)
+        
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=msg,
+                reply_to_message_id=reply_to if i == 0 else None,
+                parse_mode=parse_mode
+            )
+        except Exception as e:
+            logger.error(f"Send error: {e}")
 
 async def send_niyati_voice(bot, chat_id, text):
     """
@@ -1805,6 +1824,8 @@ async def send_niyati_voice(bot, chat_id, text):
         logger.error(f"Voice Error: {e}")
         # Error aaye to text bhej do
         await bot.send_message(chat_id=chat_id, text=text)
+
+# 👆👆👆 YAHAN KHATAM 👆👆👆
 
 # ============================================================================
 # SMART REPLY/MENTION DETECTION
