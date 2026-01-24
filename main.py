@@ -1746,6 +1746,15 @@ class NiyatiAI:
 # Initialize AI
 niyati_ai = NiyatiAI()
 
+async def delete_later(bot, chat_id, message_id, delay=120):
+    """Background task to delete message after delay"""
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"🗑️ Auto-deleted message {message_id} in group {chat_id}")
+    except Exception as e:
+        logger.debug(f"Failed to auto-delete: {e}")
+
 # ============================================================================
 # MESSAGE SENDER
 # ============================================================================
@@ -1755,9 +1764,10 @@ async def send_multi_messages(
     chat_id: int,
     messages: List[str],
     reply_to: int = None,
-    parse_mode: str = None
+    parse_mode: str = None,
+    auto_delete: bool = False  # New Parameter
 ):
-    """Send multiple messages with natural delays"""
+    """Send multiple messages with natural delays and auto-delete support"""
     for i, msg in enumerate(messages):
         if not msg or not msg.strip():
             continue
@@ -1775,12 +1785,17 @@ async def send_multi_messages(
             await asyncio.sleep(delay)
         
         try:
-            await bot.send_message(
+            sent_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=msg,
                 reply_to_message_id=reply_to if i == 0 else None,
                 parse_mode=parse_mode
             )
+            
+            # ✅ AUTO DELETE LOGIC (2 Minutes = 120 Seconds)
+            if auto_delete:
+                asyncio.create_task(delete_later(bot, chat_id, sent_msg.message_id, delay=120))
+                
         except Exception as e:
             logger.error(f"Send error: {e}")
 
@@ -2784,7 +2799,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if responses:
             for r in responses:
                 if isinstance(r, dict):
-                    # If it's a dict, extract content or convert to string
                     safe_responses.append(str(r.get('content', r)))
                 elif isinstance(r, str):
                     safe_responses.append(r)
@@ -2792,13 +2806,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     safe_responses.append(str(r))
         responses = safe_responses
 
-        # Memory extraction
-        if is_private:
-            memory_note = await niyati_ai.extract_important_info(user_message, user.id)
-            if memory_note:
-                await db.add_user_memory(user.id, memory_note)
-                await db.add_diary_entry(user.id, f"🔮 Memory: {memory_note}")
-                logger.info(f"🧠 Memory & Diary stored for {user.first_name}: {memory_note}")
+        # ❌❌❌ EVENT WALA SYSTEM REMOVED ❌❌❌
+        # (Niche wala block comment/delete kar diya hai)
+        # if is_private:
+        #     memory_note = await niyati_ai.extract_important_info(user_message, user.id)
+        #     if memory_note:
+        #         await db.add_user_memory(user.id, memory_note)
+        #         await db.add_diary_entry(user.id, f"🔮 Memory: {memory_note}")
+        #         logger.info(f"🧠 Memory & Diary stored for {user.first_name}: {memory_note}")
 
         # 🔴 SEND MESSAGES
         if responses:
@@ -2810,15 +2825,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.record_group_response(chat.id, responses[0])
             
             # Send text messages first
+            # ✅ AUTO DELETE ENABLED FOR GROUPS
             await send_multi_messages(
                 context.bot, 
                 chat.id, 
                 responses, 
                 reply_to=message.message_id if is_group else None, 
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                auto_delete=is_group  # Agar group hai to auto delete hoga (2 min)
             )
             
-            # ✅ 🎤 VOICE REPLY LOGIC (NEW!)
+            # ✅ 🎤 VOICE REPLY LOGIC (Sirf Private mein rakha hai abhi)
             if is_private and responses:
                 prefs = await db.get_user_preferences(user.id)
                 voice_enabled = prefs.get('voice_enabled', False)
@@ -2831,13 +2848,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Check if should send voice
                 if voice_generator.should_send_voice(voice_text, voice_enabled, is_group):
                     try:
-                        # Show recording action
                         await context.bot.send_chat_action(
                             chat_id=chat.id, 
                             action=ChatAction.RECORD_VOICE
                         )
                         
-                        # Generate voice with current mood
                         audio = await voice_generator.generate(voice_text, mood=mood)
                         
                         if audio:
@@ -2852,7 +2867,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Save History
             if is_private:
                 await db.save_message(user.id, 'user', user_message)
-                # Ensure join gets strings
                 combined_response = ' '.join(responses)
                 await db.save_message(user.id, 'assistant', combined_response)
                 
