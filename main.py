@@ -1616,8 +1616,8 @@ class NiyatiAI:
         return None
     
     async def generate_response(self, user_message, context=None, user_name=None, 
-                          is_group=False, mood=None, time_period=None,
-                          user_id=None) -> List[str]:
+            is_group=False, mood=None, time_period=None,
+            user_id=None) -> List[str]:
     """Generate SillyTavern-style response"""
     
     # ✅ ADD THIS LINE
