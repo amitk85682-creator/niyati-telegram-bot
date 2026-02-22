@@ -3275,9 +3275,9 @@ def setup_handlers(app: Application):
     # Diary callback
     app.add_handler(CallbackQueryHandler(diary_unlock_callback, pattern="^unlock_diary_"))
 
-    app.add_handler(CallbackQueryHandler
-        start_button_callback,
-    ))
+    app.add_handler(CallbackQueryHandler(
+    start_button_callback
+))
 
     # Message Handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
