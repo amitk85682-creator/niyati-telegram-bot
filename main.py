@@ -1616,14 +1616,14 @@ class NiyatiAI:
         return None
     
     async def generate_response(self, user_message, context=None, user_name=None, 
-            is_group=False, mood=None, time_period=None,
-            user_id=None) -> List[str]:
-    """Generate SillyTavern-style response"""
-    
-    # ✅ ADD THIS LINE
-    if user_id:
-        self._current_user_id = user_id
+                               is_group=False, mood=None, time_period=None,
+                               user_id=None) -> List[str]:
+        """Generate SillyTavern-style response""" # Indented 4 spaces
         
+        # ✅ ADD THIS LINE
+        if user_id:
+            self._current_user_id = user_id
+            
         # Build prompt using SillyTavern format
         messages = self.prompt_builder.build_prompt(
             user_name=user_name or "User",
