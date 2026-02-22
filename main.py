@@ -1655,27 +1655,27 @@ class NiyatiAI:
         return responses
     
     async def _get_user_memories(self, user_name: str) -> List[str]:
-    """Get active memories for user"""
-    user_id = getattr(self, '_current_user_id', None)
-    if not user_id:
-        return []
-    
-    try:
-        prefs = await db.get_user_preferences(user_id)
-        raw_memories = prefs.get('active_memories', [])
+        """Get active memories for user"""
+        user_id = getattr(self, '_current_user_id', None)
+        if not user_id:
+            return []
         
-        clean_memories = []
-        for m in raw_memories:
-            if isinstance(m, dict):
-                if m.get('status') == 'active' and m.get('note'):
-                    clean_memories.append(m['note'])
-            elif isinstance(m, str):
-                clean_memories.append(m)
-        
-        return clean_memories
-    except Exception as e:
-        logger.debug(f"Memory fetch error: {e}")
-        return []
+        try:
+            prefs = await db.get_user_preferences(user_id)
+            raw_memories = prefs.get('active_memories', [])
+            
+            clean_memories = []
+            for m in raw_memories:
+                if isinstance(m, dict):
+                    if m.get('status') == 'active' and m.get('note'):
+                        clean_memories.append(m['note'])
+                elif isinstance(m, str):
+                    clean_memories.append(m)
+            
+            return clean_memories
+        except Exception as e:
+            logger.debug(f"Memory fetch error: {e}")
+            return []
     
     def _add_emotional_touch(self, responses: List[str], mood: str) -> List[str]:
         """Add mood-based emotional expressions"""
