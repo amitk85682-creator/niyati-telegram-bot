@@ -52,11 +52,7 @@ class CharacterCard:
         self.first_mes = self.data.get('first_mes', '')
         self.mes_example = self.data.get('mes_example', '')
         self.creatorcomment = self.data.get('creatorcomment', '')
-        # ✅ ADD THIS - Voice Settings
-        VOICE_ENABLED = os.getenv('VOICE_ENABLED', 'true').lower() == 'true'
-        VOICE_REPLY_CHANCE = float(os.getenv('VOICE_REPLY_CHANCE', '0.25'))  # 25% chance
-        VOICE_MIN_TEXT_LENGTH = int(os.getenv('VOICE_MIN_TEXT_LENGTH', '15'))
-        VOICE_MAX_TEXT_LENGTH = int(os.getenv('VOICE_MAX_TEXT_LENGTH', '300'))
+        
         
     def _load_card(self) -> Dict:
         """Load character card from YAML"""
@@ -238,7 +234,7 @@ Scenario: {self.character.scenario}"""
             part = part.replace('{{char}}', 'Niyati')
             
             # Clean up any remaining brackets
-            part = re.sub(r'{{\\w+}}', '', part)
+            part = re.sub(r'\{\{\w+\}\}', '', part)
             
             if part and len(part) > 2:
                 cleaned.append(part)
@@ -1620,8 +1616,13 @@ class NiyatiAI:
         return None
     
     async def generate_response(self, user_message, context=None, user_name=None, 
-                              is_group=False, mood=None, time_period=None) -> List[str]:
-        """Generate SillyTavern-style response"""
+                          is_group=False, mood=None, time_period=None,
+                          user_id=None) -> List[str]:
+    """Generate SillyTavern-style response"""
+    
+    # ✅ ADD THIS LINE
+    if user_id:
+        self._current_user_id = user_id
         
         # Build prompt using SillyTavern format
         messages = self.prompt_builder.build_prompt(
@@ -1654,23 +1655,26 @@ class NiyatiAI:
         return responses
     
     async def _get_user_memories(self, user_name: str) -> List[str]:
-        """Get active memories for user"""
-        if hasattr(self, '_current_user_id'):
-            prefs = await db.get_user_preferences(self._current_user_id)
-            raw_memories = prefs.get('active_memories', [])
-            
-            # ✅ FIX: Extract the 'note' string from the dictionary
-            clean_memories = []
-            for m in raw_memories:
-                if isinstance(m, dict):
-                    # Only add if status is active and note exists
-                    if m.get('status') == 'active' and m.get('note'):
-                        clean_memories.append(m['note'])
-                elif isinstance(m, str):
-                    # Handle legacy data that might just be strings
-                    clean_memories.append(m)
-            
-            return clean_memories
+    """Get active memories for user"""
+    user_id = getattr(self, '_current_user_id', None)
+    if not user_id:
+        return []
+    
+    try:
+        prefs = await db.get_user_preferences(user_id)
+        raw_memories = prefs.get('active_memories', [])
+        
+        clean_memories = []
+        for m in raw_memories:
+            if isinstance(m, dict):
+                if m.get('status') == 'active' and m.get('note'):
+                    clean_memories.append(m['note'])
+            elif isinstance(m, str):
+                clean_memories.append(m)
+        
+        return clean_memories
+    except Exception as e:
+        logger.debug(f"Memory fetch error: {e}")
         return []
     
     def _add_emotional_touch(self, responses: List[str], mood: str) -> List[str]:
@@ -2197,7 +2201,30 @@ async def user_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     user_data = await db.get_or_create_user(user.id, user.first_name, user.username)
     
-    # ... existing code ...
+    # Messages extract karo
+    messages = user_data.get('messages', '[]')
+    if isinstance(messages, str):
+        try:
+            messages = json.loads(messages)
+        except:
+            messages = []
+    if not isinstance(messages, list):
+        messages = []
+    
+    # Preferences extract karo
+    prefs = user_data.get('preferences', '{}')
+    if isinstance(prefs, str):
+        try:
+            prefs = json.loads(prefs)
+        except:
+            prefs = {}
+    if not isinstance(prefs, dict):
+        prefs = {}
+    
+    # Created date
+    created_at = user_data.get('created_at', 'Unknown')
+    if isinstance(created_at, str) and len(created_at) > 10:
+        created_at = created_at[:10]
     
     stats_text = f"""
 📊 <b>Your Stats</b>
@@ -2643,9 +2670,7 @@ async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
 # ============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle text messages - Event System Removed & Auto Delete Added
-    """
+    """Handle text messages - Complete Fixed Version"""
     message = update.message
     if not message or not message.text:
         return
@@ -2666,10 +2691,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = Config.BOT_USERNAME
     bot_id = context.bot.id
 
-    # ... (Smart Reply / Force Sub / Anti-Spam code same rahega) ...
-    # Main code change neeche hai:
+    # ========== ANTI-SPAM CHECK ==========
+    if ContentFilter.detect_spam_link(user_message):
+        logger.info(f"🚫 Spam link detected from {user.id}")
+        return
 
-    # 🔴 GROUP RESPONSE DECISION
+    # ========== RATE LIMIT CHECK ==========
+    allowed, reason = rate_limiter.check(user.id)
+    if not allowed:
+        if reason == "day":
+            await message.reply_text("Aaj ke liye bahut baat ho gayi 😅 Kal milte hain!")
+        return
+
+    # ========== SMART REPLY DETECTION (Groups) ==========
+    if is_group:
+        if is_user_talking_to_others(message, bot_username, bot_id):
+            return
+
+    # ========== GROUP FORCE SUB CHECK ==========
+    if is_group:
+        try:
+            fsub_targets = await db.get_group_fsub_targets(chat.id)
+            if fsub_targets:
+                not_joined = []
+                for target in fsub_targets:
+                    target_id = target.get('target_chat_id')
+                    target_link = target.get('target_link', '')
+                    if target_id:
+                        try:
+                            member = await context.bot.get_chat_member(
+                                chat_id=int(target_id), 
+                                user_id=user.id
+                            )
+                            if member.status in ['left', 'kicked']:
+                                not_joined.append(target_link)
+                        except:
+                            pass
+                
+                if not_joined:
+                    buttons = []
+                    for i, link in enumerate(not_joined):
+                        if link:
+                            buttons.append([InlineKeyboardButton(
+                                f"Join Channel {i+1}", url=link
+                            )])
+                    
+                    if buttons:
+                        reply_markup = InlineKeyboardMarkup(buttons)
+                        try:
+                            await message.reply_text(
+                                "Pehle channels join karo! 👇",
+                                reply_markup=reply_markup
+                            )
+                        except:
+                            pass
+                        return
+        except Exception as e:
+            logger.debug(f"FSub check error: {e}")
+
+    # ========== GROUP RESPONSE DECISION ==========
     if is_group:
         db.add_group_message(chat.id, user.first_name, user_message)
         
@@ -2679,7 +2759,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Check mention or reply
         if bot_mention in user_message.lower():
             should_respond = True
-            user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
+            user_message = re.sub(
+                rf'@{bot_username}', '', user_message, flags=re.IGNORECASE
+            ).strip()
         elif message.reply_to_message and message.reply_to_message.from_user:
             if message.reply_to_message.from_user.id == bot_id:
                 should_respond = True
@@ -2694,18 +2776,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 return
         
+        if not user_message.strip():
+            return
+        
         await db.get_or_create_group(chat.id, chat.title)
 
     if is_private:
         await db.get_or_create_user(user.id, user.first_name, user.username)
 
-    # 🔴 AI RESPONSE
+    # ========== DISTRESS CHECK ==========
+    msg_lower = user_message.lower()
+    for keyword in ContentFilter.DISTRESS_KEYWORDS:
+        if keyword in msg_lower:
+            await message.reply_text(
+                "Hey, main tumhare saath hoon. 💛\n"
+                "Agar kuch bura feel ho raha hai, please iCall helpline pe call karo: "
+                "<b>9152987821</b>\nYa AASRA: <b>9820466726</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+    # ========== AI RESPONSE ==========
     try:
-        await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
+        await context.bot.send_chat_action(
+            chat_id=chat.id, action=ChatAction.TYPING
+        )
 
         context_msgs = await db.get_user_context(user.id) if is_private else []
         mood = Mood.get_random_mood()
         time_period = TimeAware.get_time_period()
+        
+        # Set current user ID for memory access
+        niyati_ai._current_user_id = user.id
         
         responses = await niyati_ai.generate_response(
             user_message=user_message,
@@ -2713,43 +2815,80 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_name=user.first_name,
             is_group=is_group,
             mood=mood,
-            time_period=time_period
+            time_period=time_period,
+            user_id=user.id
         )
 
         # Clean responses
         safe_responses = []
         if responses:
             for r in responses:
-                if isinstance(r, dict): safe_responses.append(str(r.get('content', r)))
-                elif isinstance(r, str): safe_responses.append(r)
-                else: safe_responses.append(str(r))
+                if isinstance(r, dict):
+                    safe_responses.append(str(r.get('content', r)))
+                elif isinstance(r, str) and r.strip():
+                    safe_responses.append(r)
+                else:
+                    safe_responses.append(str(r))
         responses = safe_responses
 
-        # ❌❌❌ EVENT SYSTEM REMOVED FROM HERE ❌❌❌
-        # (Maine wo code block hata diya jo memory extract karta tha)
+        if not responses:
+            return
 
-        # 🔴 SEND MESSAGES
-        if responses:
-            if is_group and len(responses) > 0:
-                if not db.should_send_group_response(chat.id, responses[0]):
-                    return
-                db.record_group_response(chat.id, responses[0])
+        # ========== SEND MESSAGES ==========
+        if is_group and len(responses) > 0:
+            if not db.should_send_group_response(chat.id, responses[0]):
+                return
+            db.record_group_response(chat.id, responses[0])
+        
+        await send_multi_messages(
+            context.bot, 
+            chat.id, 
+            responses, 
+            reply_to=message.message_id if is_group else None, 
+            parse_mode=ParseMode.HTML,
+            auto_delete=is_group
+        )
+        
+        # ========== VOICE REPLY (Private Only) ==========
+        if is_private and responses:
+            prefs = await db.get_user_preferences(user.id)
+            voice_enabled = prefs.get('voice_enabled', False)
+            combined_text = ' '.join(responses)
             
-            # ✅ AUTO DELETE ON FOR GROUPS
-            await send_multi_messages(
-                context.bot, 
-                chat.id, 
-                responses, 
-                reply_to=message.message_id if is_group else None, 
-                parse_mode=ParseMode.HTML,
-                auto_delete=is_group  # Agar group hai to delete hoga
-            )
+            if voice_generator.should_send_voice(
+                combined_text, voice_enabled, is_group=False
+            ):
+                audio = await voice_generator.generate(
+                    combined_text, mood=mood
+                )
+                if audio:
+                    try:
+                        await context.bot.send_chat_action(
+                            chat_id=chat.id, 
+                            action=ChatAction.RECORD_VOICE
+                        )
+                        await asyncio.sleep(1)
+                        await context.bot.send_voice(
+                            chat_id=chat.id, voice=audio
+                        )
+                    except Exception as e:
+                        logger.debug(f"Voice send error: {e}")
+        
+        # ========== SAVE HISTORY (Private Only) ==========
+        if is_private:
+            await db.save_message(user.id, 'user', user_message)
+            combined_response = ' '.join(responses)
+            await db.save_message(user.id, 'assistant', combined_response)
             
-            # Save History (Only Private)
-            if is_private:
-                await db.save_message(user.id, 'user', user_message)
-                combined_response = ' '.join(responses)
-                await db.save_message(user.id, 'assistant', combined_response)
+            # ========== DIARY ENTRY (Extract Important Info) ==========
+            try:
+                important = await niyati_ai.extract_important_info(
+                    user_message, user.id
+                )
+                if important:
+                    await db.add_diary_entry(user.id, important)
+            except Exception as e:
+                logger.debug(f"Diary extract error: {e}")
                 
     except Exception as e:
         logger.error(f"Handler Error: {e}", exc_info=True)
@@ -2831,20 +2970,26 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
     skipped_count = 0
     
     for user in users:
-        user_id = user.get('user_id')
-        if not user_id: 
-            skipped_count += 1
-            continue
-        
-        prefs = await db.get_user_preferences(user_id)
-        if not prefs.get('diary_enabled', True):
-            skipped_count += 1
-            continue
-        
-        todays_entries = await db.get_todays_diary(user_id)
-        if not todays_entries:
-            skipped_count += 1
-            continue
+    user_id = user.get('user_id')
+    if not user_id: 
+        skipped_count += 1
+        continue
+    
+    prefs = await db.get_user_preferences(user_id)
+    if not prefs.get('diary_enabled', True):
+        skipped_count += 1
+        continue
+    
+    # ✅ FIX: Check if user has ANY chat history today, not just diary entries
+    todays_entries = await db.get_todays_diary(user_id)
+    user_context = await db.get_user_context(user_id)
+    
+    # Send diary card if user chatted today (even without explicit diary entries)
+    if not todays_entries and not user_context:
+        skipped_count += 1
+        continue
+    
+    # ... rest same ...
         
         keyboard = [[InlineKeyboardButton("✨ Unlock Memory ✨", callback_data=f"unlock_diary_{user_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2930,7 +3075,7 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     final_caption = (
         f"🔓 <b>Unlocked: Niyati's Diary</b>\n"
-        f"📅 {datetime.now(TimeAware.get_ist_time().tzinfo).strftime('%d %B, %Y')}\n"
+        f"📅 {TimeAware.get_ist_time().strftime('%d %B, %Y')}\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
         f"<i>{final_diary}</i>\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -2984,6 +3129,48 @@ async def diary_unlock_callback(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error(f"Reaction failed: {e}")
 
 
+async def start_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle start menu button clicks"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == 'about_me':
+        about_text = """
+🌸 <b>About Niyati</b> 🌸
+
+<b>Name:</b> Niyati
+<b>Age:</b> 21
+<b>From:</b> Dehradun, India 🏔️
+<b>Status:</b> B.Com Final Year Student 📚
+
+Main ek AI hoon, par dil se pure Hindustani! 🇮🇳
+Personality: Thodi Sassy 💁‍♀️ Thodi Emotional 🥺 Full Filmy 🎬
+
+<i>"Main perfect nahi hoon, par main REAL hoon!"</i> ✨
+"""
+        await query.edit_message_caption(
+            caption=about_text, parse_mode=ParseMode.HTML
+        )
+    
+    elif query.data == 'help':
+        help_text = """
+✨ <b>Niyati se kaise baat karein:</b>
+
+• /start - Start fresh
+• /help - Help menu
+• /mood - Aaj ka mood
+• /forget - Memory clear
+• /voice on/off - 🎤 Voice toggle
+• /say [text] - Text to voice
+• /diary on/off - Secret diary
+
+Seedhe message bhejo, main reply karungi! 💫
+Group mein @mention karo ya reply do.
+"""
+        await query.edit_message_caption(
+            caption=help_text, parse_mode=ParseMode.HTML
+        )
+
 # ============================================================================
 # ROUTINE MESSAGE JOB
 # ============================================================================
@@ -3006,13 +3193,27 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
 
     count = 0
     for user in users:
-        user_id = user.get('user_id')
-        if not user_id: continue
+    user_id = user.get('user_id')
+    if not user_id: continue
 
-        # ❌❌❌ MEMORY CHECK REMOVED ❌❌❌
-        # Ab wo purane events check nahi karegi, seedha normal message bhejegi.
-        
-        final_msg = ""
+    # ✅ ADD: Skip admin-only or bot users
+    if job_data == 'random' and random.random() > 0.3: 
+        continue
+
+    # ✅ ADD: Check if user is active recently (last 2 days)
+    last_activity = user.get('last_activity', '')
+    if last_activity:
+        try:
+            last_time = datetime.fromisoformat(
+                last_activity.replace('Z', '+00:00')
+            )
+            if (datetime.now(timezone.utc) - last_time).days > 2:
+                continue  # Skip inactive users
+        except:
+            pass
+
+    final_msg = ""
+    # ... rest same ...
         
         if job_data == 'random' and random.random() > 0.3: 
             continue
@@ -3073,6 +3274,10 @@ def setup_handlers(app: Application):
     
     # Diary callback
     app.add_handler(CallbackQueryHandler(diary_unlock_callback, pattern="^unlock_diary_"))
+
+    app.add_handler(CallbackQueryHandler
+        start_button_callback,
+    ))
 
     # Message Handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
