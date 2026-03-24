@@ -1,7 +1,7 @@
 """
 ╔════════════════════════════════════════════════════════════════════════════╗
-║                    NIYATI BOT v4.0 - SILLYTAVERN EDITION                  ║
-║              🌸 Emotional AI with Character Cards & Lorebooks 🌸           ║
+║                    NIYATI BOT v4.0 - SILLYTAVERN EDITION                   ║
+║             🌸 Emotional AI with Character Cards & Lorebooks 🌸            ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -648,7 +648,7 @@ class Database:
             if to_remove:
                 logger.info(f"🧹 Cleaned {len(to_remove)} users from cache")
         
-        # Database class continuation from previous partial code
+        # Cleanup groups
         if len(self.local_groups) > Config.MAX_LOCAL_GROUPS_CACHE:
             to_remove = [gid for gid, t in self._group_access_times.items() if t < cutoff_time]
             for gid in to_remove[:len(self.local_groups) - Config.MAX_LOCAL_GROUPS_CACHE]:
@@ -1618,7 +1618,7 @@ class NiyatiAI:
     async def generate_response(self, user_message, context=None, user_name=None, 
                                is_group=False, mood=None, time_period=None,
                                user_id=None) -> List[str]:
-        """Generate SillyTavern-style response""" # Indented 4 spaces
+        """Generate SillyTavern-style response"""
         
         # ✅ ADD THIS LINE
         if user_id:
@@ -2970,26 +2970,24 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
     skipped_count = 0
     
     for user in users:
-    user_id = user.get('user_id')
-    if not user_id: 
-        skipped_count += 1
-        continue
-    
-    prefs = await db.get_user_preferences(user_id)
-    if not prefs.get('diary_enabled', True):
-        skipped_count += 1
-        continue
-    
-    # ✅ FIX: Check if user has ANY chat history today, not just diary entries
-    todays_entries = await db.get_todays_diary(user_id)
-    user_context = await db.get_user_context(user_id)
-    
-    # Send diary card if user chatted today (even without explicit diary entries)
-    if not todays_entries and not user_context:
-        skipped_count += 1
-        continue
-    
-    # ... rest same ...
+        user_id = user.get('user_id')
+        if not user_id: 
+            skipped_count += 1
+            continue
+        
+        prefs = await db.get_user_preferences(user_id)
+        if not prefs.get('diary_enabled', True):
+            skipped_count += 1
+            continue
+        
+        # ✅ FIX: Check if user has ANY chat history today, not just diary entries
+        todays_entries = await db.get_todays_diary(user_id)
+        user_context = await db.get_user_context(user_id)
+        
+        # Send diary card if user chatted today (even without explicit diary entries)
+        if not todays_entries and not user_context:
+            skipped_count += 1
+            continue
         
         keyboard = [[InlineKeyboardButton("✨ Unlock Memory ✨", callback_data=f"unlock_diary_{user_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -3176,7 +3174,7 @@ Group mein @mention karo ya reply do.
 # ============================================================================
 
 async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
-    """Sends Routine Messages (Memory Check REMOVED)"""
+    """Sends Routine Messages"""
     job_data = context.job.data
     ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
     current_hour = datetime.now(ist).hour
@@ -3193,27 +3191,26 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
 
     count = 0
     for user in users:
-    user_id = user.get('user_id')
-    if not user_id: continue
+        user_id = user.get('user_id')
+        if not user_id: continue
 
-    # ✅ ADD: Skip admin-only or bot users
-    if job_data == 'random' and random.random() > 0.3: 
-        continue
+        # ✅ Skip admin-only or bot users
+        if job_data == 'random' and random.random() > 0.3: 
+            continue
 
-    # ✅ ADD: Check if user is active recently (last 2 days)
-    last_activity = user.get('last_activity', '')
-    if last_activity:
-        try:
-            last_time = datetime.fromisoformat(
-                last_activity.replace('Z', '+00:00')
-            )
-            if (datetime.now(timezone.utc) - last_time).days > 2:
-                continue  # Skip inactive users
-        except:
-            pass
+        # ✅ Check if user is active recently (last 2 days)
+        last_activity = user.get('last_activity', '')
+        if last_activity:
+            try:
+                last_time = datetime.fromisoformat(
+                    last_activity.replace('Z', '+00:00')
+                )
+                if (datetime.now(timezone.utc) - last_time).days > 2:
+                    continue  # Skip inactive users
+            except:
+                pass
 
-    final_msg = ""
-    # ... rest same ...
+        final_msg = ""
         
         if job_data == 'random' and random.random() > 0.3: 
             continue
@@ -3275,9 +3272,7 @@ def setup_handlers(app: Application):
     # Diary callback
     app.add_handler(CallbackQueryHandler(diary_unlock_callback, pattern="^unlock_diary_"))
 
-    app.add_handler(CallbackQueryHandler(
-    start_button_callback
-))
+    app.add_handler(CallbackQueryHandler(start_button_callback))
 
     # Message Handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
