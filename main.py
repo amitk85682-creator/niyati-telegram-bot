@@ -2019,7 +2019,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await db.get_or_create_group(chat.id, chat.title)
 
-    image_url = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEiRo9tTkNCyuvmEt1WUoa8LSTH_HYME4haOleKV9sKE0Fgx9oYPmPqrAkkSED33VBkacinGWt3MSppXrIgJ3JhGvDYIMj1IimO3L6_Q480oYnyn82JsXrkhJhIClcmFeSR1m9YdlBO9ouREGluw_QrbNYM7BEfuocW2BKr5ab4fosJE5vXZBH59mVIgwq0/s1600/download.jpeg2.jpeg"
+    image_url = ""
     
     keyboard = [
         [
