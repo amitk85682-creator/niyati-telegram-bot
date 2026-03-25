@@ -2768,34 +2768,13 @@ async def niyati_handle_message(update: Update, context: ContextTypes.DEFAULT_TY
             await message.reply_text("Aaj ke liye bahut baat ho gayi 😅 Kal milte hain!")
         return
 
-    # --- GROUP LOGIC (COLLISION & MEMORY) ---
+    # --- GROUP LOGIC (NATURAL 3-WAY CHAT) ---
     if is_group:
-        # Check FSub first
-        try:
-            fsub_targets = await db.get_group_fsub_targets(chat.id)
-            if fsub_targets:
-                for target in fsub_targets:
-                    try:
-                        member = await context.bot.get_chat_member(chat_id=int(target.get('target_chat_id')), user_id=user.id)
-                        if member.status in ['left', 'kicked']:
-                            return # Silent ignore if not subbed
-                    except: pass
-        except: pass
-
-        if is_user_talking_to_others(message, bot_username, bot_id):
+        # Stop infinite loops: Bot kisi aur bot (yaani Kavya) ki baat ka auto-reply nahi karegi
+        if update.message.from_user.is_bot:
             return
 
         bot_mention = f"@{bot_username}".lower()
-        is_direct_mention = bot_mention in user_message.lower() or (message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot_id)
-
-        # 🛑 COLLISION LOCK (Niyati gets EVEN IDs, unless explicitly mentioned)
-        if not is_direct_mention:
-            if message.message_id % 2 != 0:
-                return # Skip odd messages
-            if not rate_limiter.check_group_cooldown(user.id) or random.random() > Config.GROUP_RESPONSE_RATE:
-                return # Skip based on random chance/cooldown
-
-        # Clean username from message if mentioned
         if bot_mention in user_message.lower():
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
             
@@ -3515,32 +3494,13 @@ async def kavya_handle_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await message.reply_text("Aaj ke liye bahut baat ho gayi. Kal milte hain!")
         return
 
-    # --- GROUP LOGIC (COLLISION & MEMORY) ---
+    # --- GROUP LOGIC (NATURAL 3-WAY CHAT) ---
     if is_group:
-        try:
-            fsub_targets = await db.get_group_fsub_targets(chat.id)
-            if fsub_targets:
-                for target in fsub_targets:
-                    try:
-                        member = await context.bot.get_chat_member(chat_id=int(target.get('target_chat_id')), user_id=user.id)
-                        if member.status in ['left', 'kicked']:
-                            return
-                    except: pass
-        except: pass
-
-        if is_user_talking_to_others(message, bot_username, bot_id):
+        # Stop infinite loops: Bot kisi aur bot (yaani Niyati) ki baat ka auto-reply nahi karegi
+        if update.message.from_user.is_bot:
             return
 
         bot_mention = f"@{bot_username}".lower()
-        is_direct_mention = bot_mention in user_message.lower() or (message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot_id)
-
-        # 🛑 COLLISION LOCK (Kavya gets ODD IDs, unless explicitly mentioned)
-        if not is_direct_mention:
-            if message.message_id % 2 == 0:
-                return # Skip even messages
-            if not rate_limiter.check_group_cooldown(user.id) or random.random() > Config.GROUP_RESPONSE_RATE:
-                return # Skip based on random chance/cooldown
-
         if bot_mention in user_message.lower():
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
             
