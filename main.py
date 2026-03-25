@@ -374,7 +374,7 @@ class Database:
         self.local_group_messages: Dict[int, deque] = defaultdict(lambda: deque(maxlen=Config.MAX_GROUP_MESSAGES))
         self.local_activities: deque = deque(maxlen=1000)
         self.local_diary_entries: Dict[int, List[Dict]] = defaultdict(list)
-        self.local_group_responses: Dict[int, Dict] = defaultdict(lambda: {'last_response': '', 'timestamp': datetime.min})
+        self.local_group_responses: Dict[int, Dict] = defaultdict(lambda: {'last_response': '', 'timestamp': datetime(2000, 1, 1, tzinfo=timezone.utc)})
         self.local_world_info: List[Dict] = []
         
         # Cache access tracking
