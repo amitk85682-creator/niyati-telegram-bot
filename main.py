@@ -35,6 +35,22 @@ from telegram.error import BadRequest, Forbidden, RetryAfter
 
 from openai import AsyncOpenAI
 
+
+# Global Locks and Memory
+group_speaker_lock = {} # Format: {chat_id: {message_id: "bot_name"}}
+shared_group_memory = defaultdict(list)
+memory_lock = asyncio.Lock()
+
+async def add_to_shared_memory(chat_id: int, bot_name: str, message: str):
+    """Saves a bot's reply so the other bot can read it as context."""
+    async with memory_lock:
+        shared_group_memory[chat_id].append({
+            "role": "user",  # Treat the other bot as a user for the LLM
+            "content": f"[{bot_name} says]: {message}"
+        })
+        # Keep only the last 10 shared messages to save tokens
+        shared_group_memory[chat_id] = shared_group_memory[chat_id][-10:]
+
 # ============================================================================
 # SILLYTAVERN CHARACTER CARD SYSTEM
 # ============================================================================
@@ -2691,6 +2707,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = Config.BOT_USERNAME
     bot_id = context.bot.id
 
+    # 1. Direct Mention Check (Stay in your lane)
+    if 'kavya' in user_message.lower() and 'niyati' not in user_message.lower():
+        return # Ignore if user is only calling Kavya
+
+    # 2. Collision Lock (If it's a generic message, decide who speaks)
+    if is_group:
+        if group_speaker_lock.get(chat.id, {}).get(message.message_id) == "Kavya":
+            return # Kavya is already answering this, Niyati stays quiet
+        
+        # Claim the lock if no one has it and it's an even message ID (Niyati's turn)
+        if message.message_id % 2 == 0:
+            group_speaker_lock[chat.id] = {message.message_id: "Niyati"}
+        elif not should_respond: # If it's not a direct reply/mention, ignore
+            return
+    
     # ========== ANTI-SPAM CHECK ==========
     if ContentFilter.detect_spam_link(user_message):
         logger.info(f"🚫 Spam link detected from {user.id}")
@@ -3354,28 +3385,41 @@ async def post_init(application: Application):
 # MAIN EXECUTION
 # ============================================================================
 
-def main():
-    """Main entry point"""
-    if not Config.TELEGRAM_BOT_TOKEN:
-        logger.error("❌ Error: TELEGRAM_BOT_TOKEN nahi mila! .env file check karo.")
+async def main():
+    if not ConfigKavya.TELEGRAM_BOT_TOKEN or not ConfigNiyati.TELEGRAM_BOT_TOKEN:
+        logger.error("❌ Both Bot Tokens required in .env!")
         return
 
-    app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
+    # Build both applications
+    kavya_app = Application.builder().token(ConfigKavya.TELEGRAM_BOT_TOKEN).build()
+    niyati_app = Application.builder().token(ConfigNiyati.TELEGRAM_BOT_TOKEN).build()
 
-    # Setup Handlers
-    setup_handlers(app)
+    # Setup handlers for both (Make sure you pass the correct app to setup functions)
+    setup_kavya_handlers(kavya_app)
+    setup_niyati_handlers(niyati_app)
 
-    # Start Polling
-    logger.info("⏳ Initializing Bot...")
-    app.run_polling(drop_pending_updates=True)
+    logger.info("⏳ Initializing Both Bots...")
+    
+    # Initialize and start both
+    await kavya_app.initialize()
+    await niyati_app.initialize()
+    await kavya_app.start()
+    await niyati_app.start()
+    
+    # Start polling
+    await kavya_app.updater.start_polling(drop_pending_updates=True)
+    await niyati_app.updater.start_polling(drop_pending_updates=True)
+    
+    logger.info("🚀 Kavya & Niyati are now running together!")
+    
+    # Keep the script running
+    stop_event = asyncio.Event()
+    await stop_event.wait()
 
 if __name__ == "__main__":
     try:
-        # Windows par asyncio loop policy fix
         if sys.platform.startswith("win"):
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        main()
+        asyncio.run(main()) # Must run using asyncio.run()
     except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        logger.error(f"❌ Fatal Error: {e}", exc_info=True)
+        logger.info("Bots stopped by user.")
