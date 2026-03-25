@@ -2024,7 +2024,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton("✨ Add to Group", url=f"https://t.me/{context.bot.username}?startgroup=true"),
-            InlineKeyboardButton("Updates 📢", url="https://t.me/FilmFyBoxMoviesHD")
+            InlineKeyboardButton("Updates 📢", url="https://t.me/FlimfyBox")
         ],
         [
             InlineKeyboardButton("About Me 🌸", callback_data='about_me'),
