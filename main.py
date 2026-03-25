@@ -4055,6 +4055,9 @@ async def main():
     # 6. Start polling for both
     await niyati_app.updater.start_polling(drop_pending_updates=True)
     await kavya_app.updater.start_polling(drop_pending_updates=True)
+
+    stop_event = asyncio.Event()
+    await stop_event.wait()
     
     logger.info("🚀 Niyati and Kavya are now running together smoothly!")
     
