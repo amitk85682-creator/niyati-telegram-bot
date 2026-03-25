@@ -186,6 +186,7 @@ health_server = HealthServer()
 # ============================================================================
 
 shared_group_memory: Dict[int, List[Dict]] = {}
+global_group_turns: Dict[int, str] = {}
 
 async def add_to_shared_memory(chat_id: int, bot_name: str, response: str):
     """Store a response from one bot so the other bot can see it."""
@@ -1167,7 +1168,8 @@ class RateLimiter:
             
             self._last_cleanup = now
 
-rate_limiter = RateLimiter()
+niyati_rate_limiter = RateLimiter()
+kavya_rate_limiter = RateLimiter()
 
 # -------------------- TIME & MOOD UTILITIES --------------------
 class TimeAware:
@@ -2583,7 +2585,7 @@ async def niyati_admin_stats_command(update: Update, context: ContextTypes.DEFAU
     
     user_count = await db.get_user_count()
     group_count = await db.get_group_count()
-    daily_requests = rate_limiter.get_daily_total()
+    daily_requests = niyati_rate_limiter.get_daily_total() + kavya_rate_limiter.get_daily_total()
     
     uptime = datetime.now(timezone.utc) - health_server.start_time
     hours = int(uptime.total_seconds() // 3600)
@@ -2762,7 +2764,7 @@ async def niyati_handle_message(update: Update, context: ContextTypes.DEFAULT_TY
     if ContentFilter.detect_spam_link(user_message):
         return
 
-    allowed, reason = rate_limiter.check(user.id)
+    allowed, reason = niyati_rate_limiter.check(user.id)
     if not allowed:
         if reason == "day":
             await message.reply_text("Aaj ke liye bahut baat ho gayi 😅 Kal milte hain!")
@@ -2770,14 +2772,28 @@ async def niyati_handle_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     # --- GROUP LOGIC (NATURAL 3-WAY CHAT) ---
     if is_group:
-        # Stop infinite loops: Bot kisi aur bot (yaani Kavya) ki baat ka auto-reply nahi karegi
         if update.message.from_user.is_bot:
             return
 
         bot_mention = f"@{bot_username}".lower()
-        if bot_mention in user_message.lower():
+        is_reply_to_me = (message.reply_to_message and message.reply_to_message.from_user.id == bot_id)
+        is_direct_interaction = bot_mention in user_message.lower() or is_reply_to_me
+
+        if is_direct_interaction:
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
+            # Direct reply ke baad, 60% chance Niyati ka, 40% Kavya ka agla turn
+            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+        else:
+            current_turn = global_group_turns.get(chat.id, 'niyati')
+            if current_turn != 'niyati':
+                return 
             
+            if random.random() > Config.GROUP_RESPONSE_RATE:
+                return
+            
+            # Bolne ke baad agla turn 60/40 ratio se set karo
+            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+
         if not user_message.strip():
             return
 
@@ -3488,7 +3504,7 @@ async def kavya_handle_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if ContentFilter.detect_spam_link(user_message):
         return
 
-    allowed, reason = rate_limiter.check(user.id)
+    allowed, reason = kavya_rate_limiter.check(user.id)
     if not allowed:
         if reason == "day":
             await message.reply_text("Aaj ke liye bahut baat ho gayi. Kal milte hain!")
@@ -3496,14 +3512,28 @@ async def kavya_handle_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # --- GROUP LOGIC (NATURAL 3-WAY CHAT) ---
     if is_group:
-        # Stop infinite loops: Bot kisi aur bot (yaani Niyati) ki baat ka auto-reply nahi karegi
         if update.message.from_user.is_bot:
             return
 
         bot_mention = f"@{bot_username}".lower()
-        if bot_mention in user_message.lower():
+        is_reply_to_me = (message.reply_to_message and message.reply_to_message.from_user.id == bot_id)
+        is_direct_interaction = bot_mention in user_message.lower() or is_reply_to_me
+
+        if is_direct_interaction:
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
+            # Direct reply ke baad, 60% chance Niyati ka, 40% Kavya ka agla turn
+            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+        else:
+            current_turn = global_group_turns.get(chat.id, 'niyati')
+            if current_turn != 'kavya':
+                return 
             
+            if random.random() > Config.GROUP_RESPONSE_RATE:
+                return
+            
+            # Bolne ke baad agla turn 60/40 ratio se set karo
+            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+
         if not user_message.strip():
             return
 
@@ -3790,7 +3820,8 @@ async def send_daily_geeta(context: ContextTypes.DEFAULT_TYPE):
 
 async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
     """Periodic cleanup"""
-    rate_limiter.cleanup_cooldowns()
+    niyati_rate_limiter.cleanup_cooldowns()
+    kavya_rate_limiter.cleanup_cooldowns()
     await db.cleanup_local_cache()
     logger.info("🧹 Cleanup completed")
 
@@ -4052,14 +4083,13 @@ async def main():
     await niyati_app.start()
     await kavya_app.start()
     
-    # 6. Start polling for both
-    await niyati_app.updater.start_polling(drop_pending_updates=True)
-    await kavya_app.updater.start_polling(drop_pending_updates=True)
-
-    stop_event = asyncio.Event()
-    await stop_event.wait()
-    
+    # 6. Start polling for both SAFELY
     logger.info("🚀 Niyati and Kavya are now running together smoothly!")
+    
+    await asyncio.gather(
+        niyati_app.updater.start_polling(drop_pending_updates=True),
+        kavya_app.updater.start_polling(drop_pending_updates=True)
+    )
     
     # Keep the event loop running
     stop_event = asyncio.Event()
