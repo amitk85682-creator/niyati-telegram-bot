@@ -3950,125 +3950,25 @@ def setup_kavya_handlers(app: Application):
     # Error handler
     app.add_error_handler(error_handler)
 
+# ============================================================================
+# ERROR HANDLER & MAIN EXECUTION (OPTIMIZED FOR RENDER)
+# ============================================================================
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Global error handler"""
     logger.error(f"❌ Error: {context.error}", exc_info=True)
+    
+    # 🔴 CRITICAL FIX: Ignore Token Conflicts so the bot doesn't spam "Kshama Karein"
+    from telegram.error import Conflict
+    if isinstance(context.error, Conflict):
+        logger.error("⚠️ TOKEN CONFLICT: Tumne dono bots ko SAME token de diya hai! Kripya .env mein alag tokens daalein.")
+        return
+        
     if update and update.effective_message:
         try:
             await update.effective_message.reply_text("Kshama karein, kuch technical dikkat hai. Kripya punah prayas karein.")
         except:
             pass
-
-async def post_init(application: Application):
-    """Initialize DB and schedule jobs (only once)"""
-    # Use a flag to ensure only one bot runs this init
-    if not hasattr(post_init, 'initialized'):
-        post_init.initialized = True
-        await db.initialize()
-        await health_server.start()
-        
-        # Schedule jobs (only once, using the first bot's job_queue)
-        job_queue = application.job_queue
-        
-        # Morning routine (3:00 AM UTC = 8:30 AM IST)
-        job_queue.run_daily(
-            routine_message_job,
-            time=time(hour=3, minute=0, second=0),
-            data='morning',
-            name='daily_morning'
-        )
-        # Night routine (5:00 PM UTC = 10:30 PM IST)
-        job_queue.run_daily(
-            routine_message_job,
-            time=time(hour=17, minute=0, second=0),
-            data='night',
-            name='daily_night'
-        )
-        # Random check-in every 4 hours
-        job_queue.run_repeating(
-            routine_message_job,
-            interval=timedelta(hours=4),
-            first=timedelta(seconds=60),
-            data='random',
-            name='random_checkin'
-        )
-        # Secret Diary (5:00 PM UTC = 10:30 PM IST)
-        job_queue.run_daily(
-            send_locked_diary_card,
-            time=time(hour=17, minute=0, second=0),
-            name='locked_diary_job'
-        )
-        # Daily Geeta (1:30 AM UTC = 7:00 AM IST)
-        job_queue.run_daily(
-            send_daily_geeta,
-            time=time(hour=1, minute=30, second=0),
-            name='daily_geeta'
-        )
-        # Cleanup every hour
-        job_queue.run_repeating(
-            cleanup_job,
-            interval=timedelta(hours=1),
-            first=timedelta(seconds=30),
-            name='cleanup'
-        )
-        logger.info("🚀 Shared jobs scheduled.")
-
-async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
-    """Sends routine messages to users (from Niyati)"""
-    job_data = context.job.data
-    ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
-    current_hour = datetime.now(ist).hour
-
-    if job_data == 'random' and (current_hour >= 23 or current_hour < 8):
-        return
-
-    users = await db.get_all_users()
-    
-    morning_texts = ["Good morning! ☀️", "Uth gaye? ✨", "Morning babe! ❤️", "Subah ho gayi mamu!"]
-    night_texts = ["Good night 🌙", "So jao ab 😴", "Gn meri jaan 💖", "Sweet dreams! 🌸"]
-    random_texts = ["Kya chal raha hai?", "Bore ho rahi hoon 😅", "Kuch baat karein?"]
-
-    count = 0
-    for user in users:
-        user_id = user.get('user_id')
-        if not user_id: continue
-
-        if job_data == 'random' and random.random() > 0.3: 
-            continue
-
-        last_activity = user.get('last_activity', '')
-        if last_activity:
-            try:
-                last_time = datetime.fromisoformat(
-                    last_activity.replace('Z', '+00:00')
-                )
-                if (datetime.now(timezone.utc) - last_time).days > 2:
-                    continue
-            except:
-                pass
-
-        final_msg = ""
-        if job_data == 'morning': final_msg = random.choice(morning_texts)
-        elif job_data == 'night': final_msg = random.choice(night_texts)
-        elif job_data == 'random': final_msg = random.choice(random_texts)
-
-        try:
-            await asyncio.sleep(random.uniform(0.5, 2.0))
-            await context.bot.send_message(chat_id=user_id, text=final_msg)
-            count += 1
-        except Exception as e:
-            logger.error(f"Routine msg failed for {user_id}: {e}")
-        
-        if count > 100:
-            break
-
-    logger.info(f"Routine Job ({job_data}) sent to {count} users.")
-
-async def post_shutdown(application: Application):
-    """Cleanup on shutdown"""
-    await health_server.stop()
-    await db.close()
-    logger.info("😴 Both bots stopped.")
 
 async def main():
     """Main entry point to run both bots concurrently"""
@@ -4076,26 +3976,42 @@ async def main():
         logger.error("❌ Both NIYATI_BOT_TOKEN and KAVYA_BOT_TOKEN must be set in .env!")
         return
 
-    # Create two separate applications
-    niyati_app = Application.builder().token(Config.NIYATI_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
-    kavya_app = Application.builder().token(Config.KAVYA_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
+    # 1. 🔴 FIX FOR RENDER PORT ISSUE: Start Server & DB immediately
+    logger.info("⏳ Starting Database and Health Server...")
+    await db.initialize()
+    await health_server.start()
 
-    # Setup handlers
+    # 2. Build Applications (No post_init needed now)
+    niyati_app = Application.builder().token(Config.NIYATI_TOKEN).build()
+    kavya_app = Application.builder().token(Config.KAVYA_TOKEN).build()
+
+    # 3. Setup handlers
     setup_niyati_handlers(niyati_app)
     setup_kavya_handlers(kavya_app)
 
-    # Initialize and start both apps
+    # 4. Schedule Routine Jobs (Only attach to one bot to prevent duplicates)
+    logger.info("⏳ Scheduling background jobs...")
+    job_queue = niyati_app.job_queue
+    job_queue.run_daily(routine_message_job, time=time(hour=3, minute=0, second=0), data='morning', name='daily_morning')
+    job_queue.run_daily(routine_message_job, time=time(hour=17, minute=0, second=0), data='night', name='daily_night')
+    job_queue.run_repeating(routine_message_job, interval=timedelta(hours=4), first=timedelta(seconds=60), data='random', name='random_checkin')
+    job_queue.run_daily(send_locked_diary_card, time=time(hour=17, minute=0, second=0), name='locked_diary_job')
+    job_queue.run_daily(send_daily_geeta, time=time(hour=1, minute=30, second=0), name='daily_geeta')
+    job_queue.run_repeating(cleanup_job, interval=timedelta(hours=1), first=timedelta(seconds=30), name='cleanup')
+
+    # 5. Initialize and start both apps
+    logger.info("⏳ Initializing Telegram Bots...")
     await niyati_app.initialize()
     await kavya_app.initialize()
     
     await niyati_app.start()
     await kavya_app.start()
     
-    # Start polling for both
+    # 6. Start polling for both
     await niyati_app.updater.start_polling(drop_pending_updates=True)
     await kavya_app.updater.start_polling(drop_pending_updates=True)
     
-    logger.info("🚀 Niyati and Kavya are now running together!")
+    logger.info("🚀 Niyati and Kavya are now running together smoothly!")
     
     # Keep the event loop running
     stop_event = asyncio.Event()
