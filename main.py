@@ -181,6 +181,40 @@ class HealthServer:
 
 health_server = HealthServer()
 
+# ============================================================================
+# SHARED GROUP MEMORY (cross-bot context)
+# ============================================================================
+
+shared_group_memory: Dict[int, List[Dict]] = {}
+
+async def add_to_shared_memory(chat_id: int, bot_name: str, response: str):
+    """Store a response from one bot so the other bot can see it."""
+    if chat_id not in shared_group_memory:
+        shared_group_memory[chat_id] = []
+    shared_group_memory[chat_id].append({
+        'bot': bot_name,
+        'content': response,
+        'timestamp': datetime.now(timezone.utc).isoformat()
+    })
+    # Keep only last 20 messages per group
+    if len(shared_group_memory[chat_id]) > 20:
+        shared_group_memory[chat_id] = shared_group_memory[chat_id][-20:]
+
+def is_user_talking_to_others(message, bot_username: str, bot_id: int) -> bool:
+    """
+    Returns True if the message is a reply to another user (not the bot)
+    and does NOT contain the bot's username. This prevents the bot from
+    answering messages that are clearly directed at someone else.
+    """
+    # If the message is a reply to someone else...
+    if (message.reply_to_message and
+        message.reply_to_message.from_user and
+        message.reply_to_message.from_user.id != bot_id):
+        # ... and the bot's username is not mentioned, then it's not for us
+        if bot_username.lower() not in message.text.lower():
+            return True
+    return False
+    
 # -------------------- SUPABASE CLIENT --------------------
 class SupabaseClient:
     """Custom Supabase REST API Client"""
