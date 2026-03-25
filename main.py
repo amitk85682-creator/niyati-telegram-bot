@@ -3970,6 +3970,57 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
+    """Sends routine messages to users (from Niyati)"""
+    job_data = context.job.data
+    ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
+    current_hour = datetime.now(ist).hour
+
+    if job_data == 'random' and (current_hour >= 23 or current_hour < 8):
+        return
+
+    users = await db.get_all_users()
+    
+    morning_texts = ["Good morning! ☀️", "Uth gaye? ✨", "Morning babe! ❤️", "Subah ho gayi mamu!"]
+    night_texts = ["Good night 🌙", "So jao ab 😴", "Gn meri jaan 💖", "Sweet dreams! 🌸"]
+    random_texts = ["Kya chal raha hai?", "Bore ho rahi hoon 😅", "Kuch baat karein?"]
+
+    count = 0
+    for user in users:
+        user_id = user.get('user_id')
+        if not user_id: continue
+
+        if job_data == 'random' and random.random() > 0.3: 
+            continue
+
+        last_activity = user.get('last_activity', '')
+        if last_activity:
+            try:
+                last_time = datetime.fromisoformat(
+                    last_activity.replace('Z', '+00:00')
+                )
+                if (datetime.now(timezone.utc) - last_time).days > 2:
+                    continue
+            except:
+                pass
+
+        final_msg = ""
+        if job_data == 'morning': final_msg = random.choice(morning_texts)
+        elif job_data == 'night': final_msg = random.choice(night_texts)
+        elif job_data == 'random': final_msg = random.choice(random_texts)
+
+        try:
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+            await context.bot.send_message(chat_id=user_id, text=final_msg)
+            count += 1
+        except Exception as e:
+            logger.error(f"Routine msg failed for {user_id}: {e}")
+        
+        if count > 100:
+            break
+
+    logger.info(f"Routine Job ({job_data}) sent to {count} users.")
+
 async def main():
     """Main entry point to run both bots concurrently"""
     if not Config.NIYATI_TOKEN or not Config.KAVYA_TOKEN:
