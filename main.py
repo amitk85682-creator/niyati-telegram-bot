@@ -95,7 +95,7 @@ class Config:
     USER_COOLDOWN_SECONDS = int(os.getenv('USER_COOLDOWN_SECONDS', '3'))
     RANDOM_SHAYARI_CHANCE = float(os.getenv('RANDOM_SHAYARI_CHANCE', '0.15'))  # for Niyati
     RANDOM_MEME_CHANCE = float(os.getenv('RANDOM_MEME_CHANCE', '0.10'))         # for Niyati
-    GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.15'))
+    GROUP_RESPONSE_RATE = float(os.getenv('GROUP_RESPONSE_RATE', '0.50'))
     PRIVACY_MODE = os.getenv('PRIVACY_MODE', 'false').lower() == 'true'
 
     # Voice Settings
@@ -2781,24 +2781,20 @@ async def niyati_handle_message(update: Update, context: ContextTypes.DEFAULT_TY
 
         if is_direct_interaction:
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
-            # Direct reply ke baad, 60% chance Niyati ka, 40% Kavya ka agla turn
             global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
         else:
             current_turn = global_group_turns.get(chat.id, 'niyati')
             if current_turn != 'niyati':
                 return 
             
+            # Agar dice roll fail hota hai (Niyati chup rehti hai)
             if random.random() > Config.GROUP_RESPONSE_RATE:
+                # Turn Kavya ko de do taaki woh try kar sake agle msg pe
+                global_group_turns[chat.id] = 'kavya'
                 return
             
-            # Bolne ke baad agla turn 60/40 ratio se set karo
+            # Agar bol rahi hai, toh 60/40 ratio se agla turn set karo
             global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
-
-        if not user_message.strip():
-            return
-
-        await db.get_or_create_group(chat.id, chat.title)
-        db.add_group_message(chat.id, user.first_name, user_message, bot_name='Niyati')
 
     # --- PRIVATE LOGIC ---
     if is_private:
@@ -3529,9 +3525,10 @@ async def kavya_handle_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 return 
             
             if random.random() > Config.GROUP_RESPONSE_RATE:
+                # Kavya chup rahi, toh turn Niyati ko de do
+                global_group_turns[chat.id] = 'niyati'
                 return
             
-            # Bolne ke baad agla turn 60/40 ratio se set karo
             global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
 
         if not user_message.strip():
