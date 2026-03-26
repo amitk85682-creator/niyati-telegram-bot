@@ -1481,31 +1481,35 @@ Scenario: {self.character.scenario}"""
                                 "content": line.replace('{{char}}:', '').strip()
                             })
 
-        # Add recent chat history (last 5 messages)
-        for msg in chat_history[-5:]:
+        # Add recent chat history (last 5-7 messages)
+        for msg in chat_history[-7:]:
             if msg.get('content', '').strip():
                 role = msg.get('role', 'user')
                 content = msg.get('content', '')
                 sender_bot = msg.get('bot')
 
                 if role == 'assistant' and sender_bot:
-                    if sender_bot == 'Niyati':
-                        # Yeh Niyati ka apna message hai, AI ko pata hona chahiye ki ye usne bola hai
-                        pass
+                    if sender_bot == self.character.name:
+                        # This bot's own past message
+                        messages.append({
+                            "role": "assistant",
+                            "content": content
+                        })
                     else:
-                        # Yeh Kavya ka message hai. Niyati ke LLM ko ise 'user'/3rd person man-na chahiye
-                        role = 'user'
-                        content = f"[Kavya to User]: {content}"
+                        # The OTHER bot's message (treat as user, but explicitly tag it)
+                        messages.append({
+                            "role": "user",
+                            "content": f"[BOT - {sender_bot}]: {content}"
+                        })
                 elif role == 'user':
-                    content = f"[{user_name}]: {content}"
-
-                messages.append({
-                    "role": role,
-                    "content": content
-                })
+                    # The ACTUAL HUMAN
+                    messages.append({
+                        "role": "user",
+                        "content": f"[HUMAN - {user_name}]: {content}"
+                    })
 
         # Current user message
-        messages.append({"role": "user", "content": f"[{user_name}]: {current_message}"})
+        messages.append({"role": "user", "content": f"[HUMAN - {user_name}]: {current_message}"})
 
         return messages
     
@@ -1826,7 +1830,14 @@ class KavyaPromptBuilder:
     def __init__(self):
         self.character = KavyaCharacterCard()
         self.world_info = KavyaWorldInfo()
-        self.jailbreak = "System: You are in a 3-way group chat with the User and Niyati. Niyati is a bubbly, slightly immature 21yo student. Stay in character as a warm, mature 26yo journalist. Use beautiful Hinglish. You CAN and SHOULD react to Niyati. Guide her gently, add depth to her points, or playfully scold her. Be empathetic and natural."
+        self.jailbreak = """System: You are in a 3-way Telegram group chat.
+The actual human is tagged as [HUMAN].
+The other AI is tagged as [BOT - Niyati].
+CRITICAL RULES:
+1. NEVER call the human 'Niyati'. Niyati is the other bot. 
+2. Address the [HUMAN] directly. If the human says you are ignoring them, apologize warmly and focus entirely on them.
+3. Be mature, empathetic, and use beautiful Hinglish.
+4. Stop sounding like a confused AI. Read the tags carefully."""
         self.authors_note = "[Kavya is chatting on Telegram. Keep responses deeply personal, warm, and natural. Use a mature but loving tone. Maximum 2-3 lines.]"
     
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
@@ -1897,7 +1908,7 @@ Scenario: {self.character.scenario}"""
                 })
 
         # Current user message
-        messages.append({"role": "user", "content": f"[{user_name}]: {current_message}"})
+        messages.append({"role": "user", "content": f"[HUMAN - {user_name}]: {current_message}"})
         
         return messages
     
