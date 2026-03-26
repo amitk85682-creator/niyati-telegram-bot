@@ -13,6 +13,7 @@ import asyncio
 import re
 import random
 import yaml
+global_group_turns = {}
 import html
 from datetime import datetime, timedelta, timezone, time
 from typing import Optional, Dict, List, Any, Tuple
@@ -186,7 +187,24 @@ health_server = HealthServer()
 # ============================================================================
 
 shared_group_memory: Dict[int, List[Dict]] = {}
-global_group_turns[chat_id] = "niyati"  # ya "kavya"
+# 1. check turn
+if chat_id not in global_group_turns:
+    global_group_turns[chat_id] = "niyati"
+
+# 2. decide kaun bolega
+current_turn = global_group_turns[chat_id]
+
+# 3. uske hisab se reply generate kar
+response = get_ai_reply(current_turn, message.text)
+
+# 4. reply bhej
+await message.reply(response)
+
+# 5. 🔥 TURN SWITCH (yahi lagana hai tera code)
+if global_group_turns[chat_id] == "niyati":
+    global_group_turns[chat_id] = "kavya"
+else:
+    global_group_turns[chat_id] = "niyati"
 
 async def add_to_shared_memory(chat_id: int, bot_name: str, response: str):
     """Store a response from one bot so the other bot can see it."""
