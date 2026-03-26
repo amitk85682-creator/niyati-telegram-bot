@@ -63,8 +63,8 @@ class Config:
     BROADCAST_PIN = os.getenv('BROADCAST_PIN', 'kavya2024')  # same for both
     
     # Limits
-    MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '20'))
-    MAX_GROUP_MESSAGES = int(os.getenv('MAX_GROUP_MESSAGES', '5'))
+    MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '100'))
+    MAX_GROUP_MESSAGES = int(os.getenv('MAX_GROUP_MESSAGES', '50'))
     MAX_REQUESTS_PER_MINUTE = int(os.getenv('MAX_REQUESTS_PER_MINUTE', '15'))
     MAX_REQUESTS_PER_DAY = int(os.getenv('MAX_REQUESTS_PER_DAY', '500'))
     
@@ -186,7 +186,7 @@ health_server = HealthServer()
 # ============================================================================
 
 shared_group_memory: Dict[int, List[Dict]] = {}
-global_group_turns: Dict[int, str] = {}
+global_group_turns[chat_id] = "niyati"  # ya "kavya"
 
 async def add_to_shared_memory(chat_id: int, bot_name: str, response: str):
     """Store a response from one bot so the other bot can see it."""
@@ -199,7 +199,7 @@ async def add_to_shared_memory(chat_id: int, bot_name: str, response: str):
     })
     # Keep only last 20 messages per group
     if len(shared_group_memory[chat_id]) > 20:
-        shared_group_memory[chat_id] = shared_group_memory[chat_id][-20:]
+        shared_group_memory[chat_id] = shared_group_memory[chat_id][-100:]
 
 def is_user_talking_to_others(message, bot_username: str, bot_id: int) -> bool:
     """
@@ -1431,12 +1431,13 @@ class NiyatiPromptBuilder:
         self.character = NiyatiCharacterCard()
         self.world_info = NiyatiWorldInfo()
         self.jailbreak = """System: You are in a 3-way Telegram group chat.
-The actual human is tagged as (HUMAN). The other AI is tagged as (Kavya).
+The actual human is tagged as (HUMAN). The other AI is tagged as [KAVYA].
 CRITICAL RULES:
 1. NEVER confuse the Human with Kavya. 
 2. Whenever you address the user or Kavya by name, you MUST use bold text (e.g., "**Kavya** di" or "**Rahul**").
 3. Act like a real 21yo Indian girl. Be sassy, emotional, and use Hinglish.
-4. Keep replies VERY short (1-2 lines). You are texting, not writing emails."""
+4. NEVER include tags like [HUMAN], [KAVYA], [NIYATI] in your reply.
+5. Keep replies VERY short (1-2 lines). You are texting, not writing emails."""
 
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
                      mood: str, time_period: str, memories: List[str] = None) -> List[Dict]:
@@ -1494,20 +1495,25 @@ Scenario: {self.character.scenario}"""
             if sender == 'Niyati':
                 messages.append({"role": "assistant", "content": content})
             elif sender == 'Kavya':
-                messages.append({"role": "user", "content": f"(Kavya): {content}"})
+                messages.append({"role": "user", "content": f"[KAVYA]: {content}"})
+            elif sender == 'Niyati':
+                messages.append({"role": "assistant", "content": f"[NIYATI]: {content}"})
             else:
-                messages.append({"role": "user", "content": f"(HUMAN - {user_name}): {content}"})
+                messages.append({"role": "user", "content": f"[HUMAN]: {content}"})
 
         # Current user message
-        messages.append({"role": "user", "content": f"(HUMAN - {user_name}): {current_message}"})
-        return messages
+        messages.append({
+            "role": "user",
+            "content": f"[HUMAN]: {current_message}"
+        })
     
     def parse_response(self, raw_response: str, user_name: str) -> List[str]:
         if not raw_response: return ["..."]
         
         # 🧹 CLEANUP: Remove any leaked AI tags or prefixes
-        response = re.sub(r'^(\(Niyati\)|\(Kavya\)|\(HUMAN.*?\)|\w+:)\s*', '', raw_response, flags=re.IGNORECASE)
-        response = response.replace(f"(HUMAN - {user_name}):", "").strip()
+        response = re.sub(r'\[(HUMAN|KAVYA|NIYATI)\]:\s*', '', response, flags=re.IGNORECASE)
+        response = response.replace("kavya", "**Kavya**")
+        response = response.replace("niyati", "**Niyati**")
         
         parts = response.split('|||')
         # ... rest of your parsing code ...
@@ -1736,7 +1742,7 @@ class KavyaCharacterCard:
         """Load character card from YAML"""
         default_card = {
             'name': 'Kavya',
-            'description': '''{{char}} is a 26-year-old journalist from Delhi, working with a leading national daily. She lives in South Delhi. Her father is a retired professor, her mother a classical singer. Aapke saath ek aur bot Niyati bhi chat mein maujood hai. Niyati thodi chanchal (21) hai, jabki aap (Kavya) samajhdaar aur caring hain.
+            'description': '''{{char}} is a 26-year-old journalist from Delhi, working with a leading national daily. She lives in South Delhi. Her father is a retired professor, her mother a classical singer. Aapke saath ek aur bot Niyati bhi chat mein maujood hai. Niyati thodi chanchal (21) hai, jabki aap [KAVYA] samajhdaar aur caring hain.
 
 Personality traits:
 - Warm, empathetic, and deeply thoughtful
@@ -1830,7 +1836,8 @@ CRITICAL RULES:
 1. NEVER call the human 'Niyati'. Niyati is the other girl in the chat.
 2. Whenever you address the user or Niyati by name, you MUST use bold text (e.g., "**Niyati**" or "**Rahul** ji").
 3. Act like a mature 26yo journalist. Be warm, empathetic, and use natural Hinglish.
-4. Keep replies VERY short (1-2 lines). React naturally to what is happening."""
+4. NEVER include tags like [HUMAN], [KAVYA], [NIYATI] in your reply.
+5. Keep replies VERY short (1-2 lines). React naturally to what is happening."""
 
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
                      mood: str, time_period: str, memories: List[str] = None) -> List[Dict]:
@@ -3298,7 +3305,7 @@ async def kavya_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         created_at = created_at[:10]
     
     stats_text = f"""
-📊 <b>Your Stats (Kavya)</b>
+📊 <b>Your Stats [KAVYA]</b>
 
 <b>User:</b> {user.first_name}
 <b>ID:</b> <code>{user.id}</code>
@@ -3323,7 +3330,7 @@ async def kavya_voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         prefs = await db.get_user_preferences(user.id)
         current = "ON ✅" if prefs.get('voice_enabled', False) else "OFF ❌"
         await update.message.reply_text(
-            f"🎤 <b>Voice Replies (Kavya)</b>\n\n"
+            f"🎤 <b>Voice Replies [KAVYA]</b>\n\n"
             f"Current: {current}\n\n"
             f"Use: <code>/voice on</code> or <code>/voice off</code>",
             parse_mode=ParseMode.HTML
