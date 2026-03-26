@@ -2808,9 +2808,15 @@ async def niyati_handle_message(update: Update, context: ContextTypes.DEFAULT_TY
         if update.message.from_user.is_bot:
             return
 
+        # 🛑 EAVESDROPPING FIX: Agar user Kavya (ya kisi aur) ko reply kar raha hai, toh Niyati chup rahegi
+        if is_user_talking_to_others(message, bot_username, bot_id):
+            return
+
         bot_mention = f"@{bot_username}".lower()
         is_reply_to_me = (message.reply_to_message and message.reply_to_message.from_user.id == bot_id)
         is_direct_interaction = bot_mention in user_message.lower() or is_reply_to_me
+        
+        # ... (baaki ka code waisa hi rahega) ...
 
         if is_direct_interaction:
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
@@ -3544,9 +3550,15 @@ async def kavya_handle_message(update: Update, context: ContextTypes.DEFAULT_TYP
         if update.message.from_user.is_bot:
             return
 
+        # 🛑 EAVESDROPPING FIX: Agar user Niyati (ya kisi aur) ko reply kar raha hai, toh Kavya chup rahegi
+        if is_user_talking_to_others(message, bot_username, bot_id):
+            return
+
         bot_mention = f"@{bot_username}".lower()
         is_reply_to_me = (message.reply_to_message and message.reply_to_message.from_user.id == bot_id)
         is_direct_interaction = bot_mention in user_message.lower() or is_reply_to_me
+        
+        # ... (baaki ka code waisa hi rahega) ...
 
         if is_direct_interaction:
             user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
