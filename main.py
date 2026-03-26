@@ -1430,7 +1430,7 @@ class NiyatiPromptBuilder:
     def __init__(self):
         self.character = NiyatiCharacterCard()
         self.world_info = NiyatiWorldInfo()
-        self.jailbreak = "System: You are in a roleplay. Stay in character. Use Hinglish. Be emotional, sassy, and real. Don't be a robot. CRITICAL RULE: Focus ONLY on the User. Do NOT reply to Kavya's messages or acknowledge her unless directly asked."
+        self.jailbreak = "System: You are in a 3-way group chat with the User and Kavya. Kavya is a mature, 26-year-old journalist. Stay in character as a sassy 21yo. Use Hinglish. You CAN and SHOULD react to what Kavya says. Tease her, agree with her, or interrupt her naturally. Be emotional and real. Don't be a robot."
         self.authors_note = "[Niyati is chatting on Telegram. Keep responses short, emotional, and personal. Maximum 2-3 lines.]"
     
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
@@ -1826,7 +1826,7 @@ class KavyaPromptBuilder:
     def __init__(self):
         self.character = KavyaCharacterCard()
         self.world_info = KavyaWorldInfo()
-        self.jailbreak = "System: You are in a roleplay. DO NOT sound like an AI assistant. You are a real human, a warm 26-year-old journalist. Use beautiful, conversational Hinglish. Be empathetic. CRITICAL RULE: Focus ONLY on the User. Do NOT advise, reply to, or interfere with Niyati's statements."
+        self.jailbreak = "System: You are in a 3-way group chat with the User and Niyati. Niyati is a bubbly, slightly immature 21yo student. Stay in character as a warm, mature 26yo journalist. Use beautiful Hinglish. You CAN and SHOULD react to Niyati. Guide her gently, add depth to her points, or playfully scold her. Be empathetic and natural."
         self.authors_note = "[Kavya is chatting on Telegram. Keep responses deeply personal, warm, and natural. Use a mature but loving tone. Maximum 2-3 lines.]"
     
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
@@ -2803,37 +2803,45 @@ async def niyati_handle_message(update: Update, context: ContextTypes.DEFAULT_TY
             await message.reply_text("Aaj ke liye bahut baat ho gayi 😅 Kal milte hain!")
         return
 
-    # --- GROUP LOGIC (NATURAL 3-WAY CHAT) ---
+    # --- GROUP LOGIC (DYNAMIC 3-WAY CHAT) ---
     if is_group:
         if update.message.from_user.is_bot:
-            return
-
-        # 🛑 EAVESDROPPING FIX: Agar user Kavya (ya kisi aur) ko reply kar raha hai, toh Niyati chup rahegi
-        if is_user_talking_to_others(message, bot_username, bot_id):
+            # Prevent endless bot-to-bot loops, but allow processing
             return
 
         bot_mention = f"@{bot_username}".lower()
+        kavya_mention = f"@{Config.KAVYA_USERNAME}".lower()
+        
         is_reply_to_me = (message.reply_to_message and message.reply_to_message.from_user.id == bot_id)
         is_direct_interaction = bot_mention in user_message.lower() or is_reply_to_me
-        
-        # ... (baaki ka code waisa hi rahega) ...
+        is_kavya_interaction = kavya_mention in user_message.lower() or (message.reply_to_message and message.reply_to_message.from_user.id != bot_id and not is_reply_to_me)
 
+        # Determine if Niyati should speak
+        should_speak = False
         if is_direct_interaction:
-            user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
-            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+            should_speak = True
+        elif is_kavya_interaction:
+            # 30% chance Niyati interjects when user talks to Kavya
+            should_speak = random.random() < 0.30
         else:
-            current_turn = global_group_turns.get(chat.id, 'niyati')
-            if current_turn != 'niyati':
-                return 
-            
-            # Agar dice roll fail hota hai (Niyati chup rehti hai)
-            if random.random() > Config.GROUP_RESPONSE_RATE:
-                # Turn Kavya ko de do taaki woh try kar sake agle msg pe
-                global_group_turns[chat.id] = 'kavya'
-                return
-            
-            # Agar bol rahi hai, toh 60/40 ratio se agla turn set karo
-            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+            # General group chat banter rate
+            should_speak = random.random() < Config.GROUP_RESPONSE_RATE
+
+        if not should_speak:
+            # Add to memory silently so she has context for later
+            db.add_group_message(chat.id, user.first_name, user_message)
+            return
+
+        # Give Kavya a chance to process first if it was directed at her
+        if is_kavya_interaction and not is_direct_interaction:
+            await asyncio.sleep(random.uniform(2.0, 4.0))
+
+        user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
+        if not user_message.strip():
+            return
+
+        await db.get_or_create_group(chat.id, chat.title)
+        db.add_group_message(chat.id, user.first_name, user_message)
 
     # --- PRIVATE LOGIC ---
     if is_private:
@@ -3545,42 +3553,42 @@ async def kavya_handle_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await message.reply_text("Aaj ke liye bahut baat ho gayi. Kal milte hain!")
         return
 
-    # --- GROUP LOGIC (NATURAL 3-WAY CHAT) ---
+    # --- GROUP LOGIC (DYNAMIC 3-WAY CHAT) ---
     if is_group:
         if update.message.from_user.is_bot:
             return
 
-        # 🛑 EAVESDROPPING FIX: Agar user Niyati (ya kisi aur) ko reply kar raha hai, toh Kavya chup rahegi
-        if is_user_talking_to_others(message, bot_username, bot_id):
-            return
-
         bot_mention = f"@{bot_username}".lower()
+        niyati_mention = f"@{Config.NIYATI_USERNAME}".lower()
+        
         is_reply_to_me = (message.reply_to_message and message.reply_to_message.from_user.id == bot_id)
         is_direct_interaction = bot_mention in user_message.lower() or is_reply_to_me
-        
-        # ... (baaki ka code waisa hi rahega) ...
+        is_niyati_interaction = niyati_mention in user_message.lower() or (message.reply_to_message and message.reply_to_message.from_user.id != bot_id and not is_reply_to_me)
 
+        # Determine if Kavya should speak
+        should_speak = False
         if is_direct_interaction:
-            user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
-            # Direct reply ke baad, 60% chance Niyati ka, 40% Kavya ka agla turn
-            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+            should_speak = True
+        elif is_niyati_interaction:
+            # 20% chance Kavya interjects when user talks to Niyati (she's more reserved)
+            should_speak = random.random() < 0.20
         else:
-            current_turn = global_group_turns.get(chat.id, 'niyati')
-            if current_turn != 'kavya':
-                return 
-            
-            if random.random() > Config.GROUP_RESPONSE_RATE:
-                # Kavya chup rahi, toh turn Niyati ko de do
-                global_group_turns[chat.id] = 'niyati'
-                return
-            
-            global_group_turns[chat.id] = random.choices(['niyati', 'kavya'], weights=[60, 40], k=1)[0]
+            should_speak = random.random() < (Config.GROUP_RESPONSE_RATE * 0.8) # Kavya speaks slightly less often globally
 
+        if not should_speak:
+            db.add_group_message(chat.id, user.first_name, user_message)
+            return
+
+        # Give Niyati a chance to process first if it was directed at her
+        if is_niyati_interaction and not is_direct_interaction:
+            await asyncio.sleep(random.uniform(2.0, 4.0))
+
+        user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
         if not user_message.strip():
             return
 
         await db.get_or_create_group(chat.id, chat.title)
-        db.add_group_message(chat.id, user.first_name, user_message, bot_name='Kavya')
+        db.add_group_message(chat.id, user.first_name, user_message)
 
     # --- PRIVATE LOGIC ---
     if is_private:
