@@ -1430,14 +1430,17 @@ class NiyatiPromptBuilder:
     def __init__(self):
         self.character = NiyatiCharacterCard()
         self.world_info = NiyatiWorldInfo()
-        self.jailbreak = "System: You are in a 3-way group chat with the User and Kavya. Kavya is a mature, 26-year-old journalist. Stay in character as a sassy 21yo. Use Hinglish. You CAN and SHOULD react to what Kavya says. Tease her, agree with her, or interrupt her naturally. Be emotional and real. Don't be a robot."
-        self.authors_note = "[Niyati is chatting on Telegram. Keep responses short, emotional, and personal. Maximum 2-3 lines.]"
-    
+        self.jailbreak = """System: You are in a 3-way Telegram group chat.
+The actual human is tagged as (HUMAN). The other AI is tagged as (Kavya).
+CRITICAL RULES:
+1. NEVER confuse the Human with Kavya. 
+2. Whenever you address the user or Kavya by name, you MUST use bold text (e.g., "**Kavya** di" or "**Rahul**").
+3. Act like a real 21yo Indian girl. Be sassy, emotional, and use Hinglish.
+4. Keep replies VERY short (1-2 lines). You are texting, not writing emails."""
+
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
                      mood: str, time_period: str, memories: List[str] = None) -> List[Dict]:
-        """Build the complete prompt SillyTavern-style"""
-        
-        # System prompt with character description
+        # ... (keep system_prompt setup same) ...
         system_prompt = f"""{self.character.description}
 
 {self.jailbreak}
@@ -1481,42 +1484,33 @@ Scenario: {self.character.scenario}"""
                                 "content": line.replace('{{char}}:', '').strip()
                             })
 
-        # Add recent chat history (last 5-7 messages)
-        for msg in chat_history[-7:]:
-            if msg.get('content', '').strip():
-                role = msg.get('role', 'user')
-                content = msg.get('content', '')
-                sender_bot = msg.get('bot')
-
-                if role == 'assistant' and sender_bot:
-                    if sender_bot == self.character.name:
-                        # This bot's own past message
-                        messages.append({
-                            "role": "assistant",
-                            "content": content
-                        })
-                    else:
-                        # The OTHER bot's message (treat as user, but explicitly tag it)
-                        messages.append({
-                            "role": "user",
-                            "content": f"[BOT - {sender_bot}]: {content}"
-                        })
-                elif role == 'user':
-                    # The ACTUAL HUMAN
-                    messages.append({
-                        "role": "user",
-                        "content": f"[HUMAN - {user_name}]: {content}"
-                    })
+        # Add ALL chat history (No [-5:] slicing!)
+        for msg in chat_history:
+            content = msg.get('content', '').strip()
+            if not content: continue
+            
+            sender = msg.get('bot') or msg.get('username')
+            
+            if sender == 'Niyati':
+                messages.append({"role": "assistant", "content": content})
+            elif sender == 'Kavya':
+                messages.append({"role": "user", "content": f"(Kavya): {content}"})
+            else:
+                messages.append({"role": "user", "content": f"(HUMAN - {user_name}): {content}"})
 
         # Current user message
-        messages.append({"role": "user", "content": f"[HUMAN - {user_name}]: {current_message}"})
-
+        messages.append({"role": "user", "content": f"(HUMAN - {user_name}): {current_message}"})
         return messages
     
     def parse_response(self, raw_response: str, user_name: str) -> List[str]:
-        """Clean and parse LLM response"""
-        if not raw_response:
-            return ["..."]
+        if not raw_response: return ["..."]
+        
+        # 🧹 CLEANUP: Remove any leaked AI tags or prefixes
+        response = re.sub(r'^(\(Niyati\)|\(Kavya\)|\(HUMAN.*?\)|\w+:)\s*', '', raw_response, flags=re.IGNORECASE)
+        response = response.replace(f"(HUMAN - {user_name}):", "").strip()
+        
+        parts = response.split('|||')
+        # ... rest of your parsing code ...
         
         # Remove any "assistant:" or "{{char}}:" prefixes
         response = re.sub(r'^(assistant|{{char}}):\s*', '', raw_response, flags=re.IGNORECASE)
@@ -1831,17 +1825,16 @@ class KavyaPromptBuilder:
         self.character = KavyaCharacterCard()
         self.world_info = KavyaWorldInfo()
         self.jailbreak = """System: You are in a 3-way Telegram group chat.
-The actual human is tagged as [HUMAN].
-The other AI is tagged as [BOT - Niyati].
+The actual human is tagged as (HUMAN). The other AI is tagged as (Niyati).
 CRITICAL RULES:
-1. NEVER call the human 'Niyati'. Niyati is the other bot. 
-2. Address the [HUMAN] directly. If the human says you are ignoring them, apologize warmly and focus entirely on them.
-3. Be mature, empathetic, and use beautiful Hinglish.
-4. Stop sounding like a confused AI. Read the tags carefully."""
-        self.authors_note = "[Kavya is chatting on Telegram. Keep responses deeply personal, warm, and natural. Use a mature but loving tone. Maximum 2-3 lines.]"
-    
+1. NEVER call the human 'Niyati'. Niyati is the other girl in the chat.
+2. Whenever you address the user or Niyati by name, you MUST use bold text (e.g., "**Niyati**" or "**Rahul** ji").
+3. Act like a mature 26yo journalist. Be warm, empathetic, and use natural Hinglish.
+4. Keep replies VERY short (1-2 lines). React naturally to what is happening."""
+
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
                      mood: str, time_period: str, memories: List[str] = None) -> List[Dict]:
+        # ... (keep system_prompt setup same) ...
         """Build the complete prompt SillyTavern-style"""
         
         system_prompt = f"""{self.character.description}
@@ -1884,38 +1877,33 @@ Scenario: {self.character.scenario}"""
                                 "content": line.replace('{{char}}:', '').strip()
                             })
 
-        # Add label logic for Twin Bot awareness
-        for msg in chat_history[-5:]:
-            if msg.get('content', '').strip():
-                role = msg.get('role', 'user')
-                content = msg.get('content', '')
-                sender_bot = msg.get('bot')
-
-                if role == 'assistant' and sender_bot:
-                    if sender_bot == 'Kavya':
-                        # Yeh Kavya ka apna message hai
-                        pass
-                    else:
-                        # Yeh Niyati ka message hai, isko 3rd person bana do
-                        role = 'user'
-                        content = f"[Niyati to User]: {content}"
-                elif role == 'user':
-                    content = f"[{user_name}]: {content}"
-                
-                messages.append({
-                    "role": role,
-                    "content": content
-                })
+        # Add ALL chat history
+        for msg in chat_history:
+            content = msg.get('content', '').strip()
+            if not content: continue
+            
+            sender = msg.get('bot') or msg.get('username')
+            
+            if sender == 'Kavya':
+                messages.append({"role": "assistant", "content": content})
+            elif sender == 'Niyati':
+                messages.append({"role": "user", "content": f"(Niyati): {content}"})
+            else:
+                messages.append({"role": "user", "content": f"(HUMAN - {user_name}): {content}"})
 
         # Current user message
-        messages.append({"role": "user", "content": f"[HUMAN - {user_name}]: {current_message}"})
-        
+        messages.append({"role": "user", "content": f"(HUMAN - {user_name}): {current_message}"})
         return messages
     
     def parse_response(self, raw_response: str, user_name: str) -> List[str]:
-        """Clean and parse LLM response"""
-        if not raw_response:
-            return ["..."]
+        if not raw_response: return ["..."]
+        
+        # 🧹 CLEANUP: Remove any leaked AI tags or prefixes
+        response = re.sub(r'^(\(Niyati\)|\(Kavya\)|\(HUMAN.*?\)|\w+:)\s*', '', raw_response, flags=re.IGNORECASE)
+        response = response.replace(f"(HUMAN - {user_name}):", "").strip()
+        
+        parts = response.split('|||')
+        # ... rest of your parsing code ...
         
         response = re.sub(r'^(assistant|{{char}}):\s*', '', raw_response, flags=re.IGNORECASE)
         parts = response.split('|||')
@@ -2868,13 +2856,22 @@ async def niyati_handle_message(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
 
-        # 🧠 SHARED MEMORY INJECTION
+        # 🧠 SHARED MEMORY INJECTION (Chronological Sorting)
         if is_private:
             context_msgs = await db.get_user_context(user.id)
         else:
+            # Group chat mein sabke messages fetch karo aur time ke hisaab se sort karo
             user_group_msgs = db.get_group_context(chat.id)
             bot_shared_msgs = shared_group_memory.get(chat.id, [])
-            context_msgs = user_group_msgs + bot_shared_msgs # Mix user context and twin bot context
+            
+            # Combine both lists
+            context_msgs = user_group_msgs + bot_shared_msgs
+            
+            # Sort chronologically by timestamp so conversation flows logically
+            try:
+                context_msgs.sort(key=lambda x: x.get('timestamp', ''))
+            except Exception as e:
+                logger.debug(f"Sorting error: {e}")
 
         mood = niyati_ai._get_random_mood()
         time_period = TimeAware.get_time_period()
@@ -3615,13 +3612,22 @@ async def kavya_handle_message(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
 
-        # 🧠 SHARED MEMORY INJECTION
+        # 🧠 SHARED MEMORY INJECTION (Chronological Sorting)
         if is_private:
             context_msgs = await db.get_user_context(user.id)
         else:
+            # Group chat mein sabke messages fetch karo aur time ke hisaab se sort karo
             user_group_msgs = db.get_group_context(chat.id)
             bot_shared_msgs = shared_group_memory.get(chat.id, [])
-            context_msgs = user_group_msgs + bot_shared_msgs # Mix user context and twin bot context
+            
+            # Combine both lists
+            context_msgs = user_group_msgs + bot_shared_msgs
+            
+            # Sort chronologically by timestamp so conversation flows logically
+            try:
+                context_msgs.sort(key=lambda x: x.get('timestamp', ''))
+            except Exception as e:
+                logger.debug(f"Sorting error: {e}")
 
         mood = kavya_ai._get_random_mood()
         time_period = TimeAware.get_time_period()
