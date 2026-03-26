@@ -1427,12 +1427,10 @@ class NiyatiWorldInfo:
 
 
 class NiyatiPromptBuilder:
-    """Builds SillyTavern-style prompts for Niyati"""
-    
     def __init__(self):
         self.character = NiyatiCharacterCard()
         self.world_info = NiyatiWorldInfo()
-        self.jailbreak = "System: You are in a roleplay. Stay in character. Use Hinglish. Be emotional, sassy, and real. Don't be a robot."
+        self.jailbreak = "System: You are in a roleplay. Stay in character. Use Hinglish. Be emotional, sassy, and real. Don't be a robot. CRITICAL RULE: Focus ONLY on the User. Do NOT reply to Kavya's messages or acknowledge her unless directly asked."
         self.authors_note = "[Niyati is chatting on Telegram. Keep responses short, emotional, and personal. Maximum 2-3 lines.]"
     
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
@@ -1490,17 +1488,24 @@ Scenario: {self.character.scenario}"""
                 content = msg.get('content', '')
                 sender_bot = msg.get('bot')
 
-                # AGAR assistant ka message hai, toh label lagao
                 if role == 'assistant' and sender_bot:
-                    content = f"[{sender_bot}]: {content}"
-                
+                    if sender_bot == 'Niyati':
+                        # Yeh Niyati ka apna message hai, AI ko pata hona chahiye ki ye usne bola hai
+                        pass
+                    else:
+                        # Yeh Kavya ka message hai. Niyati ke LLM ko ise 'user'/3rd person man-na chahiye
+                        role = 'user'
+                        content = f"[Kavya to User]: {content}"
+                elif role == 'user':
+                    content = f"[{user_name}]: {content}"
+
                 messages.append({
                     "role": role,
                     "content": content
                 })
 
         # Current user message
-        messages.append({"role": "user", "content": current_message})
+        messages.append({"role": "user", "content": f"[{user_name}]: {current_message}"})
 
         return messages
     
@@ -1818,13 +1823,10 @@ class KavyaWorldInfo:
 
 
 class KavyaPromptBuilder:
-    """Builds SillyTavern-style prompts for Kavya - Warm Tone"""
-    
     def __init__(self):
         self.character = KavyaCharacterCard()
         self.world_info = KavyaWorldInfo()
-        # CRITICAL FIX: Tell LLM explicitly NOT to be a robot
-        self.jailbreak = "System: You are in a roleplay. DO NOT sound like an AI assistant or customer care. You are a real human, a warm 26-year-old journalist. Use beautiful, conversational Hinglish (like an intellectual but caring friend). Be empathetic, emotional, and genuine. Never say 'main ek AI hoon'."
+        self.jailbreak = "System: You are in a roleplay. DO NOT sound like an AI assistant. You are a real human, a warm 26-year-old journalist. Use beautiful, conversational Hinglish. Be empathetic. CRITICAL RULE: Focus ONLY on the User. Do NOT advise, reply to, or interfere with Niyati's statements."
         self.authors_note = "[Kavya is chatting on Telegram. Keep responses deeply personal, warm, and natural. Use a mature but loving tone. Maximum 2-3 lines.]"
     
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
@@ -1879,14 +1881,24 @@ Scenario: {self.character.scenario}"""
                 sender_bot = msg.get('bot')
 
                 if role == 'assistant' and sender_bot:
-                    content = f"[{sender_bot}]: {content}"
+                    if sender_bot == 'Kavya':
+                        # Yeh Kavya ka apna message hai
+                        pass
+                    else:
+                        # Yeh Niyati ka message hai, isko 3rd person bana do
+                        role = 'user'
+                        content = f"[Niyati to User]: {content}"
+                elif role == 'user':
+                    content = f"[{user_name}]: {content}"
                 
                 messages.append({
                     "role": role,
                     "content": content
                 })
 
-        messages.append({"role": "user", "content": current_message})
+        # Current user message
+        messages.append({"role": "user", "content": f"[{user_name}]: {current_message}"})
+        
         return messages
     
     def parse_response(self, raw_response: str, user_name: str) -> List[str]:
