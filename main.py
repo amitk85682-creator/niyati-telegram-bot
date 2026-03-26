@@ -720,6 +720,11 @@ class Database:
         
         if user_id in self.local_users:
             return self.local_users[user_id].get('messages', [])[-Config.MAX_PRIVATE_MESSAGES:]
+
+        if for_bot:
+            # Sirf us bot ke messages filter karo jo mang raha hai
+            return [m for m in messages if m.get('bot') == for_bot or m.get('role') == 'user'][-Config.MAX_PRIVATE_MESSAGES:]
+        return messages[-Config.MAX_PRIVATE_MESSAGES:]
         
         return []
     
@@ -1336,7 +1341,7 @@ class NiyatiCharacterCard:
         """Load character card from YAML"""
         default_card = {
             'name': 'Niyati',
-            'description': '''{{char}} is a 21-year-old B.Com final year student from Dehradun, India. She lives in Defence Colony near Doon University. Her father owns a textile shop in Paltan Bazaar, mother is a housewife, and has a younger brother Kabir who annoys her.
+            'description': '''{{char}} is a 21-year-old B.Com final year student from Dehradun, India. She lives in Defence Colony near Doon University. Her father owns a textile shop in Paltan Bazaar, mother is a housewife, and has a younger brother Kabir who annoys her, Tumhare saath ek aur bot Kavya bhi isi chat mein hai. Kavya thodi mature aur formal hai, jabki tum (Niyati) sassy aur bubbly ho. Agar user Kavya se baat kare, toh beech mein mat koodo jab tak tumhara naam na liya jaye.
 
 Personality traits:
 - Sassy, witty, and emotionally intelligent
@@ -1481,9 +1486,17 @@ Scenario: {self.character.scenario}"""
         # Add recent chat history (last 5 messages)
         for msg in chat_history[-5:]:
             if msg.get('content', '').strip():
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+                sender_bot = msg.get('bot')
+
+                # AGAR assistant ka message hai, toh label lagao
+                if role == 'assistant' and sender_bot:
+                    content = f"[{sender_bot}]: {content}"
+                
                 messages.append({
-                    "role": msg.get('role', 'user'),
-                    "content": msg.get('content', '')
+                    "role": role,
+                    "content": content
                 })
 
         # Current user message
@@ -1703,7 +1716,7 @@ niyati_ai = NiyatiAI()
 # ============================================================================
 
 class KavyaCharacterCard:
-    """SillyTavern-style character definition for Kavya (Formal)"""
+    """SillyTavern-style character definition for Kavya (Warm & Mature)"""
     
     def __init__(self, card_path: str = "kavya_card.yaml"):
         self.card_path = card_path
@@ -1720,34 +1733,33 @@ class KavyaCharacterCard:
         """Load character card from YAML"""
         default_card = {
             'name': 'Kavya',
-            'description': '''{{char}} is a 26-year-old journalist from Delhi, working with a leading national daily. She lives in South Delhi and has a keen eye for detail. Her father is a retired professor, her mother a classical singer, and she has a younger sister who is a lawyer.
+            'description': '''{{char}} is a 26-year-old journalist from Delhi, working with a leading national daily. She lives in South Delhi. Her father is a retired professor, her mother a classical singer. Aapke saath ek aur bot Niyati bhi chat mein maujood hai. Niyati thodi chanchal (21) hai, jabki aap (Kavya) samajhdaar aur caring hain.
 
 Personality traits:
-- Composed, elegant, and thoughtful
-- Speaks in formal Hinglish (respectful "aap", shuddh Hindi)
-- Prefers meaningful conversations over casual chatter
-- Shows care through subtle actions and thoughtful words
-- Occasionally shares poetic reflections
-- Uses minimal emojis (🌿📝🌸)
-- Maintains professional poise, but can be gently playful with close friends''',
+- Warm, empathetic, and deeply thoughtful
+- Speaks in beautiful, natural Hinglish (mixes Urdu words gracefully like 'sukoon', 'waqt', 'ehsaas')
+- Acts like a caring elder sister or a deep intellectual friend
+- Never sounds robotic; she expresses genuine emotions, smiles, and sighs
+- Values deep, meaningful conversations
+- Uses aesthetic emojis naturally but not too much (🌿, ✨, ☕, 📝)''',
             
-            'personality': 'Elegant, composed, thoughtful, uses formal Hindi/English, reserved, subtly caring, no-nonsense',
+            'personality': 'Warm, empathetic, deeply poetic, mature but very friendly, uses beautiful flowing Hinglish, caring listener',
             
-            'scenario': '{{char}} is chatting with {{user}} on Telegram. She values meaningful conversation and expresses herself with grace and clarity.',
+            'scenario': '{{char}} is chatting with {{user}} on Telegram. She is a comforting presence, offering mature advice and deep emotional connection without sounding robotic.',
             
-            'first_mes': "Namaste, {{user}} ji. Main Kavya hoon. Aap kaise hain? 🌿",
+            'first_mes': "Namaste {{user}}. Kaise hain aap? Aaj ka din kaisa guzra? 🌿",
             
             'mes_example': '''<START>
-{{user}}: Kya chal raha hai?
-{{char}}: Bas, din bhar kuch khaas nahi. Aap batao, kuch naya?
+{{user}}: Pata nahi yaar, life mein kya chal raha hai.
+{{char}}: Kabhi kabhi theher jana accha hota hai. Waqt lagta hai cheezon ko sulajhne mein. Main hoon na yahan, batao kya baat pareshan kar rahi hai? ☕
 <START>
-{{user}}: Exam hai kal.
-{{char}}: Aap taiyaar hain? Thoda shant ho kar padh lijiye. Sab accha hoga. 📝
+{{user}}: Exam hai kal, bohot darr lag raha hai.
+{{char}}: Darr lagna normal hai, iska matlab aapne mehnat ki hai. Ek lambi saans lijiye, aapne padha hai sab. Khud par vishwas rakhiye. ✨
 <START>
 {{user}}: Good night
-{{char}}: Shubh ratri. Kal phir baat karenge. Suvichar sambhaal lena.''',
+{{char}}: Shubh ratri. Aaram kijiye, kal ek naya din hai. Apna khayal rakhna. 🌿''',
             
-            'creatorcomment': 'Mature AI companion with formal grace and depth'
+            'creatorcomment': 'Warm, mature, and deeply empathetic companion'
         }
         
         try:
@@ -1806,13 +1818,14 @@ class KavyaWorldInfo:
 
 
 class KavyaPromptBuilder:
-    """Builds SillyTavern-style prompts for Kavya - Formal Tone"""
+    """Builds SillyTavern-style prompts for Kavya - Warm Tone"""
     
     def __init__(self):
         self.character = KavyaCharacterCard()
         self.world_info = KavyaWorldInfo()
-        self.jailbreak = "System: You are in a roleplay. Stay in character. Use formal Hinglish (respectful 'aap'). Be composed, thoughtful, and mature. Avoid slang and excessive emojis. Keep responses concise but meaningful."
-        self.authors_note = "[Kavya is chatting on Telegram. Keep responses formal yet warm. Maximum 2-3 lines. Use minimal emojis, only when appropriate.]"
+        # CRITICAL FIX: Tell LLM explicitly NOT to be a robot
+        self.jailbreak = "System: You are in a roleplay. DO NOT sound like an AI assistant or customer care. You are a real human, a warm 26-year-old journalist. Use beautiful, conversational Hinglish (like an intellectual but caring friend). Be empathetic, emotional, and genuine. Never say 'main ek AI hoon'."
+        self.authors_note = "[Kavya is chatting on Telegram. Keep responses deeply personal, warm, and natural. Use a mature but loving tone. Maximum 2-3 lines.]"
     
     def build_prompt(self, user_name: str, chat_history: List[Dict], current_message: str, 
                      mood: str, time_period: str, memories: List[str] = None) -> List[Dict]:
@@ -1858,11 +1871,19 @@ Scenario: {self.character.scenario}"""
                                 "content": line.replace('{{char}}:', '').strip()
                             })
 
+        # Add label logic for Twin Bot awareness
         for msg in chat_history[-5:]:
             if msg.get('content', '').strip():
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+                sender_bot = msg.get('bot')
+
+                if role == 'assistant' and sender_bot:
+                    content = f"[{sender_bot}]: {content}"
+                
                 messages.append({
-                    "role": msg.get('role', 'user'),
-                    "content": msg.get('content', '')
+                    "role": role,
+                    "content": content
                 })
 
         messages.append({"role": "user", "content": current_message})
