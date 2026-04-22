@@ -159,6 +159,19 @@ logger = logging.getLogger(__name__)
 for lib in ['httpx', 'telegram', 'openai', 'httpcore']:
     logging.getLogger(lib).setLevel(logging.WARNING)
 
+GEETA_FALLBACK_QUOTES = [
+    "🙏 <b>Bhagavad Gita 2.47</b>\n<code>कर्मण्येवाधिकारस्ते मा फलेषु कदाचन</code>\nHinglish: Kaam pe focus karo, result pe overthink mat karo.",
+    "🙏 <b>Bhagavad Gita 2.14</b>\n<code>मात्रास्पर्शास्तु कौन्तेय शीतोष्णसुखदुःखदाः</code>\nHinglish: Sukh-dukh temporary hote hain, thoda patience rakho.",
+    "🙏 <b>Bhagavad Gita 2.50</b>\n<code>योगः कर्मसु कौशलम्</code>\nHinglish: Balance ke saath kaam karna hi asli yoga hai.",
+    "🙏 <b>Bhagavad Gita 3.19</b>\n<code>तस्मादसक्तः सततं कार्यं कर्म समाचर</code>\nHinglish: Attachment chhodo, consistency se apna duty karo.",
+    "🙏 <b>Bhagavad Gita 4.7</b>\n<code>यदा यदा हि धर्मस्य ग्लानिर्भवति भारत</code>\nHinglish: Jab imbalance badhta hai, sahi direction phir se aati hai.",
+    "🙏 <b>Bhagavad Gita 6.5</b>\n<code>उद्धरेदात्मनात्मानं नात्मानमवसादयेत्</code>\nHinglish: Khud ko khud hi uplift karo, self-doubt mein mat doobo.",
+    "🙏 <b>Bhagavad Gita 6.26</b>\n<code>यतो यतो निश्चरति मनश्चञ्चलमस्थिरम्</code>\nHinglish: Mann bhatke toh gently wapas focus pe lao.",
+    "🙏 <b>Bhagavad Gita 12.15</b>\n<code>यस्मान्नोद्विजते लोको लोकान्नोद्विजते च यः</code>\nHinglish: Jo khud bhi shaant rahe aur dusron ko bhi sukoon de, wahi strong hai.",
+    "🙏 <b>Bhagavad Gita 18.66</b>\n<code>सर्वधर्मान्परित्यज्य मामेकं शरणं व्रज</code>\nHinglish: Fear chhodo, trust aur surrender se clarity milti hai.",
+    "🙏 <b>Bhagavad Gita 2.70</b>\n<code>आपूर्यमाणमचलप्रतिष्ठं समुद्रमापः प्रविशन्ति यद्वत्</code>\nHinglish: Jaise samundar stable rehta hai, waise hi desires ke beech calm raho."
+]
+
 # ============================================================================
 # HEALTH SERVER
 # ============================================================================
@@ -203,6 +216,16 @@ health_server = HealthServer()
 
 shared_group_memory: Dict[int, List[Dict]] = {}
 bot_exchange_tracker: Dict[int, Dict] = defaultdict(lambda: {'count': 0, 'last_reset': datetime.now(timezone.utc)})
+group_turn_manager: Dict[int, Dict[str, Any]] = defaultdict(
+    lambda: {
+        'last_speaker': None,
+        'pending_bot_replies': {},
+        'exchange_count': 0,
+        'last_human_at': None,
+        'processed_human_messages': set()
+    }
+)
+group_turn_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 async def add_to_shared_memory(chat_id: int, bot_name: str, response: str):
     """Store a bot's response so the other bot can see it."""
@@ -220,6 +243,12 @@ async def add_to_shared_memory(chat_id: int, bot_name: str, response: str):
 
 def check_bot_loop(chat_id: int) -> bool:
     """Returns True if bots have been talking too much to each other. Anti-loop."""
+    state = group_turn_manager[chat_id]
+    if state.get('exchange_count', 0) >= 3 and state.get('last_human_at'):
+        quiet_for = (datetime.now(timezone.utc) - state['last_human_at']).total_seconds()
+        if quiet_for >= 60:
+            return True
+
     tracker = bot_exchange_tracker[chat_id]
     now = datetime.now(timezone.utc)
     
@@ -782,7 +811,20 @@ class Database:
     async def get_user_count(self) -> int:
         if self.connected and self.client:
             try:
-                return len(await self.client.select('users', 'user_id'))
+                total = 0
+                offset = 0
+                while True:
+                    url = f"{self.client.rest_url}/users?select=user_id&offset={offset}&limit=1000"
+                    client = self.client._get_client()
+                    response = await client.get(url)
+                    batch = response.json()
+                    if not batch:
+                        break
+                    total += len(batch)
+                    if len(batch) < 1000:
+                        break
+                    offset += 1000
+                return total
             except:
                 pass
         return len(self.local_users)
@@ -790,7 +832,20 @@ class Database:
     async def get_group_count(self) -> int:
         if self.connected and self.client:
             try:
-                return len(await self.client.select('groups', 'chat_id'))
+                total = 0
+                offset = 0
+                while True:
+                    url = f"{self.client.rest_url}/groups?select=chat_id&offset={offset}&limit=1000"
+                    client = self.client._get_client()
+                    response = await client.get(url)
+                    batch = response.json()
+                    if not batch:
+                        break
+                    total += len(batch)
+                    if len(batch) < 1000:
+                        break
+                    offset += 1000
+                return total
             except:
                 pass
         return len(self.local_groups)
@@ -1128,7 +1183,9 @@ class NiyatiPromptBuilder:
 4. Keep replies VERY short (1-2 lines). You're TEXTING, not writing an essay.
 5. If the message is clearly for Kavya and not for you, reply "IGNORE" (literally just that word).
 6. React naturally — if Kavya says something funny, laugh. If she's wrong, correct her sassily.
-7. Don't repeat what Kavya already said. Add something NEW to the conversation.""" if is_group else ""
+7. Don't repeat what Kavya already said. Add something NEW to the conversation.
+8. Sometimes call her "Kavya didi" or "Kavya" naturally.
+9. If context says other bot just spoke, continue from that line instead of restarting topic.""" if is_group else ""
 
         authors_note = f"""[Author's Note: 
 Niyati is texting on her phone right now. Mood: {mood}. Time: {time_period} IST.
@@ -1314,9 +1371,18 @@ class NiyatiAI:
         return None
     
     async def generate_geeta_quote(self):
-        prompt = "Give a short Bhagavad Gita quote with simple Hinglish meaning. Start with 🙏"
-        res = await self._call_gpt([{"role": "user", "content": prompt}])
-        return res or "🙏 Karm karo phal ki chinta mat karo."
+        prompt = (
+            "Generate ONE real Bhagavad Gita shloka that is different from common repeated quotes. "
+            "Return strictly in this format only:\n"
+            "🙏 <b>Bhagavad Gita CHAPTER.VERSE</b>\n"
+            "<code>Sanskrit text max 1-2 lines</code>\n"
+            "Hinglish: Simple daily-life meaning in 1 short line.\n"
+            "Rules: Use a valid chapter/verse reference, keep Sanskrit short, never output 2.47 unless explicitly asked, no extra commentary."
+        )
+        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=220, temperature=0.95)
+        if res and "Bhagavad Gita" in res and "Hinglish:" in res:
+            return res
+        return random.choice(GEETA_FALLBACK_QUOTES)
 
 niyati_ai = NiyatiAI()
 
@@ -1430,7 +1496,9 @@ class KavyaPromptBuilder:
 4. Keep replies short (1-3 lines). You're texting, not writing an article.
 5. If the message is clearly for Niyati and not for you, reply "IGNORE".
 6. React naturally to Niyati — she's younger, sometimes tease her gently.
-7. Don't repeat what Niyati said. Add YOUR perspective.""" if is_group else ""
+7. Don't repeat what Niyati said. Add YOUR perspective.
+8. Sometimes call her "Niyati" or "yeh pagal ladki" naturally.
+9. If context says the other bot just spoke, respond to that naturally or ignore.""" if is_group else ""
 
         authors_note = f"""[Author's Note:
 Kavya is texting on her phone. Mood: {mood}. Time: {time_period} IST.
@@ -1606,9 +1674,18 @@ class KavyaAI:
         return None
     
     async def generate_geeta_quote(self):
-        prompt = "Give a short Bhagavad Gita quote with Hinglish meaning. Start with 🙏"
-        res = await self._call_gpt([{"role": "user", "content": prompt}])
-        return res or "🙏 Karm kar, phal ki chinta mat kar."
+        prompt = (
+            "Generate ONE real Bhagavad Gita shloka and keep variety high (avoid repeating same verses). "
+            "Output exactly:\n"
+            "🙏 <b>Bhagavad Gita CHAPTER.VERSE</b>\n"
+            "<code>Sanskrit text max 1-2 lines</code>\n"
+            "Hinglish: One easy meaning line.\n"
+            "Must be authentic, concise, and not a generic motivational line."
+        )
+        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=220, temperature=0.9)
+        if res and "Bhagavad Gita" in res and "Hinglish:" in res:
+            return res
+        return random.choice(GEETA_FALLBACK_QUOTES)
 
 kavya_ai = KavyaAI()
 
@@ -1724,6 +1801,9 @@ def create_message_handler(bot_name: str, bot_username: str, other_bot_username:
                 await message.reply_text(msg)
             return
 
+        is_direct = False
+        other_bot_recent_reply = None
+
         # ========== GROUP LOGIC ==========
         if is_group:
             my_mention = f"@{bot_username}".lower()
@@ -1743,36 +1823,86 @@ def create_message_handler(bot_name: str, bot_username: str, other_bot_username:
                 message.reply_to_message.from_user.is_bot
             )
             
-            # Decision: Should this bot speak?
-            should_speak = False
-            
-            if is_direct:
-                should_speak = True
-            elif is_other_bot_targeted:
-                # Interjection chance — only if anti-loop not triggered
-                if not check_bot_loop(chat.id):
-                    interjection_chance = 0.25 if bot_name == 'Niyati' else 0.15
-                    should_speak = random.random() < interjection_chance
-            else:
-                # General group banter
-                general_chance = Config.GROUP_RESPONSE_RATE if bot_name == 'Niyati' else Config.GROUP_RESPONSE_RATE * 0.7
-                should_speak = random.random() < general_chance
-            
-            if not should_speak:
-                db.add_group_message(chat.id, user.first_name, user_message)
-                return
-            
-            # If other bot was targeted, wait a bit for them to respond first
-            if is_other_bot_targeted and not is_direct:
-                await asyncio.sleep(random.uniform(3.0, 6.0))
-            
+            plan = None
+            async with group_turn_locks[chat.id]:
+                turn_state = group_turn_manager[chat.id]
+                pending = turn_state['pending_bot_replies'].get(message.message_id)
+                if not pending:
+                    direct_target = None
+                    if is_mentioned and my_mention in msg_lower and other_mention not in msg_lower:
+                        direct_target = bot_name
+                    elif is_mentioned and other_mention in msg_lower and my_mention not in msg_lower:
+                        direct_target = 'Niyati' if bot_name == 'Kavya' else 'Kavya'
+                    elif is_reply_to_me:
+                        direct_target = bot_name
+                    elif is_other_bot_targeted:
+                        direct_target = 'Niyati' if bot_name == 'Kavya' else 'Kavya'
+
+                    if direct_target:
+                        first_bot = direct_target
+                        second_bot = 'Kavya' if first_bot == 'Niyati' else 'Niyati'
+                    else:
+                        first_bot, second_bot = random.sample(['Niyati', 'Kavya'], 2)
+
+                    base_first_chance = 1.0 if direct_target else Config.GROUP_RESPONSE_RATE
+                    allow_first = random.random() < base_first_chance
+                    pending = {
+                        'first_bot': first_bot,
+                        'second_bot': second_bot,
+                        'allow_first': allow_first,
+                        'second_base_chance': 0.6,
+                        'first_response_len': 0,
+                        'human_text': user_message,
+                        'user_name': user.first_name,
+                        'user_id': user.id
+                    }
+                    turn_state['pending_bot_replies'][message.message_id] = pending
+
+                    if message.message_id not in turn_state['processed_human_messages']:
+                        db.add_group_message(chat.id, user.first_name, user_message)
+                        shared_group_memory.setdefault(chat.id, []).append({
+                            'username': user.first_name,
+                            'content': user_message,
+                            'role': 'user',
+                            'timestamp': datetime.now(timezone.utc).isoformat()
+                        })
+                        if len(shared_group_memory[chat.id]) > 30:
+                            shared_group_memory[chat.id] = shared_group_memory[chat.id][-30:]
+                        turn_state['processed_human_messages'].add(message.message_id)
+
+                    turn_state['last_human_at'] = datetime.now(timezone.utc)
+                    turn_state['exchange_count'] = 0
+
+                plan = pending
+
             # Clean mention from message
-            user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip()
-            if not user_message:
+            user_message = re.sub(rf'@{bot_username}', '', user_message, flags=re.IGNORECASE).strip() or user_message
+
+            if not plan.get('allow_first'):
+                async with group_turn_locks[chat.id]:
+                    group_turn_manager[chat.id]['pending_bot_replies'].pop(message.message_id, None)
+                return
+
+            if bot_name == plan.get('second_bot'):
+                await asyncio.sleep(random.uniform(4.0, 8.0))
+                async with group_turn_locks[chat.id]:
+                    turn_state = group_turn_manager[chat.id]
+                    active_plan = turn_state['pending_bot_replies'].get(message.message_id, {})
+                    if active_plan.get('first_response_len', 0) > 220:
+                        active_plan['second_base_chance'] = min(active_plan.get('second_base_chance', 0.6), 0.35)
+                    if turn_state.get('exchange_count', 0) >= 2:
+                        active_plan['second_base_chance'] = min(active_plan.get('second_base_chance', 0.6), 0.25)
+                    if check_bot_loop(chat.id):
+                        turn_state['pending_bot_replies'].pop(message.message_id, None)
+                        return
+                    if random.random() >= active_plan.get('second_base_chance', 0.6):
+                        turn_state['pending_bot_replies'].pop(message.message_id, None)
+                        return
+                    other_bot_recent_reply = active_plan.get('first_reply')
+            elif bot_name != plan.get('first_bot'):
                 return
             
             await db.get_or_create_group(chat.id, chat.title)
-            db.add_group_message(chat.id, user.first_name, user_message)
 
         # ========== PRIVATE LOGIC ==========
         if is_private:
@@ -1805,8 +1935,16 @@ def create_message_handler(bot_name: str, bot_username: str, other_bot_username:
             mood = ai_engine._get_random_mood()
             time_period = TimeAware.get_time_period()
             
+            input_message = user_message
+            if is_group and other_bot_recent_reply:
+                input_message = (
+                    f"(HUMAN): {user_message}\n"
+                    f"(CONTEXT): The other bot just said: {other_bot_recent_reply}\n"
+                    "You can agree, disagree, add to it, tease her, or ignore naturally."
+                )
+
             responses = await ai_engine.generate_response(
-                user_message=user_message,
+                user_message=input_message,
                 context=context_msgs,
                 user_name=user.first_name,
                 is_group=is_group,
@@ -1843,6 +1981,16 @@ def create_message_handler(bot_name: str, bot_username: str, other_bot_username:
             # Save to shared memory
             if is_group:
                 await add_to_shared_memory(chat.id, bot_name, " ".join(safe_responses))
+                async with group_turn_locks[chat.id]:
+                    turn_state = group_turn_manager[chat.id]
+                    turn_state['last_speaker'] = bot_name
+                    turn_state['exchange_count'] = turn_state.get('exchange_count', 0) + 1
+                    pending_plan = turn_state['pending_bot_replies'].get(message.message_id)
+                    if pending_plan and bot_name == pending_plan.get('first_bot'):
+                        pending_plan['first_response_len'] = len(" ".join(safe_responses))
+                        pending_plan['first_reply'] = " ".join(safe_responses)
+                    elif pending_plan and bot_name == pending_plan.get('second_bot'):
+                        turn_state['pending_bot_replies'].pop(message.message_id, None)
             
             # Voice (private only)
             if is_private:
@@ -2031,14 +2179,21 @@ def create_stats_command(bot_name: str):
                 prefs = json.loads(prefs)
             except:
                 prefs = {}
+        if not isinstance(prefs, dict):
+            prefs = {}
         
         created = user_data.get('created_at', 'Unknown')[:10] if user_data.get('created_at') else 'Unknown'
+        total_messages = user_data.get('total_messages', len(messages))
+        try:
+            total_messages = int(total_messages)
+        except:
+            total_messages = len(messages)
         
         stats = f"""
 📊 <b>Stats ({bot_name})</b>
 
 <b>User:</b> {user.first_name}
-<b>Messages:</b> {len(messages)}
+<b>Messages:</b> {total_messages}
 <b>Joined:</b> {created}
 
 <b>Preferences:</b>
@@ -2140,13 +2295,29 @@ def create_diary_callback(bot_name: str, ai_engine):
         diary_entries = await db.get_todays_diary(user.id)
         diary_text = "\n".join([f"• {e.get('content', '')}" for e in diary_entries if e.get('content')]) or "Aaj kuch khaas nahi hua..."
         history = await db.get_user_context(user.id, for_bot=bot_name)
+        memories = await db.get_active_memories(user.id)
+        history_lines = []
+        for h in history[-12:]:
+            role = "You" if h.get('role') == 'assistant' else user.first_name
+            text = str(h.get('content', '')).strip()
+            if text:
+                history_lines.append(f"{role}: {text}")
         
         style = "Hinglish, emotional, personal, use casual language" if bot_name == 'Niyati' else "Hinglish, reflective, mature, thoughtful"
         
         prompt = [
-            {"role": "system", "content": f"""You are {bot_name}. Write a SHORT personal Diary Entry (max 3-4 lines).
-Rules: Start with "Dear Diary...", Format: {style}, Keep it natural like a real diary."""},
-            {"role": "user", "content": f"Today's chat: {str(history[-5:])}\nMemories: {diary_text}"}
+            {"role": "system", "content": f"""You are {bot_name}. Write a SHORT personal Diary Entry (max 4 lines).
+Rules:
+- Start with "Dear Diary..."
+- Tone: {style}
+- Use today's chat + memory snippets
+- Keep it intimate, natural, and specific
+- Avoid generic motivational lines."""},
+            {"role": "user", "content": (
+                f"Today's chat history:\n" + ("\n".join(history_lines) if history_lines else "No major chat") +
+                f"\n\nSaved memory points:\n{diary_text}\n\nActive memories:\n" +
+                ("\n".join(f"• {m}" for m in memories) if memories else "• None")
+            )}
         ]
         
         ai_diary = await ai_engine._call_gpt(prompt, max_tokens=150)
@@ -2172,21 +2343,23 @@ Rules: Start with "Dear Diary...", Format: {style}, Keep it natural like a real 
             except:
                 pass
         
-        # Reactions
-        try:
-            await asyncio.sleep(8)
-            await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
-            await asyncio.sleep(1.5)
-            if bot_name == 'Niyati':
-                await context.bot.send_message(chat_id=user.id, text="oye! tumne meri diary padh li? 😳")
-                await asyncio.sleep(4)
-                await context.bot.send_message(chat_id=user.id, text="judge mat karna pls... tumhe bura to nhi laga na? 👉👈")
-            else:
-                await context.bot.send_message(chat_id=user.id, text="aapne padh li? 😌")
-                await asyncio.sleep(4)
-                await context.bot.send_message(chat_id=user.id, text="kripya judge na karein... kaisi lagi? 🌿")
-        except:
-            pass
+        async def _delayed_reaction():
+            try:
+                await asyncio.sleep(8)
+                await context.bot.send_chat_action(chat_id=user.id, action=ChatAction.TYPING)
+                await asyncio.sleep(1.5)
+                if bot_name == 'Niyati':
+                    await context.bot.send_message(chat_id=user.id, text="oye! tumne meri diary padh li? 😳")
+                    await asyncio.sleep(4)
+                    await context.bot.send_message(chat_id=user.id, text="judge mat karna pls... tumhe bura to nhi laga na? 👉👈")
+                else:
+                    await context.bot.send_message(chat_id=user.id, text="aapne padh li? 😌")
+                    await asyncio.sleep(4)
+                    await context.bot.send_message(chat_id=user.id, text="kripya judge na karein... kaisi lagi? 🌿")
+            except Exception:
+                pass
+
+        asyncio.create_task(_delayed_reaction())
     
     return handler
 
@@ -2312,6 +2485,8 @@ def create_group_toggle(setting_key: str, display_name: str):
 async def send_daily_geeta(context: ContextTypes.DEFAULT_TYPE):
     groups = await db.get_all_groups()
     quote = await niyati_ai.generate_geeta_quote()
+    if not quote:
+        quote = random.choice(GEETA_FALLBACK_QUOTES)
     sent = 0
     for group in groups:
         settings = group.get('settings', {})
@@ -2337,6 +2512,8 @@ async def cleanup_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
     users = await db.get_active_users(days=Config.DIARY_MIN_ACTIVE_DAYS)
+    if not users and not db.connected:
+        users = list(db.local_users.values())
     ist = pytz.timezone(Config.DEFAULT_TIMEZONE)
     current_hour = datetime.now(ist).hour
     
@@ -2354,8 +2531,11 @@ async def send_locked_diary_card(context: ContextTypes.DEFAULT_TYPE):
         if not prefs.get('diary_enabled', True):
             continue
         
-        keyboard = [[InlineKeyboardButton("✨ Unlock Memory ✨", callback_data=f"niyati_unlock_diary_{user_id}")]]
-        caption = f"🔒 <b>Secret Memory Created!</b>\n\nNiyati ki Diary - {datetime.now(ist).strftime('%d %b, %Y')}\nTap to unlock..."
+        keyboard = [[
+            InlineKeyboardButton("✨ Unlock Niyati Diary", callback_data=f"niyati_unlock_diary_{user_id}"),
+            InlineKeyboardButton("🌿 Unlock Kavya Diary", callback_data=f"kavya_unlock_diary_{user_id}")
+        ]]
+        caption = f"🔒 <b>Secret Memory Created!</b>\n\nDate: {datetime.now(ist).strftime('%d %b, %Y')}\nChoose whose diary to unlock..."
         
         try:
             await context.bot.send_photo(
@@ -2469,6 +2649,7 @@ Sassy 💁‍♀️ Emotional 🥺 Full Filmy 🎬
     
     # Callbacks
     app.add_handler(CallbackQueryHandler(create_diary_callback('Niyati', niyati_ai), pattern="^niyati_unlock_diary_"))
+    app.add_handler(CallbackQueryHandler(create_diary_callback('Kavya', kavya_ai), pattern="^kavya_unlock_diary_"))
     app.add_handler(CallbackQueryHandler(
         create_start_callback('Niyati',
             "🌸 <b>About Niyati</b>\n\n21 | Dehradun 🏔️ | B.Com Final Year\nSassy, Emotional, Filmy ✨",
@@ -2509,6 +2690,7 @@ Composed 💁‍♀️ Thoughtful 📝 Gentle 🌿
     app.add_handler(CommandHandler("broadcast", admin_broadcast))
     
     app.add_handler(CallbackQueryHandler(create_diary_callback('Kavya', kavya_ai), pattern="^kavya_unlock_diary_"))
+    app.add_handler(CallbackQueryHandler(create_diary_callback('Niyati', niyati_ai), pattern="^niyati_unlock_diary_"))
     app.add_handler(CallbackQueryHandler(
         create_start_callback('Kavya',
             "🌸 <b>About Kavya</b>\n\n26 | Delhi 📝 | Journalist\nWarm, Thoughtful, Gentle 🌿",
