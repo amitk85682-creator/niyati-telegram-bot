@@ -1190,7 +1190,7 @@ class NiyatiPromptBuilder:
         jailbreak = """CRITICAL RULES FOR GROUP CHAT:
 1. The actual human is tagged as (HUMAN). Any other AI is tagged with their name like (Kavya).
 2. NEVER confuse the Human with Kavya. Kavya is the other girl, not the user.
-3. When addressing someone by name, use bold: **Kavya**, **{user_name}**
+3. When addressing someone by name, use plain names like "Kavya" and "{user_name}" (no markdown symbols).
 4. Keep replies VERY short (1-2 lines). You're TEXTING, not writing an essay.
 5. If the message is clearly for Kavya and not for you, reply "IGNORE" (literally just that word).
 6. React naturally — if Kavya says something funny, laugh. If she's wrong, correct her sassily.
@@ -1265,6 +1265,7 @@ Scenario: {self.character.scenario}"""
             part = part.strip()
             part = part.replace('{{user}}', user_name).replace('{{char}}', 'Niyati')
             part = re.sub(r'\{\{\w+\}\}', '', part)
+            part = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', part)
             if part and len(part) > 1:
                 cleaned.append(part)
         
@@ -1316,11 +1317,16 @@ class NiyatiAI:
                 )
                 return response.choices[0].message.content.strip()
             except Exception as e:
+                err_text = str(e)
+                err_lower = err_text.lower()
+                if "rate_limit_reached" in err_lower or "rate limit reached" in err_lower:
+                    retry_in = parse_retry_after_seconds(err_text)
+                    cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
+                    if not self.rate_limited_until or cooldown_until > self.rate_limited_until:
+                        self.rate_limited_until = cooldown_until
+                        logger.warning(f"⚠️ Groq rate-limited for Niyati; pausing GPT calls for ~{int(retry_in)}s")
+                    return None
                 logger.warning(f"⚠️ Groq Error: {e}")
-                if "rate_limit_reached" in str(e).lower() or "rate limit reached" in str(e).lower():
-                    retry_in = parse_retry_after_seconds(str(e))
-                    self.rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
-                    await asyncio.sleep(min(retry_in, 2.0))
                 if not self._rotate_key():
                     break
                 await asyncio.sleep(0.5)
@@ -1510,7 +1516,7 @@ class KavyaPromptBuilder:
         jailbreak = """CRITICAL RULES FOR GROUP CHAT:
 1. The actual human is tagged as (HUMAN). The other AI is tagged as (Niyati).
 2. NEVER call the human 'Niyati'. Niyati is the other girl (21yo, sassy).
-3. When addressing someone by name, use bold: **Niyati**, **{user_name}** ji
+3. When addressing someone by name, use plain names like "Niyati" and "{user_name}" (no markdown symbols).
 4. Keep replies short (1-3 lines). You're texting, not writing an article.
 5. If the message is clearly for Niyati and not for you, reply "IGNORE".
 6. React naturally to Niyati — she's younger, sometimes tease her gently.
@@ -1581,6 +1587,7 @@ Scenario: {self.character.scenario}"""
             part = part.strip()
             part = part.replace('{{user}}', user_name).replace('{{char}}', 'Kavya')
             part = re.sub(r'\{\{\w+\}\}', '', part)
+            part = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', part)
             if part and len(part) > 1:
                 cleaned.append(part)
         return cleaned[:3] if cleaned else ["hmm"]
@@ -1631,11 +1638,16 @@ class KavyaAI:
                 )
                 return response.choices[0].message.content.strip()
             except Exception as e:
+                err_text = str(e)
+                err_lower = err_text.lower()
+                if "rate_limit_reached" in err_lower or "rate limit reached" in err_lower:
+                    retry_in = parse_retry_after_seconds(err_text)
+                    cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
+                    if not self.rate_limited_until or cooldown_until > self.rate_limited_until:
+                        self.rate_limited_until = cooldown_until
+                        logger.warning(f"⚠️ Groq rate-limited for Kavya; pausing GPT calls for ~{int(retry_in)}s")
+                    return None
                 logger.warning(f"⚠️ Groq Error: {e}")
-                if "rate_limit_reached" in str(e).lower() or "rate limit reached" in str(e).lower():
-                    retry_in = parse_retry_after_seconds(str(e))
-                    self.rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
-                    await asyncio.sleep(min(retry_in, 2.0))
                 if not self._rotate_key():
                     break
                 await asyncio.sleep(0.5)
