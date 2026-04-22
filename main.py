@@ -172,6 +172,17 @@ GEETA_FALLBACK_QUOTES = [
     "🙏 <b>Bhagavad Gita 2.70</b>\n<code>आपूर्यमाणमचलप्रतिष्ठं समुद्रमापः प्रविशन्ति यद्वत्</code>\nHinglish: Jaise samundar stable rehta hai, waise hi desires ke beech calm raho."
 ]
 
+def parse_retry_after_seconds(error_text: str) -> float:
+    if not error_text:
+        return 60.0
+    m = re.search(r"Please try again in ([0-9]+)m([0-9]+(?:\.[0-9]+)?)s", error_text)
+    if m:
+        return float(m.group(1)) * 60 + float(m.group(2))
+    m = re.search(r"Please try again in ([0-9]+(?:\.[0-9]+)?)s", error_text)
+    if m:
+        return float(m.group(1))
+    return 60.0
+
 # ============================================================================
 # HEALTH SERVER
 # ============================================================================
@@ -1269,6 +1280,7 @@ class NiyatiAI:
         self.world_info = NiyatiWorldInfo()
         self.prompt_builder = NiyatiPromptBuilder()
         self._current_user_id = None
+        self.rate_limited_until: Optional[datetime] = None
         self._initialize_client()
         logger.info(f"🚀 Niyati AI initialized: {self.character.name}")
 
@@ -1288,6 +1300,8 @@ class NiyatiAI:
         return True
     
     async def _call_gpt(self, messages, max_tokens=200, temperature=0.85):
+        if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
+            return None
         if not self.client:
             self._initialize_client()
         for _ in range(len(self.keys)):
@@ -1303,6 +1317,10 @@ class NiyatiAI:
                 return response.choices[0].message.content.strip()
             except Exception as e:
                 logger.warning(f"⚠️ Groq Error: {e}")
+                if "rate_limit_reached" in str(e).lower() or "rate limit reached" in str(e).lower():
+                    retry_in = parse_retry_after_seconds(str(e))
+                    self.rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
+                    await asyncio.sleep(min(retry_in, 2.0))
                 if not self._rotate_key():
                     break
                 await asyncio.sleep(0.5)
@@ -1577,6 +1595,7 @@ class KavyaAI:
         self.world_info = KavyaWorldInfo()
         self.prompt_builder = KavyaPromptBuilder()
         self._current_user_id = None
+        self.rate_limited_until: Optional[datetime] = None
         self._initialize_client()
         logger.info(f"🚀 Kavya AI initialized: {self.character.name}")
 
@@ -1596,6 +1615,8 @@ class KavyaAI:
         return True
     
     async def _call_gpt(self, messages, max_tokens=200, temperature=0.75):
+        if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
+            return None
         if not self.client:
             self._initialize_client()
         for _ in range(len(self.keys)):
@@ -1611,6 +1632,10 @@ class KavyaAI:
                 return response.choices[0].message.content.strip()
             except Exception as e:
                 logger.warning(f"⚠️ Groq Error: {e}")
+                if "rate_limit_reached" in str(e).lower() or "rate limit reached" in str(e).lower():
+                    retry_in = parse_retry_after_seconds(str(e))
+                    self.rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
+                    await asyncio.sleep(min(retry_in, 2.0))
                 if not self._rotate_key():
                     break
                 await asyncio.sleep(0.5)
@@ -2602,7 +2627,7 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if isinstance(context.error, Conflict):
-        logger.error("⚠️ TOKEN CONFLICT: Dono bots ko SAME token mat do!")
+        logger.error("⚠️ Telegram polling conflict: another instance is already running with this token.")
         return
     
     logger.error(f"❌ Error: {context.error}", exc_info=True)
@@ -2706,9 +2731,28 @@ Composed 💁‍♀️ Thoughtful 📝 Gentle 🌿
 # MAIN — CONCURRENT BOT RUNNER
 # ============================================================================
 
+async def start_polling_with_retry(app: Application, bot_name: str):
+    backoff = 5
+    while True:
+        try:
+            await app.updater.start_polling(drop_pending_updates=True)
+            logger.info(f"✅ {bot_name} polling started")
+            return
+        except Conflict as e:
+            logger.error(f"⚠️ {bot_name} polling conflict: {e}. Retrying in {backoff}s...")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+        except Exception as e:
+            logger.error(f"❌ {bot_name} polling failed: {e}. Retrying in {backoff}s...", exc_info=True)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
 async def main():
     if not Config.NIYATI_TOKEN or not Config.KAVYA_TOKEN:
         logger.error("❌ Both NIYATI_BOT_TOKEN and KAVYA_BOT_TOKEN must be set!")
+        return
+    if Config.NIYATI_TOKEN == Config.KAVYA_TOKEN:
+        logger.error("❌ NIYATI_BOT_TOKEN and KAVYA_BOT_TOKEN cannot be the same.")
         return
 
     # Start infrastructure first (for Render port binding)
@@ -2750,8 +2794,8 @@ async def main():
     # Start polling
     logger.info("🚀 Niyati + Kavya are LIVE! Human-like conversations enabled.")
     await asyncio.gather(
-        niyati_app.updater.start_polling(drop_pending_updates=True),
-        kavya_app.updater.start_polling(drop_pending_updates=True)
+        start_polling_with_retry(niyati_app, "Niyati"),
+        start_polling_with_retry(kavya_app, "Kavya")
     )
 
     # Keep alive
