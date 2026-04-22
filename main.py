@@ -71,7 +71,10 @@ class Config:
     # OpenAI (Multi-Key Support) - Groq
     GROQ_API_KEYS_STR = os.getenv('GROQ_API_KEYS', '')
     GROQ_API_KEYS_LIST = [k.strip() for k in GROQ_API_KEYS_STR.split(',') if k.strip()]
-    GROQ_MODEL = "llama-3.3-70b-versatile"
+    GROQ_MODEL = "llama-3.1-8b-instant"  # Lighter model for higher limits
+
+    # Limits
+    MAX_PRIVATE_MESSAGES = int(os.getenv('MAX_PRIVATE_MESSAGES', '10')) # Reduced from 20
 
     # Supabase
     SUPABASE_URL = os.getenv('SUPABASE_URL', '')
@@ -1301,11 +1304,18 @@ class NiyatiAI:
         return True
     
     async def _call_gpt(self, messages, max_tokens=200, temperature=0.85):
-        if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
-            return None
         if not self.client:
             self._initialize_client()
-        for _ in range(len(self.keys)):
+            
+        for attempt in range(len(self.keys)):
+            # Agar current key cooldown mein hai, toh turant rotate karo
+            if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
+                if len(self.keys) > 1:
+                    self._rotate_key()
+                    self.rate_limited_until = None
+                else:
+                    return None
+
             try:
                 response = await self.client.chat.completions.create(
                     model=Config.GROQ_MODEL,
@@ -1319,17 +1329,26 @@ class NiyatiAI:
             except Exception as e:
                 err_text = str(e)
                 err_lower = err_text.lower()
-                if "rate_limit_reached" in err_lower or "rate limit reached" in err_lower:
-                    retry_in = parse_retry_after_seconds(err_text)
-                    cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
-                    if not self.rate_limited_until or cooldown_until > self.rate_limited_until:
-                        self.rate_limited_until = cooldown_until
-                        logger.warning(f"⚠️ Groq rate-limited for Niyati; pausing GPT calls for ~{int(retry_in)}s")
-                    return None
-                logger.warning(f"⚠️ Groq Error: {e}")
+                
+                # Agar rate limit aati hai, toh next key pe switch karo
+                if "rate_limit_reached" in err_lower or "rate limit reached" in err_lower or "429" in err_lower:
+                    logger.warning(f"⚠️ Groq rate-limited on Niyati key index {self.current_index}")
+                    if len(self.keys) > 1:
+                        self._rotate_key()
+                        self.rate_limited_until = None
+                        logger.info("🔄 Switched Niyati to next API key!")
+                        continue
+                    else:
+                        retry_in = parse_retry_after_seconds(err_text)
+                        self.rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
+                        logger.warning(f"⚠️ All Niyati keys rate-limited. Pausing for ~{int(retry_in)}s")
+                        return None
+                        
+                logger.warning(f"⚠️ Groq Error (Niyati): {e}")
                 if not self._rotate_key():
                     break
                 await asyncio.sleep(0.5)
+                
         return None
 
     async def generate_response(self, user_message, context=None, user_name=None,
@@ -1622,11 +1641,17 @@ class KavyaAI:
         return True
     
     async def _call_gpt(self, messages, max_tokens=200, temperature=0.75):
-        if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
-            return None
         if not self.client:
             self._initialize_client()
-        for _ in range(len(self.keys)):
+            
+        for attempt in range(len(self.keys)):
+            if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
+                if len(self.keys) > 1:
+                    self._rotate_key()
+                    self.rate_limited_until = None
+                else:
+                    return None
+
             try:
                 response = await self.client.chat.completions.create(
                     model=Config.GROQ_MODEL,
@@ -1640,17 +1665,25 @@ class KavyaAI:
             except Exception as e:
                 err_text = str(e)
                 err_lower = err_text.lower()
-                if "rate_limit_reached" in err_lower or "rate limit reached" in err_lower:
-                    retry_in = parse_retry_after_seconds(err_text)
-                    cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
-                    if not self.rate_limited_until or cooldown_until > self.rate_limited_until:
-                        self.rate_limited_until = cooldown_until
-                        logger.warning(f"⚠️ Groq rate-limited for Kavya; pausing GPT calls for ~{int(retry_in)}s")
-                    return None
-                logger.warning(f"⚠️ Groq Error: {e}")
+                
+                if "rate_limit_reached" in err_lower or "rate limit reached" in err_lower or "429" in err_lower:
+                    logger.warning(f"⚠️ Groq rate-limited on Kavya key index {self.current_index}")
+                    if len(self.keys) > 1:
+                        self._rotate_key()
+                        self.rate_limited_until = None
+                        logger.info("🔄 Switched Kavya to next API key!")
+                        continue
+                    else:
+                        retry_in = parse_retry_after_seconds(err_text)
+                        self.rate_limited_until = datetime.now(timezone.utc) + timedelta(seconds=retry_in)
+                        logger.warning(f"⚠️ All Kavya keys rate-limited. Pausing for ~{int(retry_in)}s")
+                        return None
+                        
+                logger.warning(f"⚠️ Groq Error (Kavya): {e}")
                 if not self._rotate_key():
                     break
                 await asyncio.sleep(0.5)
+                
         return None
 
     async def generate_response(self, user_message, context=None, user_name=None,
