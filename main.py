@@ -2695,8 +2695,6 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
     logger.info(f"✨ Routine message ({job_data}) sent to {count} users")
-    if count > 100:
-        break
 
 # ============================================================================
 # ERROR HANDLER
