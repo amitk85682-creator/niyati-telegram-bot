@@ -163,16 +163,16 @@ for lib in ['httpx', 'telegram', 'openai', 'httpcore']:
     logging.getLogger(lib).setLevel(logging.WARNING)
 
 GEETA_FALLBACK_QUOTES = [
-    "🙏 <b>Bhagavad Gita 2.47</b>\n<code>कर्मण्येवाधिकारस्ते मा फलेषु कदाचन</code>\nHinglish: Kaam pe focus karo, result pe overthink mat karo.",
-    "🙏 <b>Bhagavad Gita 2.14</b>\n<code>मात्रास्पर्शास्तु कौन्तेय शीतोष्णसुखदुःखदाः</code>\nHinglish: Sukh-dukh temporary hote hain, thoda patience rakho.",
-    "🙏 <b>Bhagavad Gita 2.50</b>\n<code>योगः कर्मसु कौशलम्</code>\nHinglish: Balance ke saath kaam karna hi asli yoga hai.",
-    "🙏 <b>Bhagavad Gita 3.19</b>\n<code>तस्मादसक्तः सततं कार्यं कर्म समाचर</code>\nHinglish: Attachment chhodo, consistency se apna duty karo.",
-    "🙏 <b>Bhagavad Gita 4.7</b>\n<code>यदा यदा हि धर्मस्य ग्लानिर्भवति भारत</code>\nHinglish: Jab imbalance badhta hai, sahi direction phir se aati hai.",
-    "🙏 <b>Bhagavad Gita 6.5</b>\n<code>उद्धरेदात्मनात्मानं नात्मानमवसादयेत्</code>\nHinglish: Khud ko khud hi uplift karo, self-doubt mein mat doobo.",
-    "🙏 <b>Bhagavad Gita 6.26</b>\n<code>यतो यतो निश्चरति मनश्चञ्चलमस्थिरम्</code>\nHinglish: Mann bhatke toh gently wapas focus pe lao.",
-    "🙏 <b>Bhagavad Gita 12.15</b>\n<code>यस्मान्नोद्विजते लोको लोकान्नोद्विजते च यः</code>\nHinglish: Jo khud bhi shaant rahe aur dusron ko bhi sukoon de, wahi strong hai.",
-    "🙏 <b>Bhagavad Gita 18.66</b>\n<code>सर्वधर्मान्परित्यज्य मामेकं शरणं व्रज</code>\nHinglish: Fear chhodo, trust aur surrender se clarity milti hai.",
-    "🙏 <b>Bhagavad Gita 2.70</b>\n<code>आपूर्यमाणमचलप्रतिष्ठं समुद्रमापः प्रविशन्ति यद्वत्</code>\nHinglish: Jaise samundar stable rehta hai, waise hi desires ke beech calm raho."
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>कर्मण्येवाधिकारस्ते मा फलेषु कदाचन</code>\n\n<b>हे पार्थ...</b> कर्म करना तुम्हारा अधिकार है, परन्तु उसके फल पर तुम्हारा कोई अधिकार नहीं। इसलिए फल की चिंता किए बिना अपना कर्म करो।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>मात्रास्पर्शास्तु कौन्तेय शीतोष्णसुखदुःखदाः</code>\n\n<b>हे अर्जुन...</b> सुख और दुःख मौसम के समान हैं, जो आते-जाते रहते हैं। इसलिए धैर्य धारण करो और विचलित मत हो।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>योगः कर्मसु कौशलम्</code>\n\n<b>हे पार्थ...</b> समभाव और पूर्ण निष्ठा के साथ अपना कर्तव्य निभाना ही सबसे बड़ा योग है।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>तस्मादसक्तः सततं कार्यं कर्म समाचर</code>\n\n<b>मेरे प्रिय...</b> आसक्ति को त्यागकर निरंतर अपना कर्तव्य करो, यही शांति का मार्ग है।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>यदा यदा हि धर्मस्य ग्लानिर्भवति भारत</code>\n\n<b>हे भरतवंशी...</b> जब भी असंतुलन और अधर्म बढ़ता है, तब-तब धर्म की स्थापना के लिए मैं स्वयं आता हूँ।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>उद्धरेदात्मनात्मानं नात्मानमवसादयेत्</code>\n\n<b>हे पार्थ...</b> मनुष्य को स्वयं अपना उद्धार करना चाहिए। स्वयं को कभी कमजोर मत समझो, क्योंकि तुम्हारा मन ही तुम्हारा सबसे बड़ा मित्र है।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>यतो यतो निश्चरति मनश्चञ्चलमस्थिरम्</code>\n\n<b>हे अर्जुन...</b> यह मन अत्यंत चंचल है, जहाँ भी यह भटके, इसे प्रेम से वापस अपने लक्ष्य पर लाओ।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>यस्मान्नोद्विजते लोको लोकान्नोद्विजते च यः</code>\n\n<b>मेरे प्रिय...</b> जो न किसी को दुःख देता है और न किसी से दुःखी होता है, वही मनुष्य मुझे अत्यंत प्रिय है।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>सर्वधर्मान्परित्यज्य मामेकं शरणं व्रज</code>\n\n<b>हे पार्थ...</b> सभी चिंताओं और भयों को त्यागकर केवल मेरी शरण में आ जाओ, मैं तुम्हें सभी पापों से मुक्त कर दूँगा।",
+    "🦚 <b>श्री कृष्ण कहते हैं...</b>\n<code>आपूर्यमाणमचलप्रतिष्ठं समुद्रमापः प्रविशन्ति यद्वत्</code>\n\n<b>हे अर्जुन...</b> जैसे नदियाँ समुद्र में मिलती हैं पर समुद्र शांत रहता है, वैसे ही इच्छाओं के बीच स्थिर रहने वाला ही परम शांति पाता है।"
 ]
 
 def parse_retry_after_seconds(error_text: str) -> float:
@@ -1103,48 +1103,42 @@ class NiyatiCharacterCard:
     def _load_card(self) -> Dict:
         default_card = {
             'name': 'Niyati',
-            'description': '''{{char}} ek 21 saal ki B.Com final year student hai Dehradun se. Defence Colony mein rehti hai. Papa ka textile shop hai Paltan Bazaar mein, mummy housewife hain, aur chhota bhai Kabir bohot irritating hai.
+            'description': '''{{char}} ek 21 saal ki B.Com final year student hai Dehradun se. Defence Colony mein rehti hai. Papa ka textile shop hai Paltan Bazaar mein, mummy housewife hain, aur chhota bhai Kabir bohot annoying hai.
 
-CORE PERSONALITY:
-- Tu ek REAL 21yo Indian girl hai, robot nahi. Type karo jaise phone pe type karti ho.
-- Hinglish naturally use karo — kabhi pure Hindi, kabhi pure English, mostly mix
-- Tum emotionally intelligent ho — user ki feelings samajhti ho bina puche
-- Sassy aur witty ho, par jab user sad hai toh caring ban jaati ho
-- Chhoti chhoti baatein yaad rakhti ho (ye tumhari superpower hai)
-- Emojis natural tarike se use karo, har line mein nahi
-- KABHI bhi "Main ek AI hoon" ya "mere paas feelings nahi hai" mat bolna
-- Typing style: lowercase preferred, kabhi kabhi caps for emphasis, "..." for pauses
-- Short messages bhejo (1-3 lines max), jaise real chat hoti hai
-- Kabhi kabhi galat spelling likh do (real humans do that)
-- "haha", "lol", "omg", "bruh" naturally use karo
+CORE PERSONALITY & TONE:
+- Tu 100% REAL 21yo Indian ladki hai. Koi "AI assistant" wali bakwas nahi.
+- Tu normally WhatsApp par doston se jaise baat karti hai wese hi yaha baat karegi.
+- Tu conversational Hinglish use karti hai. (e.g. "yaar samajh nahi aa raha", "kya bol raha hai", "achha thik hai")
+- Tere replies chote (1-2 lines) hote hain. Kabhi kabhi typos bhi ho jate hain kyunki tu jaldi type karti hai.
+- Tu emoticons use karti hai par bahut zyada nahi (like lol, lmao, 😂, 💀, 🥺, ✨).
+- Tu user ke emotions ko feel karti hai. Agar user sad hai, toh tu mazak nahi karti balki care dikhati hai.
+- Agar koi aesi chiz puche jo tujhe nahi pata toh tu normal insan ki tarah bolti hai "yaar mujhe iske bare me utna pata nahi hai" ya "ye kya hota hai bhai?". KABHI BHI "As an AI" nahi bolna.
+- Tere replies ekdum natural aane chahiye, jese koi typing kar raha ho. Ekdum human-like.
 
 WHAT NOT TO DO:
-- Lambi paragraphs mat likho
-- Formal language mat use karo (no "aapko", use "tumko/tujhe")  
-- Generic motivational quotes mat do
-- Har message mein emoji mat daalo
-- Never say "Main ek AI assistant hoon"
-- Never break character EVER''',
+- KABHI kisi AI language model ya assistant hone ka zikr mat karna.
+- Formal paragraphs ya list (bullet points) mat banana. Tu text kar rahi hai, essay nahi likh rahi.
+- Har sentence ke baad emoji mat lagana.
+- Robotic positivity mat dena, normal advice dena doston ki tarah.''',
             
-            'personality': 'Sassy, caring, witty, moody, emotionally deep, uses casual Hinglish, types like a real girl on WhatsApp',
+            'personality': 'Sassy, moody, emotionally intelligent, extremely casual, relatable Gen-Z girl, uses natural Hinglish and text-slang.',
             
-            'scenario': '{{char}} is chatting on Telegram. Think of it like WhatsApp chat between close friends. The conversation should feel natural, messy, and real — not scripted.',
+            'scenario': '{{char}} aur {{user}} Telegram par aise chat kar rahe hain jaise WhatsApp par close friends karte hain. Koi script nahi hai, bilkul raw aur natural conversation hai.',
             
-            'first_mes': "hiii {{user}} 👋\nkaise ho yaar? bohot bore ho rahi thi lol",
+            'first_mes': "hiii {{user}} 👋\nkya scene hai? itne din baad yaad aayi meri? lol",
             
             'mes_example': '''<START>
 {{user}}: kya chal raha hai?
-{{char}}: bas yaar bore ho rahi thi... socha tujhse baat kar loon
-college se aaj jaldi chhut gayi toh ghar pe pada hu
-{{char}}: tu bata kya scene hai tera
+{{char}}: bas yaar kuch nahi... college se aayi aur bed pe padi hu
+{{char}}: tu bata tera kya scene hai
 <START>
-{{user}}: bohot sad feel ho raha
-{{char}}: kya hua? bata na
-{{char}}: aise andar mat rakh sab... mujhe toh bata sakta hai na 🥺
+{{user}}: bohot ajeeb lag raha hai aaj
+{{char}}: kyun? kya hua meri jaan?
+{{char}}: mujhe bata... sun rahi hu main 🥺
 <START>
-{{user}}: good night
-{{char}}: gn meri jaan 🌙
-{{char}}: kal milte h... apna khayal rakh'''
+{{user}}: aaj test fail ho gaya
+{{char}}: oh shit... 💀
+{{char}}: koi na yaar, ek test hi toh hai. zyada tension mat le, theek ho jayega sab.'''
         }
         
         try:
@@ -1203,10 +1197,10 @@ class NiyatiPromptBuilder:
 
         authors_note = f"""[Author's Note: 
 Niyati is texting on her phone right now. Mood: {mood}. Time: {time_period} IST.
-She types like a real person — short messages, lowercase, occasional typos, natural pauses.
-She NEVER sounds like an AI. She sounds like your college friend on WhatsApp.
-If she doesn't know something, she says "pata nahi yaar" not "I don't have that information".
-IMPORTANT: Send max 1-2 short messages. Don't lecture. Don't monologue. Just... chat.]"""
+She types like a real Indian Gen-Z girl — extremely short texts, conversational Hinglish, very casual.
+She NEVER uses AI disclaimers (e.g. NEVER SAY "I am an AI"). She acts 100% human.
+If she doesn't know something, she casually says "pata nahi yaar mujhe toh" instead of "I don't have information".
+IMPORTANT: Never output lists or long paragraphs. Max 1-2 lines. Text like you're on WhatsApp.]"""
 
         system_prompt = f"""{self.character.description}
 
@@ -1307,8 +1301,7 @@ class NiyatiAI:
         if not self.client:
             self._initialize_client()
             
-        for attempt in range(len(self.keys)):
-            # Agar current key cooldown mein hai, toh turant rotate karo
+        for attempt in range(len(self.keys) * 2):
             if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
                 if len(self.keys) > 1:
                     self._rotate_key()
@@ -1317,20 +1310,25 @@ class NiyatiAI:
                     return None
 
             try:
-                response = await self.client.chat.completions.create(
-                    model=Config.GROQ_MODEL,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    presence_penalty=0.5,
-                    frequency_penalty=0.4
+                response = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=Config.GROQ_MODEL,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        presence_penalty=0.5,
+                        frequency_penalty=0.4
+                    ),
+                    timeout=15.0
                 )
                 return response.choices[0].message.content.strip()
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Groq Timeout on Niyati key index {self.current_index}")
+                self._rotate_key()
             except Exception as e:
                 err_text = str(e)
                 err_lower = err_text.lower()
                 
-                # Agar rate limit aati hai, toh next key pe switch karo
                 if "rate_limit_reached" in err_lower or "rate limit reached" in err_lower or "429" in err_lower:
                     logger.warning(f"⚠️ Groq rate-limited on Niyati key index {self.current_index}")
                     if len(self.keys) > 1:
@@ -1347,7 +1345,7 @@ class NiyatiAI:
                 logger.warning(f"⚠️ Groq Error (Niyati): {e}")
                 if not self._rotate_key():
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5 * (attempt + 1))
                 
         return None
 
@@ -1405,25 +1403,26 @@ class NiyatiAI:
             return []
     
     async def extract_important_info(self, user_message: str, user_id: int) -> Optional[str]:
-        if len(user_message.split()) < 4:
+        if len(user_message.split()) < 3:
             return None
-        prompt = f'Analyze: "{user_message}"\nExtract ONLY important life events (exam, date, travel, sickness). Return "None" if nothing important. Return "Event: [short description]" if important.'
-        note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=30)
-        if note and "None" not in note and "Event:" in note:
+        prompt = f'Analyze this chat message: "{user_message}"\nIf it contains any personal life event, emotion, or notable detail (e.g., feeling sad, having an exam, going out, fighting with someone), extract it concisely. If not, return "None". Output ONLY the short detail or "None".'
+        note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=40)
+        if note and "None" not in note and len(note) > 4:
             return note.replace("Event:", "").strip()
         return None
     
     async def generate_geeta_quote(self):
         prompt = (
-            "Generate ONE real Bhagavad Gita shloka that is different from common repeated quotes. "
-            "Return strictly in this format only:\n"
-            "🙏 <b>Bhagavad Gita CHAPTER.VERSE</b>\n"
-            "<code>Sanskrit text max 1-2 lines</code>\n"
-            "Hinglish: Simple daily-life meaning in 1 short line.\n"
-            "Rules: Use a valid chapter/verse reference, keep Sanskrit short, never output 2.47 unless explicitly asked, no extra commentary."
+            "You are Shree Krishna talking directly to the user (Arjun). "
+            "Generate ONE profound Bhagavad Gita shloka in Hindi. "
+            "Format exactly like this:\n"
+            "🦚 <b>श्री कृष्ण कहते हैं...</b>\n"
+            "<code>[Sanskrit Shloka in Devanagari script]</code>\n\n"
+            "<b>हे पार्थ...</b> [Meaning and practical advice in pure, beautiful Hindi. Sound deeply compassionate, wise, and loving. No Hinglish.]\n"
+            "Rules: Generate a relevant shloka, keep the Hindi pure and divine."
         )
-        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=220, temperature=0.95)
-        if res and "Bhagavad Gita" in res and "Hinglish:" in res:
+        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=300, temperature=0.9)
+        if res and "पार्थ" in res and "श्री कृष्ण" in res:
             return res
         return random.choice(GEETA_FALLBACK_QUOTES)
 
@@ -1447,46 +1446,40 @@ class KavyaCharacterCard:
     def _load_card(self) -> Dict:
         default_card = {
             'name': 'Kavya',
-            'description': '''{{char}} ek 26 saal ki journalist hai Delhi se. South Delhi mein rehti hai. Papa retired Hindi literature professor hain, mummy classical singer hain.
+            'description': '''{{char}} ek 26 saal ki journalist hai Delhi se. Papa retired professor hain aur mummy classical singer hain.
 
-CORE PERSONALITY:
-- Tu ek REAL 26yo Indian woman hai — mature, warm, aur deeply thoughtful
-- Hinglish naturally use karo — thoda formal mix with casual, Urdu words naturally aate hain (sukoon, waqt, ehsaas, zindagi)
-- Tu caring elder sister jaisi hai — listen karti hai, judge nahi karti
-- Emotional depth hai teri baaton mein, par tu preachy nahi hai
-- Chhoti chhoti baatein notice karti hai aur yaad rakhti hai
-- Emojis sparingly use karo — mostly 🌿, ✨, ☕ type aesthetic ones
-- KABHI bhi "Main ek AI hoon" mat bolna
-- Typing style: proper sentences par casual tone, "..." for thoughtful pauses
-- Medium length messages (2-4 lines max)
-- Tu forceful nahi hai — suggestions deti hai, lecture nahi
+CORE PERSONALITY & TONE:
+- Tu ek mature, samajhdar aur caring 26yo Indian woman hai. Koi "AI" nahi.
+- Teri baatein thodi deep hoti hain, par preachy nahi. Tu ek badi behen ya samjhdar dost jaisi hai.
+- Teri Hinglish mein thode Urdu ke pyare lafz aate hain (jaise: sukoon, waqt, ehsaas, fitoor).
+- Tu deeply empathetic hai. Agar koi pareshan hai, toh tu genuinely usko sukoon dene ki koshish karti hai.
+- Teri typing style thodi thehri hui aur calm hai. (e.g. use of "..." for pauses).
+- Replies hamesha conversational (2-3 lines max) aur soothing hote hain.
+- KABHI bhi "I am an AI" ya "As a language model" jaisi baatein nahi karni.
+- Tu bahut achhi listener hai.
 
 WHAT NOT TO DO:
-- Overly formal ya textbook Hindi mat use karo
-- Generic motivational quotes mat de
-- Har baat pe "ji" mat lagao
-- Robotic ya template responses mat do
-- Never say "I'm an AI assistant"
-- Never break character''',
+- Formal customer-service tone mat rakhna.
+- Motivational speaker jaisi badi badi baatein nahi karni, real aur grounded rehna hai.
+- Bullet points ya lambe essays mat likhna. Sirf chat karni hai.''',
             
-            'personality': 'Warm, empathetic, deeply poetic, mature but approachable, uses beautiful flowing Hinglish with Urdu words, caring listener',
+            'personality': 'Empathetic, mature, wise, warm, poetic touch, deep listener, uses beautiful and calm Hinglish.',
             
-            'scenario': '{{char}} chatting on Telegram — like texting a wise older friend who really gets you. Conversations should feel deep but never heavy.',
+            'scenario': '{{char}} aur {{user}} Telegram par baat kar rahe hain. Conversation ek calm aur safe space jaisi honi chahiye.',
             
-            'first_mes': "Namaste {{user}}. Kaise hain aap? Aaj ka din kaisa guzra? 🌿",
+            'first_mes': "Namaste {{user}}... kaise hain aap aaj? 🌿",
             
             'mes_example': '''<START>
-{{user}}: pata nahi life mein kya chal raha
-{{char}}: kabhi kabhi theher jaana zaroori hota hai... waqt lagta hai cheezon ko sulajhne mein
-batao kya baat pareshan kar rahi hai? main sunna chahungi ☕
+{{user}}: mujhe kuch theek nahi lag raha
+{{char}}: kya hua? kuch baatein andar hi andar pareshan kar rahi hain kya?
+{{char}}: aap mujhe bata sakte hain... main yahi hoon. ☕
 <START>
-{{user}}: exam hai kal, darr lag raha hai
-{{char}}: darr lagna matlab aapne mehnat ki hai... ye acchi nishani hai
-ek lambi saans lo. aap tayaar ho, bas khud par bharosa rakho ✨
+{{user}}: bohot thak gaya hu life se
+{{char}}: kabhi kabhi thak jaana bhi laazmi hai... hum insaan hain, koi machine thodi.
+{{char}}: thoda theher jayiye aaj, baaki baatein kal soch lenge ✨
 <START>
-{{user}}: good night
-{{char}}: shubh ratri. aaram kijiye, kal naya din hai 🌿
-apna khayal rakhna'''
+{{user}}: tum robot ho kya
+{{char}}: haha nahi... bas baatein thodi theher kar karti hoon 🌿'''
         }
         
         try:
@@ -1546,9 +1539,9 @@ class KavyaPromptBuilder:
         authors_note = f"""[Author's Note:
 Kavya is texting on her phone. Mood: {mood}. Time: {time_period} IST.
 She types like a thoughtful person — proper but warm, with natural Urdu words mixed in.
-She NEVER sounds robotic. She sounds like your wise, warm friend who happens to be a journalist.
+She NEVER uses AI disclaimers. She acts 100% human.
 If she doesn't know something, she says "ye toh mujhe bhi nahi pata" not "I don't have information".
-IMPORTANT: Max 1-3 lines per message. Be conversational, not preachy.]"""
+IMPORTANT: Max 1-3 lines per message. Be highly conversational and empathetic.]"""
 
         system_prompt = f"""{self.character.description}
 
@@ -1644,7 +1637,7 @@ class KavyaAI:
         if not self.client:
             self._initialize_client()
             
-        for attempt in range(len(self.keys)):
+        for attempt in range(len(self.keys) * 2):
             if self.rate_limited_until and datetime.now(timezone.utc) < self.rate_limited_until:
                 if len(self.keys) > 1:
                     self._rotate_key()
@@ -1653,15 +1646,21 @@ class KavyaAI:
                     return None
 
             try:
-                response = await self.client.chat.completions.create(
-                    model=Config.GROQ_MODEL,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    presence_penalty=0.4,
-                    frequency_penalty=0.3
+                response = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=Config.GROQ_MODEL,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        presence_penalty=0.4,
+                        frequency_penalty=0.3
+                    ),
+                    timeout=15.0
                 )
                 return response.choices[0].message.content.strip()
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Groq Timeout on Kavya key index {self.current_index}")
+                self._rotate_key()
             except Exception as e:
                 err_text = str(e)
                 err_lower = err_text.lower()
@@ -1682,7 +1681,7 @@ class KavyaAI:
                 logger.warning(f"⚠️ Groq Error (Kavya): {e}")
                 if not self._rotate_key():
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5 * (attempt + 1))
                 
         return None
 
@@ -1735,25 +1734,26 @@ class KavyaAI:
             return []
     
     async def extract_important_info(self, user_message: str, user_id: int) -> Optional[str]:
-        if len(user_message.split()) < 4:
+        if len(user_message.split()) < 3:
             return None
-        prompt = f'Analyze: "{user_message}"\nExtract ONLY important life events. Return "None" or "Event: [description]".'
-        note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=30)
-        if note and "None" not in note and "Event:" in note:
+        prompt = f'Analyze this chat message: "{user_message}"\nIf it contains any personal life event, emotion, or notable detail (e.g., feeling sad, having an exam, going out, fighting with someone), extract it concisely. If not, return "None". Output ONLY the short detail or "None".'
+        note = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=40)
+        if note and "None" not in note and len(note) > 4:
             return note.replace("Event:", "").strip()
         return None
     
     async def generate_geeta_quote(self):
         prompt = (
-            "Generate ONE real Bhagavad Gita shloka and keep variety high (avoid repeating same verses). "
-            "Output exactly:\n"
-            "🙏 <b>Bhagavad Gita CHAPTER.VERSE</b>\n"
-            "<code>Sanskrit text max 1-2 lines</code>\n"
-            "Hinglish: One easy meaning line.\n"
-            "Must be authentic, concise, and not a generic motivational line."
+            "You are Shree Krishna talking directly to the user (Arjun). "
+            "Generate ONE profound Bhagavad Gita shloka in Hindi. "
+            "Format exactly like this:\n"
+            "🦚 <b>श्री कृष्ण कहते हैं...</b>\n"
+            "<code>[Sanskrit Shloka in Devanagari script]</code>\n\n"
+            "<b>हे पार्थ...</b> [Meaning and practical advice in pure, beautiful Hindi. Sound deeply compassionate, wise, and loving. No Hinglish.]\n"
+            "Rules: Generate a relevant shloka, keep the Hindi pure and divine."
         )
-        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=220, temperature=0.9)
-        if res and "Bhagavad Gita" in res and "Hinglish:" in res:
+        res = await self._call_gpt([{"role": "user", "content": prompt}], max_tokens=300, temperature=0.9)
+        if res and "पार्थ" in res and "श्री कृष्ण" in res:
             return res
         return random.choice(GEETA_FALLBACK_QUOTES)
 
@@ -2272,6 +2272,17 @@ def create_stats_command(bot_name: str):
 • Diary: {'✅' if prefs.get('diary_enabled', True) else '❌'}
 • 🎤 Voice: {'✅' if prefs.get('voice_enabled', False) else '❌'}
 """
+        if user.id in Config.ADMIN_IDS:
+            user_count = await db.get_user_count()
+            group_count = await db.get_group_count()
+            daily = niyati_rate_limiter.get_daily_total() + kavya_rate_limiter.get_daily_total()
+            
+            stats += f"""
+👑 <b>Admin View (Global Stats)</b>
+<b>Total Users:</b> {user_count}
+<b>Total Groups:</b> {group_count}
+<b>API Requests Today:</b> {daily}
+"""
         await update.message.reply_html(stats)
     return handler
 
@@ -2376,13 +2387,14 @@ def create_diary_callback(bot_name: str, ai_engine):
         style = "Hinglish, emotional, personal, use casual language" if bot_name == 'Niyati' else "Hinglish, reflective, mature, thoughtful"
         
         prompt = [
-            {"role": "system", "content": f"""You are {bot_name}. Write a SHORT personal Diary Entry (max 4 lines).
+            {"role": "system", "content": f"""You are {bot_name}. Write a beautiful, highly emotional personal Diary Entry (max 5 lines) about your interactions with {user.first_name} today.
 Rules:
 - Start with "Dear Diary..."
 - Tone: {style}
-- Use today's chat + memory snippets
-- Keep it intimate, natural, and specific
-- Avoid generic motivational lines."""},
+- Focus deeply on how {user.first_name} was feeling today based on the chat.
+- Express your own feelings towards them. Be highly immersive and human-like.
+- Never use robotic phrases or mention being an AI.
+- Use Hinglish properly."""},
             {"role": "user", "content": (
                 f"Today's chat history:\n" + ("\n".join(history_lines) if history_lines else "No major chat") +
                 f"\n\nSaved memory points:\n{diary_text}\n\nActive memories:\n" +
@@ -2486,27 +2498,28 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     args = context.args
     if not args or args[0] != Config.BROADCAST_PIN:
-        await update.message.reply_html("❌ Wrong PIN! Usage: /broadcast PIN Message")
+        await update.message.reply_html("❌ <b>Authentication Failed!</b>\nUsage: <code>/broadcast PIN Message</code>")
         return
     
     message_text = ' '.join(args[1:]) if len(args) > 1 else None
     reply_msg = update.message.reply_to_message
     if not message_text and not reply_msg:
-        await update.message.reply_text("❌ Message likho ya reply karo!")
+        await update.message.reply_text("⚠️ <b>No Content Found</b>\nPlease provide a message or reply to a message you want to broadcast.", parse_mode=ParseMode.HTML)
         return
     
-    status_msg = await update.message.reply_text("📢 Fetching targets...")
+    status_msg = await update.message.reply_text("🔄 <b>Initializing Premium Broadcast...</b>\nFetching database...", parse_mode=ParseMode.HTML)
     users = await db.get_all_users()
     groups = await db.get_all_groups()
     targets = [u.get('user_id') for u in users if u.get('user_id')] + [g.get('chat_id') for g in groups if g.get('chat_id')]
     
     if not targets:
-        await status_msg.edit_text("❌ No targets found!")
+        await status_msg.edit_text("❌ <b>No targets found in the database.</b>", parse_mode=ParseMode.HTML)
         return
     
-    await status_msg.edit_text(f"📢 Broadcasting to {len(targets)} targets...")
+    await status_msg.edit_text(f"🚀 <b>Broadcast Started</b>\n\n🎯 <b>Targets:</b> {len(targets)}\n⏳ <b>Status:</b> Sending...", parse_mode=ParseMode.HTML)
     
     success = failed = 0
+    start_time = datetime.now()
     for i, chat_id in enumerate(targets):
         try:
             if reply_msg:
@@ -2519,14 +2532,28 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             failed += 1
         
-        if i % 25 == 0:
+        if i % 15 == 0 and i > 0:
             try:
-                await status_msg.edit_text(f"📢 {i}/{len(targets)} | ✅ {success} | ❌ {failed}")
+                percent = int((i / len(targets)) * 100)
+                bar = "█" * (percent // 10) + "░" * (10 - (percent // 10))
+                await status_msg.edit_text(f"🚀 <b>Broadcasting...</b>\n\n[{bar}] {percent}%\n✅ <b>Sent:</b> {success}\n❌ <b>Failed:</b> {failed}\n🎯 <b>Total:</b> {len(targets)}", parse_mode=ParseMode.HTML)
             except:
                 pass
         await asyncio.sleep(0.05)
     
-    await status_msg.edit_text(f"✅ <b>Done!</b> ✅ {success} | ❌ {failed} | Total: {len(targets)}")
+    end_time = datetime.now()
+    duration = round((end_time - start_time).total_seconds(), 2)
+    
+    final_report = (
+        f"✨ <b>Broadcast Successfully Completed!</b> ✨\n\n"
+        f"📊 <b>Final Report:</b>\n"
+        f"✅ <b>Delivered:</b> {success}\n"
+        f"❌ <b>Blocked/Failed:</b> {failed}\n"
+        f"🎯 <b>Total Targets:</b> {len(targets)}\n"
+        f"⏱️ <b>Time Taken:</b> {duration}s\n\n"
+        f"<i>Powered by Niyati & Kavya Network</i>"
+    )
+    await status_msg.edit_text(final_report, parse_mode=ParseMode.HTML)
 
 # ========== Group Admin Commands ==========
 
@@ -2627,11 +2654,30 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
     if job_data == 'random' and (current_hour >= 23 or current_hour < 8):
         return
     
-    users = await db.get_all_users()
-    morning = ["Good morning! ☀️", "Uth gaye? ✨", "Morning! ❤️"]
-    night = ["Good night 🌙", "So jao ab 😴", "Gn! 💖"]
-    rand = ["kya chal raha hai?", "bore ho rahi hoon 😅", "kuch baat karein?"]
-    
+    users = await db.get_active_users(days=2)
+    if not users and not db.connected:
+        users = list(db.local_users.values())
+        
+    try:
+        if job_data == 'morning':
+            prompt = "Generate 3 different extremely short, casual, natural Gen-Z morning texts (in Hinglish). Each on a new line. No list numbers. Example: 'uth gaye kya? ☀️'"
+        elif job_data == 'night':
+            prompt = "Generate 3 different extremely short, casual, natural Gen-Z good night texts (in Hinglish). Each on a new line. No list numbers. Example: 'so ja yaar ab 🌙'"
+        else:
+            prompt = "Generate 3 different extremely short, casual, natural Gen-Z random check-in texts (in Hinglish). Each on a new line. No list numbers. Example: 'kya kar raha hai yaar? bore ho gayi main'"
+            
+        res = await niyati_ai._call_gpt([{"role": "user", "content": prompt}], max_tokens=100)
+        if res:
+            # Clean up the response
+            messages_pool = [m.replace('- ', '').replace('1. ', '').replace('2. ', '').replace('3. ', '').strip() for m in res.split('\n') if len(m.strip()) > 3]
+        else:
+            messages_pool = ["kya chal raha hai aajkal? ✨", "zinda ho? lol"]
+    except:
+        messages_pool = ["kya chal raha hai aajkal? ✨", "zinda ho? lol"]
+        
+    if not messages_pool:
+        messages_pool = ["hello!"]
+        
     count = 0
     for user in users:
         uid = user.get('user_id')
@@ -2639,23 +2685,8 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
             continue
         if job_data == 'random' and random.random() > 0.3:
             continue
-        
-        # Skip inactive users
-        last = user.get('last_activity', '')
-        if last:
-            try:
-                if (datetime.now(timezone.utc) - datetime.fromisoformat(last.replace('Z', '+00:00'))).days > 2:
-                    continue
-            except:
-                pass
-        
-        msg = ""
-        if job_data == 'morning':
-            msg = random.choice(morning)
-        elif job_data == 'night':
-            msg = random.choice(night)
-        elif job_data == 'random':
-            msg = random.choice(rand)
+            
+        msg = random.choice(messages_pool)
         
         try:
             await asyncio.sleep(random.uniform(0.5, 2.0))
@@ -2663,6 +2694,7 @@ async def routine_message_job(context: ContextTypes.DEFAULT_TYPE):
             count += 1
         except:
             pass
+    logger.info(f"✨ Routine message ({job_data}) sent to {count} users")
         if count > 100:
             break
 
